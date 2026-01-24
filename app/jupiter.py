@@ -1,6 +1,7 @@
 import httpx
+import os
 
-JUPITER_API = "https://quote-api.jup.ag/v6"
+JUPITER_API = os.getenv("JUPITER_API_URL", "https://quote-api.jup.ag/v6")
 
 TOKENS = {
     "SOL": "So11111111111111111111111111111111111111112",
@@ -29,17 +30,27 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
     
     amount_raw = int(amount * (10 ** in_decimals))
     
-    async with httpx.AsyncClient() as client:
-        res = await client.get(
-            f"{JUPITER_API}/quote",
-            params={
-                "inputMint": input_mint,
-                "outputMint": output_mint,
-                "amount": amount_raw,
-                "slippageBps": slippage_bps
-            }
-        )
-        data = res.json()
+    # Configure httpx client with timeout and DNS settings for Railway
+    timeout = httpx.Timeout(30.0, connect=10.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        try:
+            res = await client.get(
+                f"{JUPITER_API}/quote",
+                params={
+                    "inputMint": input_mint,
+                    "outputMint": output_mint,
+                    "amount": amount_raw,
+                    "slippageBps": slippage_bps
+                }
+            )
+            res.raise_for_status()
+            data = res.json()
+        except httpx.ConnectError as e:
+            raise Exception(f"Failed to connect to Jupiter API: {str(e)}. Check network connectivity and DNS resolution.")
+        except httpx.HTTPStatusError as e:
+            raise Exception(f"Jupiter API returned error: {e.response.status_code} - {e.response.text}")
+        except Exception as e:
+            raise Exception(f"Error calling Jupiter API: {str(e)}")
     
     out_amount = int(data.get("outAmount", 0)) / (10 ** out_decimals)
     
