@@ -1,5 +1,7 @@
 import httpx
 import os
+import socket
+from urllib.parse import urlparse
 
 JUPITER_API = os.getenv("JUPITER_API_URL", "https://quote-api.jup.ag/v6")
 
@@ -30,9 +32,33 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
     
     amount_raw = int(amount * (10 ** in_decimals))
     
+    # Parse URL and verify DNS resolution for Railway
+    parsed_url = urlparse(JUPITER_API)
+    hostname = parsed_url.hostname
+    
+    # Try to resolve DNS first (force IPv4 for Railway compatibility)
+    try:
+        # Force IPv4 resolution - Railway sometimes has IPv6 issues
+        addr_info = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        if not addr_info:
+            raise Exception(f"No IPv4 address found for {hostname}")
+    except socket.gaierror as e:
+        raise Exception(f"DNS resolution failed for {hostname}: {str(e)}. Railway may have DNS configuration issues.")
+    except Exception as e:
+        # Log but don't fail - httpx might still work
+        print(f"Warning: DNS pre-check failed: {e}")
+    
     # Configure httpx client with timeout and DNS settings for Railway
+    # Use trust_env=True to respect system DNS settings
     timeout = httpx.Timeout(30.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+    limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+    
+    async with httpx.AsyncClient(
+        timeout=timeout, 
+        follow_redirects=True,
+        limits=limits,
+        trust_env=True  # Use system DNS settings
+    ) as client:
         try:
             res = await client.get(
                 f"{JUPITER_API}/quote",
@@ -46,7 +72,7 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
             res.raise_for_status()
             data = res.json()
         except httpx.ConnectError as e:
-            raise Exception(f"Failed to connect to Jupiter API: {str(e)}. Check network connectivity and DNS resolution.")
+            raise Exception(f"Failed to connect to Jupiter API ({JUPITER_API}): {str(e)}. DNS resolved but connection failed.")
         except httpx.HTTPStatusError as e:
             raise Exception(f"Jupiter API returned error: {e.response.status_code} - {e.response.text}")
         except Exception as e:
