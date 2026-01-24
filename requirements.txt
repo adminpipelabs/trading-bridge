@@ -14,3 +14,5 @@ httpx>=0.25.0
 
 # Async support
 aiohttp>=3.9.0
+solders>=0.18.0
+solana>=0.30.0
