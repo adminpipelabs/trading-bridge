@@ -33,11 +33,6 @@ app.add_middleware(
 app.include_router(accounts.router, tags=["Accounts"])
 app.include_router(jupiter_router)
 app.include_router(connectors.router, tags=["Connectors"])
-app.include_router(jupiter_router)
-app.include_router(jupiter_router)
-app.include_router(jupiter_router)
-app.include_router(jupiter_router)
-app.include_router(jupiter_router)
 
 @app.get("/")
 async def root():
