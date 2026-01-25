@@ -5,6 +5,9 @@ import logging
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
+# Jupiter API endpoint - updated to use public API (quote-api.jup.ag DNS may fail)
+# Can be overridden via JUPITER_API_URL env var
+# Options: https://quote-api.jup.ag/v6, https://public.jupiterapi.com, https://api.jup.ag
 JUPITER_API = os.getenv("JUPITER_API_URL", "https://quote-api.jup.ag/v6")
 
 TOKENS = {
