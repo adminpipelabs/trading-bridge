@@ -9,7 +9,70 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
-from app.bots import BotManager, get_strategies
+# Bot functionality - stub implementation
+# TODO: Implement full BotManager class
+
+class BotManager:
+    """Stub BotManager - TODO: Implement full bot management"""
+    def __init__(self, exchange_manager):
+        self.exchange_manager = exchange_manager
+        self.bots = {}
+    
+    def list_bots(self):
+        return {"bots": list(self.bots.values())}
+    
+    def get_bot(self, bot_id):
+        return self.bots.get(bot_id)
+    
+    def create_bot(self, name, account, strategy, connector, pair, config):
+        bot_id = f"{account}_{pair}_{strategy}"
+        bot = {
+            "id": bot_id,
+            "name": name,
+            "account": account,
+            "strategy": strategy,
+            "connector": connector,
+            "pair": pair,
+            "config": config,
+            "status": "stopped"
+        }
+        self.bots[bot_id] = bot
+        return bot
+    
+    async def start_bot(self, bot_id):
+        if bot_id not in self.bots:
+            raise ValueError(f"Bot not found: {bot_id}")
+        self.bots[bot_id]["status"] = "running"
+        return self.bots[bot_id]
+    
+    async def stop_bot(self, bot_id):
+        if bot_id not in self.bots:
+            raise ValueError(f"Bot not found: {bot_id}")
+        self.bots[bot_id]["status"] = "stopped"
+        return self.bots[bot_id]
+    
+    def delete_bot(self, bot_id):
+        if bot_id not in self.bots:
+            raise ValueError(f"Bot not found: {bot_id}")
+        del self.bots[bot_id]
+        return {"message": f"Bot {bot_id} deleted"}
+    
+    def get_bot_status(self, bot_id):
+        if bot_id not in self.bots:
+            raise ValueError(f"Bot not found: {bot_id}")
+        return self.bots[bot_id]
+
+
+def get_strategies():
+    """Return available trading strategies"""
+    return [
+        {"id": "market_making", "name": "Market Making", "description": "Place buy/sell orders around mid price"},
+        {"id": "grid", "name": "Grid Trading", "description": "Place orders in a grid pattern"},
+        {"id": "dca", "name": "Dollar Cost Averaging", "description": "Buy at regular intervals"},
+        {"id": "twap", "name": "TWAP", "description": "Time-weighted average price execution"},
+        {"id": "volume", "name": "Volume Trading", "description": "Create volume by trading between accounts"}
+    ]
+
 
 router = APIRouter()
 

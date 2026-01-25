@@ -4,7 +4,6 @@ Connects Pipe Labs Dashboard to cryptocurrency exchanges via ccxt
 """
 from fastapi import FastAPI
 from app.jupiter_routes import router as jupiter_router
-from app.bots_routes import router as bots_router
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -37,7 +36,7 @@ app.include_router(market.router, tags=["Market"])
 app.include_router(orders.router, tags=["Orders"])
 app.include_router(portfolio.router, tags=["Portfolio"])
 app.include_router(jupiter_router)
-app.include_router(bots_router)
+app.include_router(bot_router, tags=["Bots"])
 
 @app.get("/")
 async def root():
