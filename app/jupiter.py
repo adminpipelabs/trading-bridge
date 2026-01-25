@@ -61,36 +61,61 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
     timeout = httpx.Timeout(30.0, connect=10.0)
     limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
     
-    url = f"{JUPITER_API}/quote"
+    # Try primary endpoint first, fallback to alternative if DNS/connection fails
+    endpoints = [
+        f"{JUPITER_API}/quote",  # Primary: quote-api.jup.ag/v6/quote
+        "https://public.jupiterapi.com/quote",  # Fallback: public API
+    ]
+    
     params = {
         "inputMint": input_mint,
         "outputMint": output_mint,
         "amount": amount_raw,
         "slippageBps": slippage_bps
     }
-    logger.info(f"Calling Jupiter API: {url} with params: {params}")
     
-    async with httpx.AsyncClient(
-        timeout=timeout, 
-        follow_redirects=True,
-        limits=limits,
-        trust_env=True  # Use system DNS settings
-    ) as client:
-        try:
-            res = await client.get(url, params=params)
-            logger.info(f"Jupiter API response status: {res.status_code}")
-            res.raise_for_status()
-            data = res.json()
-            logger.info(f"Jupiter API response data keys: {list(data.keys())}")
-        except httpx.ConnectError as e:
-            logger.error(f"Connection error to Jupiter API: {str(e)}")
-            raise Exception(f"Failed to connect to Jupiter API ({JUPITER_API}): {str(e)}. DNS resolved but connection failed.")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error from Jupiter API: {e.response.status_code} - {e.response.text}")
-            raise Exception(f"Jupiter API returned error: {e.response.status_code} - {e.response.text}")
-        except Exception as e:
-            logger.error(f"Unexpected error calling Jupiter API: {str(e)}", exc_info=True)
-            raise Exception(f"Error calling Jupiter API: {str(e)}")
+    last_error = None
+    data = None
+    
+    for url in endpoints:
+        logger.info(f"Trying Jupiter API: {url} with params: {params}")
+        
+        async with httpx.AsyncClient(
+            timeout=timeout, 
+            follow_redirects=True,
+            limits=limits,
+            trust_env=True  # Use system DNS settings
+        ) as client:
+            try:
+                res = await client.get(url, params=params)
+                logger.info(f"Jupiter API response status: {res.status_code} from {url}")
+                res.raise_for_status()
+                data = res.json()
+                logger.info(f"Jupiter API response data keys: {list(data.keys())}")
+                break  # Success, exit loop
+            except httpx.ConnectError as e:
+                logger.warning(f"Connection error to {url}: {str(e)}")
+                last_error = e
+                if url == endpoints[-1]:  # Last endpoint, raise error
+                    raise Exception(f"Failed to connect to any Jupiter API endpoint. Last error: {str(e)}")
+                continue  # Try next endpoint
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error from Jupiter API {url}: {e.response.status_code} - {e.response.text}")
+                # If 401 Unauthorized, try next endpoint; otherwise raise
+                if e.response.status_code == 401 and url != endpoints[-1]:
+                    logger.warning(f"401 Unauthorized from {url}, trying next endpoint...")
+                    last_error = e
+                    continue
+                raise Exception(f"Jupiter API returned error: {e.response.status_code} - {e.response.text}")
+            except Exception as e:
+                logger.error(f"Unexpected error calling Jupiter API {url}: {str(e)}", exc_info=True)
+                if url == endpoints[-1]:  # Last endpoint
+                    raise Exception(f"Error calling Jupiter API: {str(e)}")
+                last_error = e
+                continue
+    
+    if data is None:
+        raise Exception(f"Failed to get quote from any Jupiter API endpoint. Last error: {str(last_error)}")
     
     out_amount = int(data.get("outAmount", 0)) / (10 ** out_decimals)
     
