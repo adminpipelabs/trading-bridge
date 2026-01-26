@@ -165,6 +165,7 @@ class BotManager:
             script_name = f"{name}_strategy.py"
             
             # Deploy script to Hummingbot
+            # deploy-v2-script creates the instance, deploys script, AND starts the bot automatically
             # Use bot name as instance_name and account as credentials_profile
             await self.hummingbot_client.deploy_script(
                 script_content, 
@@ -174,15 +175,8 @@ class BotManager:
             )
             logger.info(f"Deployed script: {script_name} for instance: {name}")
             
-            # Try to start bot (may fail if bot instance doesn't exist yet)
-            # deploy-v2-script creates the instance, but it might not be immediately available
-            try:
-                await self.hummingbot_client.start_bot(name, script_name, config)
-                logger.info(f"Started bot: {name}")
-            except Exception as start_error:
-                # Bot might start automatically after deploy, or instance might not be ready yet
-                logger.warning(f"Could not start bot immediately: {str(start_error)}. Bot may start automatically.")
-                # Continue anyway - bot was deployed successfully
+            # Note: deploy-v2-script automatically starts the bot, so we don't need to call start_bot
+            # The start_bot endpoint is only for restarting stopped bots, not initial startup
             
             # Store metadata locally
             bot_id = name
