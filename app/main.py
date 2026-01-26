@@ -22,7 +22,8 @@ def validate_production_config():
     warnings = []
     
     # Check Hummingbot API URL
-    hummingbot_url = os.getenv("HUMMINGBOT_API_URL", "")
+    # Handle Railway issue where variable names may have leading/trailing spaces
+    hummingbot_url = os.getenv("HUMMINGBOT_API_URL", "") or os.getenv(" HUMMINGBOT_API_URL", "")
     if not hummingbot_url:
         errors.append("HUMMINGBOT_API_URL is not set. Required for bot management.")
     elif "localhost" in hummingbot_url or "127.0.0.1" in hummingbot_url:
@@ -32,8 +33,9 @@ def validate_production_config():
         )
     
     # Check authentication
-    api_key = os.getenv("HUMMINGBOT_API_KEY", "")
-    password = os.getenv("HUMMINGBOT_API_PASSWORD", "")
+    # Handle Railway issue where variable names may have leading/trailing spaces
+    api_key = os.getenv("HUMMINGBOT_API_KEY", "") or os.getenv(" HUMMINGBOT_API_KEY", "")
+    password = os.getenv("HUMMINGBOT_API_PASSWORD", "") or os.getenv(" HUMMINGBOT_API_PASSWORD", "")
     if not api_key and not password:
         errors.append(
             "Hummingbot API authentication not configured. "
@@ -114,9 +116,14 @@ async def health_check():
 async def debug_env():
     """Debug endpoint to check environment variables"""
     import os
+    # Check both with and without leading space (Railway issue)
+    url_with_space = os.getenv(" HUMMINGBOT_API_URL", "")
+    url_without_space = os.getenv("HUMMINGBOT_API_URL", "")
     return {
-        "HUMMINGBOT_API_URL": os.getenv("HUMMINGBOT_API_URL", "NOT SET"),
-        "HUMMINGBOT_API_USERNAME": os.getenv("HUMMINGBOT_API_USERNAME", "NOT SET"),
-        "has_password": bool(os.getenv("HUMMINGBOT_API_PASSWORD")),
-        "all_env_keys": [k for k in os.environ.keys() if "HUMMINGBOT" in k]
+        "HUMMINGBOT_API_URL": url_without_space or url_with_space or "NOT SET",
+        "HUMMINGBOT_API_USERNAME": os.getenv("HUMMINGBOT_API_USERNAME", "") or os.getenv(" HUMMINGBOT_API_USERNAME", "") or "NOT SET",
+        "has_password": bool(os.getenv("HUMMINGBOT_API_PASSWORD") or os.getenv(" HUMMINGBOT_API_PASSWORD")),
+        "all_env_keys": [k for k in os.environ.keys() if "HUMMINGBOT" in k],
+        "url_with_space": url_with_space or "NOT SET",
+        "url_without_space": url_without_space or "NOT SET"
     }

@@ -20,7 +20,9 @@ class HummingbotClient:
     def __init__(self):
         """Initialize Hummingbot client with credentials from environment"""
         # Get base URL - required in production
-        self.base_url = os.getenv("HUMMINGBOT_API_URL", "").rstrip('/')
+        # Handle Railway issue where variable names may have leading/trailing spaces
+        base_url = os.getenv("HUMMINGBOT_API_URL", "") or os.getenv(" HUMMINGBOT_API_URL", "")
+        self.base_url = base_url.rstrip('/')
         
         # Validate configuration
         if not self.base_url:
@@ -40,9 +42,10 @@ class HummingbotClient:
                 "Use internal service name (e.g., http://hummingbot-api:8000)"
             )
         
-        self.username = os.getenv("HUMMINGBOT_API_USERNAME", "hummingbot")
-        self.password = os.getenv("HUMMINGBOT_API_PASSWORD", "")
-        self.api_key = os.getenv("HUMMINGBOT_API_KEY", "")
+        # Handle Railway issue where variable names may have leading/trailing spaces
+        self.username = os.getenv("HUMMINGBOT_API_USERNAME", "") or os.getenv(" HUMMINGBOT_API_USERNAME", "") or "hummingbot"
+        self.password = os.getenv("HUMMINGBOT_API_PASSWORD", "") or os.getenv(" HUMMINGBOT_API_PASSWORD", "")
+        self.api_key = os.getenv("HUMMINGBOT_API_KEY", "") or os.getenv(" HUMMINGBOT_API_KEY", "")
         
         # Validate authentication
         if not self.api_key and not self.password:
