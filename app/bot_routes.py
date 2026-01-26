@@ -165,8 +165,14 @@ class BotManager:
             script_name = f"{name}_strategy.py"
             
             # Deploy script to Hummingbot
-            await self.hummingbot_client.deploy_script(script_content, script_name)
-            logger.info(f"Deployed script: {script_name}")
+            # Use bot name as instance_name and account as credentials_profile
+            await self.hummingbot_client.deploy_script(
+                script_content, 
+                script_name,
+                instance_name=name,
+                credentials_profile=account
+            )
+            logger.info(f"Deployed script: {script_name} for instance: {name}")
             
             # Start bot
             await self.hummingbot_client.start_bot(name, script_name, config)

@@ -199,7 +199,9 @@ class HummingbotClient:
     async def deploy_script(
         self, 
         script_content: str, 
-        script_name: str
+        script_name: str,
+        instance_name: Optional[str] = None,
+        credentials_profile: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Deploy a v2 strategy script to Hummingbot
@@ -207,13 +209,25 @@ class HummingbotClient:
         Args:
             script_content: Python script content as string
             script_name: Name for the script file
+            instance_name: Bot instance name (defaults to script_name without .py)
+            credentials_profile: Credentials profile name (defaults to instance_name)
             
         Returns:
             Dict with deployment result
         """
+        # Use instance_name from script_name if not provided
+        if not instance_name:
+            instance_name = script_name.replace("_strategy.py", "").replace(".py", "")
+        
+        # Use instance_name as credentials_profile if not provided
+        if not credentials_profile:
+            credentials_profile = instance_name
+        
         payload = {
             "script_content": script_content,
-            "script_name": script_name
+            "script_name": script_name,
+            "instance_name": instance_name,
+            "credentials_profile": credentials_profile
         }
         return await self._request(
             "POST", 
