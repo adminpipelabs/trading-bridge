@@ -296,7 +296,10 @@ class CreateBotRequest(BaseModel):
 async def list_bots():
     """List all trading bots"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     return await bot_manager.list_bots()
 
 
@@ -304,7 +307,10 @@ async def list_bots():
 async def get_bot(bot_id: str):
     """Get bot details"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     bot = bot_manager.get_bot(bot_id)
     if not bot:
         raise HTTPException(404, f"Bot not found: {bot_id}")
@@ -315,7 +321,10 @@ async def get_bot(bot_id: str):
 async def create_bot(request: CreateBotRequest):
     """Create a new trading bot"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     try:
         return await bot_manager.create_bot(
             name=request.name,
@@ -333,7 +342,10 @@ async def create_bot(request: CreateBotRequest):
 async def start_bot(bot_id: str):
     """Start a trading bot"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     try:
         return await bot_manager.start_bot(bot_id)
     except ValueError as e:
@@ -344,7 +356,10 @@ async def start_bot(bot_id: str):
 async def stop_bot(bot_id: str):
     """Stop a trading bot"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     try:
         return await bot_manager.stop_bot(bot_id)
     except ValueError as e:
@@ -355,7 +370,10 @@ async def stop_bot(bot_id: str):
 async def delete_bot(bot_id: str):
     """Delete a trading bot"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     try:
         return bot_manager.delete_bot(bot_id)
     except ValueError as e:
@@ -366,7 +384,10 @@ async def delete_bot(bot_id: str):
 async def get_bot_status(bot_id: str):
     """Get bot status and metrics"""
     if not bot_manager:
-        raise HTTPException(500, "Bot manager not initialized")
+        raise HTTPException(
+            status_code=503,
+            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
+        )
     try:
         return await bot_manager.get_bot_status(bot_id)
     except ValueError as e:
