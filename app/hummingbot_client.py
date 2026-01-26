@@ -43,12 +43,13 @@ class HummingbotClient:
             )
         
         # Handle Railway issue where variable names may have leading/trailing spaces
-        self.username = os.getenv("HUMMINGBOT_API_USERNAME", "") or os.getenv(" HUMMINGBOT_API_USERNAME", "") or "hummingbot"
-        self.password = os.getenv("HUMMINGBOT_API_PASSWORD", "") or os.getenv(" HUMMINGBOT_API_PASSWORD", "")
-        self.api_key = os.getenv("HUMMINGBOT_API_KEY", "") or os.getenv(" HUMMINGBOT_API_KEY", "")
+        self.username = (os.getenv("HUMMINGBOT_API_USERNAME", "") or os.getenv(" HUMMINGBOT_API_USERNAME", "") or "hummingbot").strip()
+        password_raw = os.getenv("HUMMINGBOT_API_PASSWORD", "") or os.getenv(" HUMMINGBOT_API_PASSWORD", "")
+        self.password = password_raw.strip() if password_raw else ""
+        self.api_key = (os.getenv("HUMMINGBOT_API_KEY", "") or os.getenv(" HUMMINGBOT_API_KEY", "")).strip()
         
         # Debug logging
-        logger.info(f"Auth config - Username: '{self.username}', Password set: {bool(self.password)}, Password length: {len(self.password) if self.password else 0}")
+        logger.info(f"Auth config - Username: '{self.username}', Password set: {bool(self.password)}, Password length: {len(self.password) if self.password else 0}, Password value: '{self.password[:1]}...' (masked)")
         
         # Validate authentication
         if not self.api_key and not self.password:
