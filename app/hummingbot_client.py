@@ -110,9 +110,14 @@ class HummingbotClient:
         if self.auth:
             request_kwargs["auth"] = self.auth
         
+        # Debug: Log headers being sent (mask password)
+        headers_to_log = request_kwargs.get("headers", {}).copy()
+        if self.auth:
+            headers_to_log["Authorization"] = "BasicAuth (masked)"
+        logger.info(f"Making {method} request to {url} with headers: {headers_to_log}")
+        
         try:
             async with httpx.AsyncClient() as client:
-                logger.info(f"Making {method} request to {url}")
                 response = await client.request(method, url, **request_kwargs)
                 response.raise_for_status()
                 return response.json()
