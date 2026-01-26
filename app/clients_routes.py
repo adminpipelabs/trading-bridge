@@ -7,7 +7,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 import uuid
 import re
 import logging
@@ -56,7 +55,7 @@ def generate_account_identifier(name: str) -> str:
 
 
 @router.post("/create", response_model=ClientResponse)
-async def create_client(request: CreateClientRequest, db: Session = Depends(get_db)):
+def create_client(request: CreateClientRequest, db: Session = Depends(get_db)):
     """Create a new client with account identifier for bot association."""
     client_id = str(uuid.uuid4())
     
@@ -141,33 +140,30 @@ async def create_client(request: CreateClientRequest, db: Session = Depends(get_
 
 
 @router.get("", response_model=dict)
-async def list_clients(db: Session = Depends(get_db)):
+def list_clients(db: Session = Depends(get_db)):
     """List all clients."""
-    def _get_clients():
-        # Eagerly load relationships to avoid lazy loading issues
-        clients = db.query(Client).options(
-            joinedload(Client.wallets),
-            joinedload(Client.connectors)
-        ).all()
-        result = []
-        for client in clients:
-            wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
-            connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
-            result.append({
-                "id": client.id,
-                "name": client.name,
-                "account_identifier": client.account_identifier,
-                "wallets": wallets,
-                "connectors": connectors,
-                "created_at": client.created_at.isoformat()
-            })
-        return {"clients": result}
-    
-    return await run_in_threadpool(_get_clients)
+    # Eagerly load relationships to avoid lazy loading issues
+    clients = db.query(Client).options(
+        joinedload(Client.wallets),
+        joinedload(Client.connectors)
+    ).all()
+    result = []
+    for client in clients:
+        wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
+        connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
+        result.append({
+            "id": client.id,
+            "name": client.name,
+            "account_identifier": client.account_identifier,
+            "wallets": wallets,
+            "connectors": connectors,
+            "created_at": client.created_at.isoformat()
+        })
+    return {"clients": result}
 
 
 @router.get("/{client_id}", response_model=ClientResponse)
-async def get_client(client_id: str, db: Session = Depends(get_db)):
+def get_client(client_id: str, db: Session = Depends(get_db)):
     """Get a specific client by ID."""
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
@@ -187,7 +183,7 @@ async def get_client(client_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/by-wallet/{wallet_address}", response_model=dict)
-async def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
+def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
     """
     Look up client by wallet address.
     Returns client info including account_identifier for bot filtering.
@@ -215,7 +211,7 @@ async def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db
 
 
 @router.put("/{client_id}/wallet", response_model=ClientResponse)
-async def add_wallet(client_id: str, wallet: WalletInfo, db: Session = Depends(get_db)):
+def add_wallet(client_id: str, wallet: WalletInfo, db: Session = Depends(get_db)):
     """Add a wallet to an existing client."""
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
@@ -260,7 +256,7 @@ async def add_wallet(client_id: str, wallet: WalletInfo, db: Session = Depends(g
 
 
 @router.put("/{client_id}/connector", response_model=ClientResponse)
-async def add_connector(client_id: str, connector: ConnectorInfo, db: Session = Depends(get_db)):
+def add_connector(client_id: str, connector: ConnectorInfo, db: Session = Depends(get_db)):
     """Add a connector to an existing client."""
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
@@ -297,7 +293,7 @@ async def add_connector(client_id: str, connector: ConnectorInfo, db: Session = 
 
 
 @router.delete("/{client_id}")
-async def delete_client(client_id: str, db: Session = Depends(get_db)):
+def delete_client(client_id: str, db: Session = Depends(get_db)):
     """Delete a client and all associated data (cascade delete)."""
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:

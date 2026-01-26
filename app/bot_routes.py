@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 import uuid
 import logging
 
-from app.database import get_db_session, Bot, Client
+from app.database import get_db, Bot, Client
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +41,7 @@ class CreateBotRequest(BaseModel):
 # ============================================================
 # Database Dependency
 # ============================================================
-
-def get_db():
-    """Database session dependency."""
-    db = get_db_session()
-    try:
-        yield db
-    finally:
-        db.close()
+# Using get_db from app.database (imported above)
 
 
 # ============================================================
