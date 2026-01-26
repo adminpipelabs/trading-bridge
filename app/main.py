@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio
 from app.bot_routes import router as bot_router, init_bot_manager
+from app.client_routes import router as client_router
 from app.services.exchange import exchange_manager
 import os
 import logging
@@ -92,6 +93,7 @@ app.include_router(orders.router, tags=["Orders"])
 app.include_router(portfolio.router, tags=["Portfolio"])
 app.include_router(jupiter_router)
 app.include_router(bot_router, tags=["Bots"])
+app.include_router(client_router, tags=["Clients"])
 
 @app.get("/")
 async def root():
