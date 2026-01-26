@@ -162,7 +162,7 @@ async def list_bots(
     List all trading bots, optionally filtered by account.
     Combines database definitions (source of truth) with Hummingbot runtime status.
     """
-    try:
+    def _list_bots_sync():
         # 1. Get bot definitions from database
         query = db.query(Bot)
         if account:
@@ -188,25 +188,24 @@ async def list_bots(
                 "created_at": db_bot.created_at.isoformat() if db_bot.created_at else None,
             }
             bots.append(bot)
+        return bots
+    
+    try:
+        # Run DB operations in thread pool
+        bots = await run_in_threadpool(_list_bots_sync)
         
-        # 3. Get runtime status from Hummingbot to update "running" status
+        # 3. Get runtime status from Hummingbot (async, no DB needed)
         try:
             hummingbot_client = get_hummingbot_client()
             hb_status = await hummingbot_client.get_status()
             running_instances = _extract_running_instances(hb_status)
             
-            # 4. Update status for running bots
+            # 4. Update status for running bots (in memory only)
             for bot in bots:
                 instance_name = bot.get("instance_name") or bot["name"]
                 if instance_name in running_instances:
                     bot["status"] = "running"
                     bot["runtime_info"] = running_instances[instance_name]
-                    # Update database status
-                    db_bot = db.query(Bot).filter(Bot.id == bot["id"]).first()
-                    if db_bot:
-                        db_bot.status = "running"
-                        db_bot.updated_at = datetime.utcnow()
-                        db.commit()
         except Exception as e:
             logger.warning(f"Could not fetch Hummingbot status: {e}")
             # Continue with database data, status remains as stored
