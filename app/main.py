@@ -10,7 +10,7 @@ from app.jupiter_routes import router as jupiter_router
 from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio
 from app.bot_routes import router as bot_router, init_bot_manager
-from app.clients_routes import router as clients_router
+from app.clients_routes import router as client_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
 import os
@@ -112,7 +112,7 @@ app.include_router(orders.router, tags=["Orders"])
 app.include_router(portfolio.router, tags=["Portfolio"])
 app.include_router(jupiter_router)
 app.include_router(bot_router, tags=["Bots"])
-app.include_router(clients_router, tags=["Clients"])
+app.include_router(client_router, tags=["Clients"])
 
 @app.get("/")
 async def root():
