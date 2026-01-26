@@ -65,7 +65,8 @@ class HummingbotClient:
             self.auth = None
         else:
             self.headers = {}
-            self.auth = (self.username, self.password) if self.password else None
+            # Use httpx.BasicAuth for proper authentication format
+            self.auth = httpx.BasicAuth(self.username, self.password) if self.password else None
         
         logger.info(f"HummingbotClient initialized: {self.base_url} (auth: {'API_KEY' if self.api_key else 'BASIC'}, username: '{self.username}')")
     
