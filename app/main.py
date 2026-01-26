@@ -116,14 +116,32 @@ async def health_check():
 async def debug_env():
     """Debug endpoint to check environment variables"""
     import os
+    import base64
     # Check both with and without leading space (Railway issue)
     url_with_space = os.getenv(" HUMMINGBOT_API_URL", "")
     url_without_space = os.getenv("HUMMINGBOT_API_URL", "")
+    
+    username = (os.getenv("HUMMINGBOT_API_USERNAME", "") or os.getenv(" HUMMINGBOT_API_USERNAME", "") or "NOT SET").strip()
+    password_raw = os.getenv("HUMMINGBOT_API_PASSWORD", "") or os.getenv(" HUMMINGBOT_API_PASSWORD", "")
+    password = password_raw.strip() if password_raw else ""
+    
+    # Test auth header construction
+    if password:
+        credentials = f"{username}:{password}"
+        encoded = base64.b64encode(credentials.encode()).decode()
+        auth_header = f"Basic {encoded[:20]}..."
+    else:
+        auth_header = "NOT SET"
+    
     return {
         "HUMMINGBOT_API_URL": url_without_space or url_with_space or "NOT SET",
-        "HUMMINGBOT_API_USERNAME": os.getenv("HUMMINGBOT_API_USERNAME", "") or os.getenv(" HUMMINGBOT_API_USERNAME", "") or "NOT SET",
-        "has_password": bool(os.getenv("HUMMINGBOT_API_PASSWORD") or os.getenv(" HUMMINGBOT_API_PASSWORD")),
-        "all_env_keys": [k for k in os.environ.keys() if "HUMMINGBOT" in k],
+        "HUMMINGBOT_API_USERNAME": username,
+        "username_length": len(username),
+        "has_password": bool(password),
+        "password_length": len(password) if password else 0,
+        "password_first_char": password[0] if password else "N/A",
+        "auth_header_preview": auth_header,
+        "all_env_keys": sorted([k for k in os.environ.keys() if "HUMMINGBOT" in k]),
         "url_with_space": url_with_space or "NOT SET",
         "url_without_space": url_without_space or "NOT SET"
     }
