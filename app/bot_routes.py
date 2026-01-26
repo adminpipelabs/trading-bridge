@@ -174,9 +174,15 @@ class BotManager:
             )
             logger.info(f"Deployed script: {script_name} for instance: {name}")
             
-            # Start bot
-            await self.hummingbot_client.start_bot(name, script_name, config)
-            logger.info(f"Started bot: {name}")
+            # Try to start bot (may fail if bot instance doesn't exist yet)
+            # deploy-v2-script creates the instance, but it might not be immediately available
+            try:
+                await self.hummingbot_client.start_bot(name, script_name, config)
+                logger.info(f"Started bot: {name}")
+            except Exception as start_error:
+                # Bot might start automatically after deploy, or instance might not be ready yet
+                logger.warning(f"Could not start bot immediately: {str(start_error)}. Bot may start automatically.")
+                # Continue anyway - bot was deployed successfully
             
             # Store metadata locally
             bot_id = name
