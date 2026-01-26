@@ -19,14 +19,39 @@ class HummingbotClient:
     
     def __init__(self):
         """Initialize Hummingbot client with credentials from environment"""
-        self.base_url = os.getenv(
-            "HUMMINGBOT_API_URL", 
-            "http://localhost:8000"
-        ).rstrip('/')
+        # Get base URL - required in production
+        self.base_url = os.getenv("HUMMINGBOT_API_URL", "").rstrip('/')
+        
+        # Validate configuration
+        if not self.base_url:
+            error_msg = (
+                "HUMMINGBOT_API_URL environment variable is not set. "
+                "Required for production deployment. "
+                "Set to internal Railway service URL (e.g., http://hummingbot-api:8000)"
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
+        # Warn if using localhost in production
+        if "localhost" in self.base_url or "127.0.0.1" in self.base_url:
+            logger.warning(
+                f"HUMMINGBOT_API_URL is set to localhost ({self.base_url}). "
+                "This will not work in Railway production. "
+                "Use internal service name (e.g., http://hummingbot-api:8000)"
+            )
         
         self.username = os.getenv("HUMMINGBOT_API_USERNAME", "hummingbot")
         self.password = os.getenv("HUMMINGBOT_API_PASSWORD", "")
         self.api_key = os.getenv("HUMMINGBOT_API_KEY", "")
+        
+        # Validate authentication
+        if not self.api_key and not self.password:
+            error_msg = (
+                "Hummingbot API authentication not configured. "
+                "Set either HUMMINGBOT_API_KEY or HUMMINGBOT_API_PASSWORD."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
         
         # Use API key if available, otherwise basic auth
         if self.api_key:
@@ -36,7 +61,7 @@ class HummingbotClient:
             self.headers = {}
             self.auth = (self.username, self.password) if self.password else None
         
-        logger.info(f"HummingbotClient initialized: {self.base_url}")
+        logger.info(f"HummingbotClient initialized: {self.base_url} (auth: {'API_KEY' if self.api_key else 'BASIC'})")
     
     async def _request(
         self, 

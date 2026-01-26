@@ -10,9 +10,62 @@ from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio
 from app.bot_routes import router as bot_router, init_bot_manager
 from app.services.exchange import exchange_manager
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Validate production environment variables
+def validate_production_config():
+    """Validate required environment variables for production"""
+    errors = []
+    warnings = []
+    
+    # Check Hummingbot API URL
+    hummingbot_url = os.getenv("HUMMINGBOT_API_URL", "")
+    if not hummingbot_url:
+        errors.append("HUMMINGBOT_API_URL is not set. Required for bot management.")
+    elif "localhost" in hummingbot_url or "127.0.0.1" in hummingbot_url:
+        warnings.append(
+            f"HUMMINGBOT_API_URL is set to localhost ({hummingbot_url}). "
+            "This will not work in Railway production. Use internal service name."
+        )
+    
+    # Check authentication
+    api_key = os.getenv("HUMMINGBOT_API_KEY", "")
+    password = os.getenv("HUMMINGBOT_API_PASSWORD", "")
+    if not api_key and not password:
+        errors.append(
+            "Hummingbot API authentication not configured. "
+            "Set either HUMMINGBOT_API_KEY or HUMMINGBOT_API_PASSWORD."
+        )
+    
+    # Log errors and warnings
+    if errors:
+        for error in errors:
+            logger.error(f"Configuration Error: {error}")
+        raise ValueError("Production configuration validation failed. See logs for details.")
+    
+    if warnings:
+        for warning in warnings:
+            logger.warning(f"Configuration Warning: {warning}")
+
+# Validate configuration at startup
+try:
+    validate_production_config()
+except ValueError as e:
+    logger.error(f"Startup validation failed: {e}")
+    # In production, fail fast. In development, allow to continue.
+    if os.getenv("ENVIRONMENT") == "production":
+        raise
 
 # Initialize bot manager
-init_bot_manager(exchange_manager)
+try:
+    init_bot_manager(exchange_manager)
+except Exception as e:
+    logger.error(f"Failed to initialize bot manager: {e}")
+    # Continue without bot manager if initialization fails
+    logger.warning("Bot management features will be unavailable")
 
 app = FastAPI(
     title="Trading Bridge API",
