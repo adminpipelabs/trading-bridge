@@ -297,7 +297,7 @@ async def list_bots():
     """List all trading bots"""
     if not bot_manager:
         raise HTTPException(500, "Bot manager not initialized")
-    return bot_manager.list_bots()
+    return await bot_manager.list_bots()
 
 
 @router.get("/bots/{bot_id}")
@@ -317,7 +317,7 @@ async def create_bot(request: CreateBotRequest):
     if not bot_manager:
         raise HTTPException(500, "Bot manager not initialized")
     try:
-        return bot_manager.create_bot(
+        return await bot_manager.create_bot(
             name=request.name,
             account=request.account,
             strategy=request.strategy,
@@ -368,7 +368,7 @@ async def get_bot_status(bot_id: str):
     if not bot_manager:
         raise HTTPException(500, "Bot manager not initialized")
     try:
-        return bot_manager.get_bot_status(bot_id)
+        return await bot_manager.get_bot_status(bot_id)
     except ValueError as e:
         raise HTTPException(404, str(e))
 
