@@ -246,6 +246,12 @@ class HummingbotClient:
             "instance_name": instance_name,
             "credentials_profile": credentials_profile
         }
+        
+        # Log payload details for debugging (mask script content if too long)
+        logger.info(f"Deploying script: script_name={script_name}, instance_name={instance_name}, credentials_profile={credentials_profile}")
+        logger.info(f"Script content length: {len(script_content)} chars")
+        logger.info(f"Script content preview: {script_content[:200]}...")
+        
         return await self._request(
             "POST", 
             "/bot-orchestration/deploy-v2-script", 
