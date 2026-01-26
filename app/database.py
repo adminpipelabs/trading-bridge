@@ -136,7 +136,8 @@ def init_db():
 def get_db():
     """Get database session - use as dependency in FastAPI routes"""
     if not SessionLocal:
-        raise HTTPException(status_code=503, detail="Database not available")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="Database not available. Set DATABASE_URL environment variable.")
     
     db = SessionLocal()
     try:
