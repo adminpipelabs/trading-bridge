@@ -130,34 +130,76 @@ class BotManager:
         self.bot_metadata = {}
     
     async def list_bots(self):
-        """List all bots from Hummingbot"""
+        """
+        List all bots by combining local metadata (source of truth) with Hummingbot runtime status.
+        Trading Bridge is the source of truth for bot definitions.
+        Hummingbot only provides runtime status (is it running?).
+        """
+        bots = []
+        
+        # 1. Start with local bot definitions (source of truth for config)
+        for bot_id, metadata in self.bot_metadata.items():
+            bot = {
+                "id": bot_id,
+                "name": metadata.get("name", bot_id),
+                "account": metadata.get("account", "unknown"),
+                "connector": metadata.get("connector", "unknown"),
+                "pair": metadata.get("pair", "unknown"),
+                "strategy": metadata.get("strategy", "unknown"),
+                "config": metadata.get("config", {}),
+                "status": metadata.get("status", "stopped"),  # Default, will update below
+                "chain": metadata.get("chain", "evm"),
+            }
+            bots.append(bot)
+        
+        # 2. Get runtime status from Hummingbot to update "running" status
         try:
-            # Try to get status from Hummingbot
-            status = await self.hummingbot_client.get_status()
-            # Hummingbot returns {"status":"success","data":{}} or {"status":"success","data":{"bots":{...}}}
-            bots_data = status.get("data", {}).get("bots", {}) or status.get("bots", {})
+            hb_status = await self.hummingbot_client.get_status()
+            running_instances = self._extract_running_instances(hb_status)
             
-            # Transform to our format
-            bots = []
-            for bot_name, bot_info in bots_data.items():
-                transformed_bot = transform_hummingbot_bot(bot_name, bot_info)
-                # Merge with local metadata if exists
-                if bot_name in self.bot_metadata:
-                    transformed_bot.update(self.bot_metadata[bot_name])
-                bots.append(transformed_bot)
-            
-            # Also include bots from local metadata that might not be in Hummingbot status
-            # (e.g., bots that were just created)
-            local_bot_names = {bot["name"] for bot in bots}
-            for bot_name, bot_data in self.bot_metadata.items():
-                if bot_name not in local_bot_names:
-                    bots.append(bot_data)
-            
-            return {"bots": bots}
+            # 3. Update status for running bots
+            for bot in bots:
+                instance_name = bot["name"]  # Use bot name as instance name
+                if instance_name in running_instances:
+                    bot["status"] = "running"
+                    # Optionally add runtime info
+                    bot["runtime_info"] = running_instances[instance_name]
         except Exception as e:
-            logger.error(f"Failed to list bots from Hummingbot: {str(e)}")
-            # Fallback to local cache if Hummingbot unavailable
-            return {"bots": list(self.bot_metadata.values())}
+            logger.warning(f"Could not fetch Hummingbot status: {e}")
+            # Continue with local data, status remains as stored
+        
+        return {"bots": bots}
+    
+    def _extract_running_instances(self, hb_status):
+        """
+        Extract running bot instances from Hummingbot status response.
+        Handle various response formats.
+        """
+        running = {}
+        
+        # Try different possible structures
+        data = hb_status.get("data", hb_status)
+        
+        # Format 1: data.bots
+        if "bots" in data:
+            for name, info in data["bots"].items():
+                running[name] = info
+        
+        # Format 2: data.running_bots (list)
+        if "running_bots" in data:
+            for bot in data["running_bots"]:
+                name = bot.get("instance_name", bot.get("name"))
+                if name:
+                    running[name] = bot
+        
+        # Format 3: direct list
+        if isinstance(data, list):
+            for bot in data:
+                name = bot.get("instance_name", bot.get("name"))
+                if name:
+                    running[name] = bot
+        
+        return running
     
     def get_bot(self, bot_id):
         """Get bot details"""
