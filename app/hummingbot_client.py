@@ -74,16 +74,22 @@ class HummingbotClient:
         
         try:
             async with httpx.AsyncClient() as client:
-                logger.debug(f"Making {method} request to {url}")
+                logger.info(f"Making {method} request to {url}")
                 response = await client.request(method, url, **request_kwargs)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error {e.response.status_code}: {e.response.text}")
-            raise
+            error_msg = f"HTTP error {e.response.status_code}: {e.response.text}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+        except httpx.ConnectError as e:
+            error_msg = f"Connection failed to {url}: {str(e)}. Check service name and that Hummingbot API is running."
+            logger.error(error_msg)
+            raise Exception(error_msg)
         except httpx.RequestError as e:
-            logger.error(f"Request error: {str(e)}")
-            raise
+            error_msg = f"Request error to {url}: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
     
     async def get_status(self) -> Dict[str, Any]:
         """
