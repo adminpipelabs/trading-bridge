@@ -5,7 +5,7 @@ Bot & Strategy API Routes
 File: app/bot_routes.py
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import logging
@@ -349,14 +349,27 @@ class CreateBotRequest(BaseModel):
 # =============================================================================
 
 @router.get("/bots")
-async def list_bots():
-    """List all trading bots"""
+async def list_bots(account: Optional[str] = None):
+    """
+    List all trading bots, optionally filtered by account.
+    
+    Args:
+        account: Optional account identifier to filter bots (e.g., "client_sharp")
+    """
     if not bot_manager:
         raise HTTPException(
             status_code=503,
             detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
         )
-    return await bot_manager.list_bots()
+    result = await bot_manager.list_bots()
+    
+    # Filter by account if provided
+    if account:
+        bots = result.get("bots", [])
+        filtered_bots = [bot for bot in bots if bot.get("account") == account]
+        return {"bots": filtered_bots}
+    
+    return result
 
 
 @router.get("/bots/{bot_id}")
