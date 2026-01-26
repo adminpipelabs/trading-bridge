@@ -19,9 +19,12 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:
     # Remove Railway reference wrapper if present
     DATABASE_URL = DATABASE_URL.strip().strip("${{}}").strip()
-    # Convert postgres:// to postgresql:// (SQLAlchemy requirement)
+    # Convert postgres:// to postgresql+psycopg2:// (explicit sync driver)
     if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif DATABASE_URL.startswith("postgresql://") and "+psycopg2" not in DATABASE_URL:
+        # Ensure we use psycopg2 (sync driver) not asyncpg
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 # Create engine with connection pooling
 engine = None
