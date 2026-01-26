@@ -1,73 +1,55 @@
-# Check Railway Logs for Auth Debug
+# Check Railway Logs for Debug Output
 
-**Status:** Still getting 401, need to check Railway logs
+**Date:** 2026-01-26  
+**Issue:** Still getting 401 after Railway restart
 
 ---
 
 ## 🔍 **What to Look For**
 
-**After Railway redeploys, check Trading Bridge logs for:**
+After Railway redeploys, check logs for:
 
+### **1. Authentication Config (on startup)**
 ```
-Auth config - Username: 'admin', Password set: True/False, Password length: X
-HummingbotClient initialized: https://... (auth: BASIC, username: 'admin')
-```
-
-**This will show:**
-- If password is being read
-- Password length (should be 5 for "admin")
-- What username is being used
-
----
-
-## ⚠️ **Possible Issues**
-
-### **1. Password Variable Value**
-
-**Check Railway Variables:**
-- `HUMMINGBOT_API_PASSWORD` value should be exactly `admin`
-- No spaces before/after
-- No quotes around it
-- Value is saved
-
-### **2. Password Variable Name**
-
-**Check for leading space:**
-- URL had leading space: ` HUMMINGBOT_API_URL`
-- Password might too: ` HUMMINGBOT_API_PASSWORD`
-- Code handles this, but verify
-
-### **3. Railway Not Reading Password**
-
-**If logs show:**
-- `Password set: False` → Password not being read
-- `Password length: 0` → Password is empty
-- Check Railway variable is actually set
-
----
-
-## 🔧 **What to Do**
-
-1. **Check Railway logs** for auth debug message
-2. **Verify password value** in Railway variables
-3. **Check password length** in logs
-4. **Share log output** if still failing
-
----
-
-## 📋 **Expected Log Output**
-
-**If working correctly:**
-```
-Auth config - Username: 'admin', Password set: True, Password length: 5
-HummingbotClient initialized: https://unpolymerized-singlemindedly-theda.ngrok-free.dev (auth: BASIC, username: 'admin')
+Auth config - Username: 'admin', Password set: True, Password length: 5, Password value: 'a...' (masked)
 ```
 
-**If password not set:**
+### **2. Request Headers (on bot creation)**
 ```
-Auth config - Username: 'admin', Password set: False, Password length: 0
+Making POST request to https://unpolymerized-singlemindedly-theda.ngrok-free.dev/bot-orchestration/deploy-v2-script with headers: {'ngrok-skip-browser-warning': 'true', 'Authorization': 'BasicAuth (masked)'}
+```
+
+### **3. Error Details**
+```
+HTTP error 401: {"detail":"Incorrect username or password"}
 ```
 
 ---
 
-**Please check Railway logs and share the auth debug message!** 🔍
+## 📋 **What This Tells Us**
+
+1. **If headers show ngrok header:** ✅ Header is being sent
+2. **If headers don't show ngrok header:** ❌ Header merge issue
+3. **If password length is wrong:** ❌ Environment variable issue
+4. **If username is wrong:** ❌ Environment variable issue
+
+---
+
+## 🛠️ **Next Steps Based on Logs**
+
+### **If headers are correct but still 401:**
+- Check if ngrok URL changed
+- Verify Hummingbot API credentials
+- Test direct curl again
+
+### **If headers are missing:**
+- Fix header merge logic
+- Ensure headers are passed correctly to httpx
+
+### **If password/username wrong:**
+- Check Railway environment variables
+- Verify no whitespace issues
+
+---
+
+**Check Railway logs now and share the output!** 🔍
