@@ -13,6 +13,7 @@ import re
 import logging
 
 from app.database import get_db, Client, Wallet, Connector, init_db
+from sqlalchemy.orm import joinedload
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,11 @@ async def create_client(request: CreateClientRequest, db: Session = Depends(get_
 async def list_clients(db: Session = Depends(get_db)):
     """List all clients."""
     def _get_clients():
-        clients = db.query(Client).all()
+        # Eagerly load relationships to avoid lazy loading issues
+        clients = db.query(Client).options(
+            joinedload(Client.wallets),
+            joinedload(Client.connectors)
+        ).all()
         result = []
         for client in clients:
             wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
