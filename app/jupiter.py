@@ -16,7 +16,8 @@ TOKENS = {
     "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
     "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
     "WIF": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
-    "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"
+    "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+    "LYNK": "HZG1RVn4zcRM7zEFEVGYPGoPzPAWAj2AAdvQivfmLYNK"
 }
 
 DECIMALS = {
@@ -25,7 +26,8 @@ DECIMALS = {
     "USDT": 6,
     "BONK": 5,
     "WIF": 6,
-    "JUP": 6
+    "JUP": 6,
+    "LYNK": 9
 }
 
 async def get_quote(input_token: str, output_token: str, amount: float, slippage_bps: int = 50):
