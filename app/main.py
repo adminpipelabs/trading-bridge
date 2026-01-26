@@ -9,7 +9,7 @@ from app.jupiter_routes import router as jupiter_router
 
 from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio
-from app.bot_routes import router as bot_router, init_bot_manager
+from app.bot_routes import router as bot_router
 from app.clients_routes import router as client_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
@@ -80,13 +80,7 @@ except ValueError as e:
     if os.getenv("ENVIRONMENT") == "production":
         raise
 
-# Initialize bot manager
-try:
-    init_bot_manager(exchange_manager)
-except Exception as e:
-    logger.error(f"Failed to initialize bot manager: {e}")
-    # Continue without bot manager if initialization fails
-    logger.warning("Bot management features will be unavailable")
+# Bot manager initialization removed - using database persistence instead
 
 app = FastAPI(
     title="Trading Bridge API",
