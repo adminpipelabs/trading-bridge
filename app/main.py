@@ -108,3 +108,15 @@ async def health_check():
         "status": "ok",
         "service": "Trading Bridge"
     }
+
+
+@app.get("/debug/env")
+async def debug_env():
+    """Debug endpoint to check environment variables"""
+    import os
+    return {
+        "HUMMINGBOT_API_URL": os.getenv("HUMMINGBOT_API_URL", "NOT SET"),
+        "HUMMINGBOT_API_USERNAME": os.getenv("HUMMINGBOT_API_USERNAME", "NOT SET"),
+        "has_password": bool(os.getenv("HUMMINGBOT_API_PASSWORD")),
+        "all_env_keys": [k for k in os.environ.keys() if "HUMMINGBOT" in k]
+    }
