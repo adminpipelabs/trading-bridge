@@ -14,9 +14,14 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 
 # Handle Railway's postgres:// vs postgresql:// URL format
+# Also check for Railway service reference format: ${{Postgres.DATABASE_URL}}
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    # Remove Railway reference wrapper if present
+    DATABASE_URL = DATABASE_URL.strip().strip("${{}}").strip()
+    # Convert postgres:// to postgresql:// (SQLAlchemy requirement)
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Create engine with connection pooling
 engine = None
