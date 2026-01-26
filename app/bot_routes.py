@@ -132,9 +132,10 @@ class BotManager:
     async def list_bots(self):
         """List all bots from Hummingbot"""
         try:
-            # Get status from Hummingbot
+            # Try to get status from Hummingbot
             status = await self.hummingbot_client.get_status()
-            bots_data = status.get("bots", {})
+            # Hummingbot returns {"status":"success","data":{}} or {"status":"success","data":{"bots":{...}}}
+            bots_data = status.get("data", {}).get("bots", {}) or status.get("bots", {})
             
             # Transform to our format
             bots = []
@@ -144,6 +145,13 @@ class BotManager:
                 if bot_name in self.bot_metadata:
                     transformed_bot.update(self.bot_metadata[bot_name])
                 bots.append(transformed_bot)
+            
+            # Also include bots from local metadata that might not be in Hummingbot status
+            # (e.g., bots that were just created)
+            local_bot_names = {bot["name"] for bot in bots}
+            for bot_name, bot_data in self.bot_metadata.items():
+                if bot_name not in local_bot_names:
+                    bots.append(bot_data)
             
             return {"bots": bots}
         except Exception as e:
