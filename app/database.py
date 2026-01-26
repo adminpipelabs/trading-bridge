@@ -122,6 +122,26 @@ class Bot(Base):
         Index('idx_bots_account', 'account'),
         Index('idx_bots_status', 'status'),
     )
+    
+    def to_dict(self):
+        """Convert bot to dictionary for API responses"""
+        chain = "solana" if "jupiter" in self.connector.lower() else "evm"
+        return {
+            "id": self.id,
+            "client_id": self.client_id,
+            "account": self.account,
+            "instance_name": self.instance_name,
+            "name": self.name,
+            "connector": self.connector,
+            "pair": self.pair,
+            "strategy": self.strategy,
+            "status": self.status or "stopped",
+            "config": self.config or {},
+            "error": self.error,
+            "chain": chain,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
 
 
 def init_db():
@@ -136,6 +156,13 @@ def init_db():
     except Exception as e:
         logger.error(f"Failed to create database tables: {e}")
         raise
+
+
+def get_db_session():
+    """Get a new database session (for use in sync routes)"""
+    if not SessionLocal:
+        raise RuntimeError("Database not available. Set DATABASE_URL environment variable.")
+    return SessionLocal()
 
 
 def get_db():
