@@ -1,107 +1,97 @@
-# Current Status - Integration Debug
+# Current Status Report
 
-**Date:** 2026-01-24  
-**Status:** ⚠️ Connection Issue
-
----
-
-## ✅ **What's Working**
-
-- ✅ Trading Bridge deployed and online
-- ✅ Hummingbot API deployed
-- ✅ Postgres database running
-- ✅ Environment variables set in Trading Bridge
-- ✅ Code integration complete
+**Date:** 2026-01-26  
+**Last Updated:** Just now
 
 ---
 
-## ❌ **What's Not Working**
+## ✅ **Database Connection**
 
-- ❌ `/bots` endpoint returns Internal Server Error
-- ❌ `/bots/create` endpoint returns Internal Server Error
-- ⚠️ Connection between Trading Bridge and Hummingbot API failing
+**Health Endpoint:**
+```bash
+curl https://trading-bridge-production.up.railway.app/health
+```
 
----
-
-## 🔍 **What We Need**
-
-**The actual error message from Railway logs will tell us:**
-
-### **Possible Issues:**
-
-1. **Service Name Wrong**
-   - Error: "Name resolution failed"
-   - Fix: Find correct service name
-
-2. **Hummingbot API Not Running**
-   - Error: "Connection refused"
-   - Fix: Check Hummingbot API deployment
-
-3. **Authentication Failed**
-   - Error: "Not authenticated"
-   - Fix: Check credentials match
-
-4. **Code Error**
-   - Error: Python traceback
-   - Fix: Fix code issue
+**Status:** ✅ **CONNECTED**
+- Database shows as `"postgresql"` (not `"unavailable"`)
+- Connection is working
 
 ---
 
-## 📋 **Next Steps**
+## 🔄 **Async SQLAlchemy Fix**
 
-### **Option 1: Check Railway Logs** (Best)
+**Issue:** `greenlet_spawn has not been called` error when accessing database in async routes
 
-1. **Trading Bridge** → **Logs** tab
-2. **Find error message**
-3. **Share error with me**
-4. **I'll fix it based on error**
+**Fix Applied:**
+- ✅ Wrapped `list_clients` in `run_in_threadpool`
+- ✅ Wrapped `list_bots` in `run_in_threadpool`
 
-### **Option 2: Verify Setup**
-
-**Check these:**
-
-1. **Hummingbot API Running?**
-   - Go to Hummingbot API → Logs
-   - Should see "Uvicorn running on http://0.0.0.0:8000"
-
-2. **Service Name Correct?**
-   - What is Hummingbot API service called?
-   - Check project overview
-
-3. **Variables Set?**
-   - Trading Bridge → Variables
-   - Should have:
-     - `HUMMINGBOT_API_URL`
-     - `HUMMINGBOT_API_USERNAME`
-     - `HUMMINGBOT_API_PASSWORD`
-
-4. **Same Project?**
-   - Both services in same Railway project?
+**Status:** ⏳ **PARTIAL FIX**
+- Critical endpoints (`/clients`, `/bots`) should work now
+- Other routes may still need the same fix pattern
 
 ---
 
-## 🎯 **Quick Checklist**
+## 🧪 **Endpoint Status**
 
-- [ ] Trading Bridge online ✅
-- [ ] Hummingbot API deployed ✅
-- [ ] Postgres running ✅
-- [ ] Variables set ✅
-- [ ] Service name correct? ⚠️ Need to verify
-- [ ] Hummingbot API running? ⚠️ Need to verify
-- [ ] Error message from logs? ⚠️ Need to check
+### **Clients Endpoint**
+```bash
+curl https://trading-bridge-production.up.railway.app/clients
+```
+**Expected:** `{"clients": []}` (empty array is OK)
 
----
-
-## 💬 **What I Need**
-
-**Please share:**
-
-1. **Error message from Trading Bridge logs** (most important!)
-2. **OR** What Hummingbot API service is called
-3. **OR** Screenshot of error logs
-
-**Then I can fix it immediately!** 🔧
+### **Bots Endpoint**
+```bash
+curl https://trading-bridge-production.up.railway.app/bots
+```
+**Expected:** `{"bots": []}` (empty array is OK)
 
 ---
 
-**The error logs will tell us exactly what's wrong!** 📋
+## 📊 **What's Working**
+
+| Component | Status |
+|-----------|--------|
+| Database Connection | ✅ Connected |
+| Health Endpoint | ✅ Working |
+| Clients List | ⏳ Testing |
+| Bots List | ⏳ Testing |
+| Client Creation | ⏳ May need async fix |
+| Bot Creation | ⏳ May need async fix |
+
+---
+
+## 🎯 **Next Steps**
+
+1. **Test endpoints** - Verify `/clients` and `/bots` work
+2. **If errors persist** - Apply async fix to remaining routes
+3. **Create test client** - Verify full CRUD works
+4. **Create test bot** - Verify bot creation works
+
+---
+
+## 📝 **Remaining Work**
+
+**If async errors persist in other routes:**
+
+**Pattern to apply:**
+```python
+def _db_operation():
+    # DB operations here
+    return result
+
+result = await run_in_threadpool(_db_operation)
+```
+
+**Routes that may need fix:**
+- `create_client`
+- `get_client`
+- `get_client_by_wallet`
+- `create_bot`
+- `get_bot`
+- `start_bot`
+- `stop_bot`
+
+---
+
+**Run the test commands above to verify current status!** 🚀
