@@ -129,13 +129,24 @@ class HummingbotClient:
                 return response.json()
         except httpx.HTTPStatusError as e:
             # Log full error details for debugging
+            status_code = e.response.status_code
+            response_text = e.response.text
+            response_headers = dict(e.response.headers)
+            
+            logger.error(f"HTTP error {status_code}")
+            logger.error(f"Response headers: {response_headers}")
+            logger.error(f"Response text (first 500 chars): {response_text[:500]}")
+            logger.error(f"Response text (full length): {len(response_text)} chars")
+            
+            # Try to parse as JSON
             try:
-                error_detail = e.response.json() if e.response.text else {}
-                logger.error(f"HTTP error {e.response.status_code}: {error_detail}")
-                logger.error(f"Full response text: {e.response.text}")
+                error_json = e.response.json()
+                logger.error(f"Response JSON: {error_json}")
+                error_msg = f"HTTP error {status_code}: {error_json}"
             except:
-                logger.error(f"HTTP error {e.response.status_code}: {e.response.text}")
-            error_msg = f"HTTP error {e.response.status_code}: {e.response.text}"
+                logger.error(f"Response is not JSON, raw text: {response_text}")
+                error_msg = f"HTTP error {status_code}: {response_text}"
+            
             raise Exception(error_msg)
         except httpx.ConnectError as e:
             error_msg = f"Connection failed to {url}: {str(e)}. Check service name and that Hummingbot API is running."
