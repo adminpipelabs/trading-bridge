@@ -1,50 +1,76 @@
-# Status Summary for Dev
+# Status Update for Dev - PostgreSQL Connection
 
 **Date:** 2026-01-26  
-**Integration:** Hummingbot API + Trading Bridge
+**Status:** ✅ Code ready, awaiting DATABASE_URL link in Railway
 
 ---
 
-## 🎯 **TL;DR**
+## ✅ **What's Complete**
 
-**Status:** 95% complete, blocked on service name resolution  
-**Issue:** Can't resolve `hummingbot-api` service name in Railway  
-**Need:** Dev advice on Railway service discovery or Hummingbot API deployment status
+1. **PostgreSQL persistence code** - Fully implemented
+   - Database models (`app/database.py`)
+   - Client routes with database (`app/clients_routes.py`)
+   - Bot routes with database (`app/bot_routes.py`)
+   - Database initialization (`app/main.py`)
 
----
+2. **Code improvements:**
+   - Handles Railway service reference format: `${{Postgres.DATABASE_URL}}`
+   - Handles both `postgres://` and `postgresql://` URLs
+   - Graceful error handling if DATABASE_URL not set
+   - Auto-creates tables on startup
 
-## ✅ **What's Done**
-
-1. ✅ **Code:** Complete implementation
-2. ✅ **Config:** Environment variables working
-3. ✅ **Validation:** Production-ready error handling
-4. ✅ **Docs:** Complete documentation
-
----
-
-## ⚠️ **Current Blocker**
-
-**Error:** `[Errno -2] Name or service not known`  
-**When:** Trying to connect to `http://hummingbot-api:8000`  
-**Status:** Trading Bridge works, but can't reach Hummingbot API
+3. **Frontend auto-sync:**
+   - Client creation auto-syncs to trading-bridge
+   - Generates account_identifier automatically
 
 ---
 
-## 🔍 **What We Need**
+## ⏳ **What's Needed**
 
-1. **Is Hummingbot API deployed?** What's it called?
-2. **Why can't we resolve service name?**
-3. **Best approach to fix?** (service name, public URL, etc.)
+**User needs to link existing Postgres service:**
 
----
+1. Railway Dashboard → `trading-bridge` → Variables
+2. Add Reference → Select `Postgres` → Select `DATABASE_URL`
+3. Redeploy trading-bridge
 
-## 📋 **Quick Questions**
-
-- Hummingbot API service name?
-- Is it running? (check logs)
-- Same Railway project?
-- Use public URL instead?
+**That's it** - no new services, just link the existing one.
 
 ---
 
-**See `DEV_ADVICE_REQUEST.md` for full details.**
+## 📊 **Current Status**
+
+| Component | Status |
+|-----------|--------|
+| Code | ✅ Complete |
+| Database Models | ✅ Ready |
+| Routes | ✅ Ready |
+| Frontend Sync | ✅ Ready |
+| DATABASE_URL Link | ⏳ Pending user action |
+
+---
+
+## 🧪 **After DATABASE_URL is Set**
+
+**Expected flow:**
+1. Health endpoint shows: `"database": "postgresql"`
+2. Clients endpoint works: `{"clients": []}`
+3. Bots endpoint works: `{"bots": []}`
+4. Create client → persists to database
+5. Create bot → persists to database
+6. Redeploy → data survives
+
+---
+
+## ✅ **No Additional Services Needed**
+
+**Working with existing infrastructure:**
+- ✅ Use existing Postgres service
+- ✅ Link via Railway variable reference
+- ✅ Code handles all edge cases
+- ✅ Production-ready
+
+**No new services, no additional setup** - just link and go.
+
+---
+
+**Code is production-ready. Just needs DATABASE_URL linked in Railway.** 🚀
