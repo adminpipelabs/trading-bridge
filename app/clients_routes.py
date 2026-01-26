@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 import uuid
 import re
 import logging
@@ -141,23 +142,23 @@ async def create_client(request: CreateClientRequest, db: Session = Depends(get_
 @router.get("", response_model=dict)
 async def list_clients(db: Session = Depends(get_db)):
     """List all clients."""
-    clients = db.query(Client).all()
+    def _get_clients():
+        clients = db.query(Client).all()
+        result = []
+        for client in clients:
+            wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
+            connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
+            result.append({
+                "id": client.id,
+                "name": client.name,
+                "account_identifier": client.account_identifier,
+                "wallets": wallets,
+                "connectors": connectors,
+                "created_at": client.created_at.isoformat()
+            })
+        return {"clients": result}
     
-    result = []
-    for client in clients:
-        wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
-        connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
-        
-        result.append({
-            "id": client.id,
-            "name": client.name,
-            "account_identifier": client.account_identifier,
-            "wallets": wallets,
-            "connectors": connectors,
-            "created_at": client.created_at.isoformat()
-        })
-    
-    return {"clients": result}
+    return await run_in_threadpool(_get_clients)
 
 
 @router.get("/{client_id}", response_model=ClientResponse)

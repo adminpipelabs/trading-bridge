@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 from datetime import datetime
 import uuid
 import logging
