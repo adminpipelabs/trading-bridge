@@ -1,20 +1,32 @@
 """
-Bot & Strategy API Routes
-==========================
-
-File: app/bot_routes.py
+Bot & Strategy API Routes with PostgreSQL persistence.
 """
-
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
+from sqlalchemy.orm import Session
+from datetime import datetime
+import uuid
 import logging
 
 from app.hummingbot_client import HummingbotClient
+from app.database import get_db, Bot, Client
 
 logger = logging.getLogger(__name__)
 
-# Bot functionality - integrated with Hummingbot API
+router = APIRouter()
+
+# Hummingbot client - initialized on first use
+_hummingbot_client: Optional[HummingbotClient] = None
+
+
+def get_hummingbot_client() -> HummingbotClient:
+    """Get or create Hummingbot client"""
+    global _hummingbot_client
+    if _hummingbot_client is None:
+        _hummingbot_client = HummingbotClient()
+    return _hummingbot_client
+
 
 def generate_hummingbot_script(
     strategy: str,
@@ -83,233 +95,36 @@ strategy = PureMarketMakingStrategyV2(
     return script
 
 
-def transform_hummingbot_bot(bot_name: str, bot_info: Dict[str, Any]) -> Dict[str, Any]:
+def _extract_running_instances(hb_status: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Transform Hummingbot bot format to our format
-    
-    Args:
-        bot_name: Bot name from Hummingbot
-        bot_info: Bot info dict from Hummingbot
-        
-    Returns:
-        Transformed bot dict
+    Extract running bot instances from Hummingbot status response.
+    Handle various response formats.
     """
-    # Determine chain from connector
-    connector = bot_info.get("connector", "").lower()
-    chain = "solana" if "jupiter" in connector else "evm"
+    running = {}
     
-    # Map strategy names
-    strategy_map = {
-        "pure_market_making": "spread",
-        "market_making": "spread",
-        "volume_trading": "volume",
-    }
-    strategy = bot_info.get("strategy", "unknown")
-    our_strategy = strategy_map.get(strategy.lower(), strategy)
+    # Try different possible structures
+    data = hb_status.get("data", hb_status)
     
-    return {
-        "id": bot_name,
-        "name": bot_name,
-        "status": "running" if bot_info.get("is_running", False) else "stopped",
-        "strategy": our_strategy,
-        "connector": connector,
-        "pair": bot_info.get("trading_pair", "unknown"),
-        "chain": chain,
-        "account": bot_info.get("account", "unknown"),
-        "config": bot_info.get("config", {})
-    }
-
-
-class BotManager:
-    """BotManager integrated with Hummingbot API"""
+    # Format 1: data.bots
+    if "bots" in data:
+        for name, info in data["bots"].items():
+            running[name] = info
     
-    def __init__(self, exchange_manager):
-        self.exchange_manager = exchange_manager
-        self.hummingbot_client = HummingbotClient()
-        # Keep local cache for bot metadata
-        self.bot_metadata = {}
+    # Format 2: data.running_bots (list)
+    if "running_bots" in data:
+        for bot in data["running_bots"]:
+            name = bot.get("instance_name", bot.get("name"))
+            if name:
+                running[name] = bot
     
-    async def list_bots(self):
-        """
-        List all bots by combining local metadata (source of truth) with Hummingbot runtime status.
-        Trading Bridge is the source of truth for bot definitions.
-        Hummingbot only provides runtime status (is it running?).
-        """
-        bots = []
-        
-        # 1. Start with local bot definitions (source of truth for config)
-        for bot_id, metadata in self.bot_metadata.items():
-            bot = {
-                "id": bot_id,
-                "name": metadata.get("name", bot_id),
-                "account": metadata.get("account", "unknown"),
-                "connector": metadata.get("connector", "unknown"),
-                "pair": metadata.get("pair", "unknown"),
-                "strategy": metadata.get("strategy", "unknown"),
-                "config": metadata.get("config", {}),
-                "status": metadata.get("status", "stopped"),  # Default, will update below
-                "chain": metadata.get("chain", "evm"),
-            }
-            bots.append(bot)
-        
-        # 2. Get runtime status from Hummingbot to update "running" status
-        try:
-            hb_status = await self.hummingbot_client.get_status()
-            running_instances = self._extract_running_instances(hb_status)
-            
-            # 3. Update status for running bots
-            for bot in bots:
-                instance_name = bot["name"]  # Use bot name as instance name
-                if instance_name in running_instances:
-                    bot["status"] = "running"
-                    # Optionally add runtime info
-                    bot["runtime_info"] = running_instances[instance_name]
-        except Exception as e:
-            logger.warning(f"Could not fetch Hummingbot status: {e}")
-            # Continue with local data, status remains as stored
-        
-        return {"bots": bots}
+    # Format 3: direct list
+    if isinstance(data, list):
+        for bot in data:
+            name = bot.get("instance_name", bot.get("name"))
+            if name:
+                running[name] = bot
     
-    def _extract_running_instances(self, hb_status):
-        """
-        Extract running bot instances from Hummingbot status response.
-        Handle various response formats.
-        """
-        running = {}
-        
-        # Try different possible structures
-        data = hb_status.get("data", hb_status)
-        
-        # Format 1: data.bots
-        if "bots" in data:
-            for name, info in data["bots"].items():
-                running[name] = info
-        
-        # Format 2: data.running_bots (list)
-        if "running_bots" in data:
-            for bot in data["running_bots"]:
-                name = bot.get("instance_name", bot.get("name"))
-                if name:
-                    running[name] = bot
-        
-        # Format 3: direct list
-        if isinstance(data, list):
-            for bot in data:
-                name = bot.get("instance_name", bot.get("name"))
-                if name:
-                    running[name] = bot
-        
-        return running
-    
-    def get_bot(self, bot_id):
-        """Get bot details"""
-        # Try to get from Hummingbot first
-        # For now, return from local cache
-        return self.bot_metadata.get(bot_id)
-    
-    async def create_bot(self, name, account, strategy, connector, pair, config):
-        """Create and start a bot via Hummingbot"""
-        try:
-            # Generate script
-            script_content = generate_hummingbot_script(strategy, connector, pair, config)
-            script_name = f"{name}_strategy.py"
-            
-            # Deploy script to Hummingbot
-            # deploy-v2-script creates the instance, deploys script, AND starts the bot automatically
-            # Use bot name as instance_name and account as credentials_profile
-            await self.hummingbot_client.deploy_script(
-                script_content, 
-                script_name,
-                instance_name=name,
-                credentials_profile=account
-            )
-            logger.info(f"Deployed script: {script_name} for instance: {name}")
-            
-            # Note: deploy-v2-script automatically starts the bot, so we don't need to call start_bot
-            # The start_bot endpoint is only for restarting stopped bots, not initial startup
-            
-            # Store metadata locally
-            bot_id = name
-            bot = {
-                "id": bot_id,
-                "name": name,
-                "account": account,
-                "strategy": strategy,
-                "connector": connector,
-                "pair": pair,
-                "config": config,
-                "status": "running",
-                "chain": "solana" if "jupiter" in connector.lower() else "evm"
-            }
-            self.bot_metadata[bot_id] = bot
-            
-            return bot
-        except Exception as e:
-            logger.error(f"Failed to create bot: {str(e)}")
-            raise ValueError(f"Failed to create bot: {str(e)}")
-    
-    async def start_bot(self, bot_id):
-        """Start a bot via Hummingbot"""
-        try:
-            # Get bot metadata
-            bot = self.bot_metadata.get(bot_id)
-            if not bot:
-                raise ValueError(f"Bot not found: {bot_id}")
-            
-            # Start via Hummingbot
-            script_name = f"{bot_id}_strategy.py"
-            await self.hummingbot_client.start_bot(bot_id, script_name, bot.get("config", {}))
-            
-            # Update status
-            bot["status"] = "running"
-            self.bot_metadata[bot_id] = bot
-            
-            return bot
-        except Exception as e:
-            logger.error(f"Failed to start bot {bot_id}: {str(e)}")
-            raise ValueError(f"Failed to start bot: {str(e)}")
-    
-    async def stop_bot(self, bot_id):
-        """Stop a bot via Hummingbot"""
-        try:
-            # Stop via Hummingbot
-            await self.hummingbot_client.stop_bot(bot_id)
-            
-            # Update status
-            bot = self.bot_metadata.get(bot_id)
-            if bot:
-                bot["status"] = "stopped"
-                self.bot_metadata[bot_id] = bot
-                return bot
-            else:
-                return {"id": bot_id, "status": "stopped"}
-        except Exception as e:
-            logger.error(f"Failed to stop bot {bot_id}: {str(e)}")
-            raise ValueError(f"Failed to stop bot: {str(e)}")
-    
-    def delete_bot(self, bot_id):
-        """Delete bot metadata (bot deletion in Hummingbot handled separately)"""
-        if bot_id in self.bot_metadata:
-            del self.bot_metadata[bot_id]
-        return {"message": f"Bot {bot_id} deleted"}
-    
-    async def get_bot_status(self, bot_id):
-        """Get bot status from Hummingbot"""
-        try:
-            # Get status from Hummingbot
-            status = await self.hummingbot_client.get_status()
-            bots_data = status.get("bots", {})
-            
-            if bot_id in bots_data:
-                bot_info = bots_data[bot_id]
-                return transform_hummingbot_bot(bot_id, bot_info)
-            else:
-                # Fallback to local cache
-                return self.bot_metadata.get(bot_id)
-        except Exception as e:
-            logger.error(f"Failed to get bot status: {str(e)}")
-            # Fallback to local cache
-            return self.bot_metadata.get(bot_id)
+    return running
 
 
 def get_strategies():
@@ -319,26 +134,15 @@ def get_strategies():
         {"id": "grid", "name": "Grid Trading", "description": "Place orders in a grid pattern"},
         {"id": "dca", "name": "Dollar Cost Averaging", "description": "Buy at regular intervals"},
         {"id": "twap", "name": "TWAP", "description": "Time-weighted average price execution"},
-        {"id": "volume", "name": "Volume Trading", "description": "Create volume by trading between accounts"}
+        {"id": "volume", "name": "Volume Trading", "description": "Create volume by trading between accounts"},
+        {"id": "spread", "name": "Spread Trading", "description": "Market making with spread"}
     ]
-
-
-router = APIRouter()
-
-# Will be initialized by main.py
-bot_manager: BotManager = None
-
-
-def init_bot_manager(exchange_manager):
-    """Called from main.py at startup"""
-    global bot_manager
-    bot_manager = BotManager(exchange_manager)
 
 
 class CreateBotRequest(BaseModel):
     name: str
     account: str
-    strategy: str  # market_making, grid, dca, twap, volume
+    strategy: str  # market_making, grid, dca, twap, volume, spread
     connector: str
     pair: str
     config: Optional[Dict[str, Any]] = {}
@@ -349,118 +153,319 @@ class CreateBotRequest(BaseModel):
 # =============================================================================
 
 @router.get("/bots")
-async def list_bots(account: Optional[str] = None):
+async def list_bots(
+    account: Optional[str] = Query(None, description="Filter by account identifier"),
+    db: Session = Depends(get_db)
+):
     """
     List all trading bots, optionally filtered by account.
-    
-    Args:
-        account: Optional account identifier to filter bots (e.g., "client_sharp")
+    Combines database definitions (source of truth) with Hummingbot runtime status.
     """
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
-    result = await bot_manager.list_bots()
-    
-    # Filter by account if provided
-    if account:
-        bots = result.get("bots", [])
-        filtered_bots = [bot for bot in bots if bot.get("account") == account]
-        return {"bots": filtered_bots}
-    
-    return result
+    try:
+        # 1. Get bot definitions from database
+        query = db.query(Bot)
+        if account:
+            query = query.filter(Bot.account == account)
+        
+        db_bots = query.all()
+        
+        # 2. Transform to response format
+        bots = []
+        for db_bot in db_bots:
+            chain = "solana" if "jupiter" in db_bot.connector.lower() else "evm"
+            bot = {
+                "id": db_bot.id,
+                "name": db_bot.name,
+                "account": db_bot.account,
+                "connector": db_bot.connector,
+                "pair": db_bot.pair,
+                "strategy": db_bot.strategy,
+                "config": db_bot.config or {},
+                "status": db_bot.status or "stopped",
+                "chain": chain,
+                "instance_name": db_bot.instance_name,
+                "created_at": db_bot.created_at.isoformat() if db_bot.created_at else None,
+            }
+            bots.append(bot)
+        
+        # 3. Get runtime status from Hummingbot to update "running" status
+        try:
+            hummingbot_client = get_hummingbot_client()
+            hb_status = await hummingbot_client.get_status()
+            running_instances = _extract_running_instances(hb_status)
+            
+            # 4. Update status for running bots
+            for bot in bots:
+                instance_name = bot.get("instance_name") or bot["name"]
+                if instance_name in running_instances:
+                    bot["status"] = "running"
+                    bot["runtime_info"] = running_instances[instance_name]
+                    # Update database status
+                    db_bot = db.query(Bot).filter(Bot.id == bot["id"]).first()
+                    if db_bot:
+                        db_bot.status = "running"
+                        db_bot.updated_at = datetime.utcnow()
+                        db.commit()
+        except Exception as e:
+            logger.warning(f"Could not fetch Hummingbot status: {e}")
+            # Continue with database data, status remains as stored
+        
+        return {"bots": bots}
+    except Exception as e:
+        logger.error(f"Failed to list bots: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list bots: {str(e)}")
 
 
 @router.get("/bots/{bot_id}")
-async def get_bot(bot_id: str):
+async def get_bot(bot_id: str, db: Session = Depends(get_db)):
     """Get bot details"""
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
-    bot = bot_manager.get_bot(bot_id)
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
-        raise HTTPException(404, f"Bot not found: {bot_id}")
-    return bot
+        raise HTTPException(status_code=404, detail=f"Bot not found: {bot_id}")
+    
+    chain = "solana" if "jupiter" in bot.connector.lower() else "evm"
+    return {
+        "id": bot.id,
+        "name": bot.name,
+        "account": bot.account,
+        "connector": bot.connector,
+        "pair": bot.pair,
+        "strategy": bot.strategy,
+        "config": bot.config or {},
+        "status": bot.status or "stopped",
+        "chain": chain,
+        "instance_name": bot.instance_name,
+        "error": bot.error,
+        "created_at": bot.created_at.isoformat() if bot.created_at else None,
+        "updated_at": bot.updated_at.isoformat() if bot.updated_at else None,
+    }
 
 
 @router.post("/bots/create")
-async def create_bot(request: CreateBotRequest):
+async def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
     """Create a new trading bot"""
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
     try:
-        return await bot_manager.create_bot(
-            name=request.name,
+        # 1. Validate client exists with matching account_identifier
+        client = db.query(Client).filter(Client.account_identifier == request.account).first()
+        if not client:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Client with account_identifier '{request.account}' not found. Create client first."
+            )
+        
+        # 2. Check if bot with same name already exists
+        existing_bot = db.query(Bot).filter(Bot.name == request.name).first()
+        if existing_bot:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Bot with name '{request.name}' already exists"
+            )
+        
+        # 3. Generate unique instance name for Hummingbot
+        instance_name = f"{request.account}_{uuid.uuid4().hex[:8]}"
+        
+        # 4. Generate Hummingbot script
+        script_content = generate_hummingbot_script(
+            request.strategy,
+            request.connector,
+            request.pair,
+            request.config
+        )
+        script_name = f"{request.name}_strategy.py"
+        
+        # 5. Deploy script to Hummingbot
+        hummingbot_client = get_hummingbot_client()
+        try:
+            await hummingbot_client.deploy_script(
+                script_content,
+                script_name,
+                instance_name=instance_name,
+                credentials_profile=request.account
+            )
+            logger.info(f"Deployed script: {script_name} for instance: {instance_name}")
+            bot_status = "running"  # deploy-v2-script auto-starts the bot
+        except Exception as e:
+            logger.error(f"Failed to deploy script to Hummingbot: {e}")
+            bot_status = "error"
+            error_message = str(e)
+        
+        # 6. Store bot in database
+        bot_id = str(uuid.uuid4())
+        bot = Bot(
+            id=bot_id,
+            client_id=client.id,
             account=request.account,
-            strategy=request.strategy,
+            instance_name=instance_name,
+            name=request.name,
             connector=request.connector,
             pair=request.pair,
-            config=request.config
+            strategy=request.strategy,
+            status=bot_status,
+            config=request.config or {},
+            error=error_message if bot_status == "error" else None,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
         )
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+        db.add(bot)
+        
+        try:
+            db.commit()
+            logger.info(f"Created bot: {bot_id} ({request.name}) for account: {request.account}")
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to save bot to database: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to save bot: {str(e)}")
+        
+        chain = "solana" if "jupiter" in request.connector.lower() else "evm"
+        return {
+            "id": bot_id,
+            "name": bot.name,
+            "account": bot.account,
+            "connector": bot.connector,
+            "pair": bot.pair,
+            "strategy": bot.strategy,
+            "config": bot.config or {},
+            "status": bot.status,
+            "chain": chain,
+            "instance_name": bot.instance_name,
+            "created_at": bot.created_at.isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create bot: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to create bot: {str(e)}")
 
 
 @router.post("/bots/{bot_id}/start")
-async def start_bot(bot_id: str):
+async def start_bot(bot_id: str, db: Session = Depends(get_db)):
     """Start a trading bot"""
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail=f"Bot not found: {bot_id}")
+    
     try:
-        return await bot_manager.start_bot(bot_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
+        # Start via Hummingbot
+        hummingbot_client = get_hummingbot_client()
+        script_name = f"{bot.name}_strategy.py"
+        await hummingbot_client.start_bot(bot.instance_name, script_name, bot.config or {})
+        
+        # Update status in database
+        bot.status = "running"
+        bot.error = None
+        bot.updated_at = datetime.utcnow()
+        db.commit()
+        
+        logger.info(f"Started bot: {bot_id}")
+        
+        chain = "solana" if "jupiter" in bot.connector.lower() else "evm"
+        return {
+            "id": bot.id,
+            "name": bot.name,
+            "status": bot.status,
+            "chain": chain,
+        }
+    except Exception as e:
+        logger.error(f"Failed to start bot {bot_id}: {str(e)}")
+        bot.status = "error"
+        bot.error = str(e)
+        bot.updated_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to start bot: {str(e)}")
 
 
 @router.post("/bots/{bot_id}/stop")
-async def stop_bot(bot_id: str):
+async def stop_bot(bot_id: str, db: Session = Depends(get_db)):
     """Stop a trading bot"""
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail=f"Bot not found: {bot_id}")
+    
     try:
-        return await bot_manager.stop_bot(bot_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
+        # Stop via Hummingbot
+        hummingbot_client = get_hummingbot_client()
+        await hummingbot_client.stop_bot(bot.instance_name)
+        
+        # Update status in database
+        bot.status = "stopped"
+        bot.error = None
+        bot.updated_at = datetime.utcnow()
+        db.commit()
+        
+        logger.info(f"Stopped bot: {bot_id}")
+        
+        chain = "solana" if "jupiter" in bot.connector.lower() else "evm"
+        return {
+            "id": bot.id,
+            "name": bot.name,
+            "status": bot.status,
+            "chain": chain,
+        }
+    except Exception as e:
+        logger.error(f"Failed to stop bot {bot_id}: {str(e)}")
+        bot.status = "error"
+        bot.error = str(e)
+        bot.updated_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Failed to stop bot: {str(e)}")
 
 
 @router.delete("/bots/{bot_id}")
-async def delete_bot(bot_id: str):
+async def delete_bot(bot_id: str, db: Session = Depends(get_db)):
     """Delete a trading bot"""
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail=f"Bot not found: {bot_id}")
+    
     try:
-        return bot_manager.delete_bot(bot_id)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+        db.delete(bot)
+        db.commit()
+        logger.info(f"Deleted bot: {bot_id}")
+        return {"status": "deleted", "bot_id": bot_id}
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to delete bot {bot_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete bot: {str(e)}")
 
 
 @router.get("/bots/{bot_id}/status")
-async def get_bot_status(bot_id: str):
+async def get_bot_status(bot_id: str, db: Session = Depends(get_db)):
     """Get bot status and metrics"""
-    if not bot_manager:
-        raise HTTPException(
-            status_code=503,
-            detail="Bot management unavailable. Set HUMMINGBOT_API_URL environment variable to enable bot management."
-        )
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail=f"Bot not found: {bot_id}")
+    
+    # Try to get runtime status from Hummingbot
     try:
-        return await bot_manager.get_bot_status(bot_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
+        hummingbot_client = get_hummingbot_client()
+        hb_status = await hummingbot_client.get_status()
+        running_instances = _extract_running_instances(hb_status)
+        
+        instance_name = bot.instance_name or bot.name
+        if instance_name in running_instances:
+            runtime_info = running_instances[instance_name]
+            # Update database status
+            bot.status = "running"
+            bot.updated_at = datetime.utcnow()
+            db.commit()
+        else:
+            # Bot not running in Hummingbot
+            if bot.status == "running":
+                bot.status = "stopped"
+                bot.updated_at = datetime.utcnow()
+                db.commit()
+    except Exception as e:
+        logger.warning(f"Could not fetch Hummingbot status: {e}")
+    
+    chain = "solana" if "jupiter" in bot.connector.lower() else "evm"
+    return {
+        "id": bot.id,
+        "name": bot.name,
+        "status": bot.status or "stopped",
+        "chain": chain,
+        "error": bot.error,
+        "updated_at": bot.updated_at.isoformat() if bot.updated_at else None,
+    }
 
 
 # =============================================================================
@@ -478,5 +483,13 @@ async def get_strategy(strategy_id: str):
     """Get strategy details"""
     strategies = {s["id"]: s for s in get_strategies()}
     if strategy_id not in strategies:
-        raise HTTPException(404, f"Strategy not found: {strategy_id}")
+        raise HTTPException(status_code=404, detail=f"Strategy not found: {strategy_id}")
     return strategies[strategy_id]
+
+
+# Legacy compatibility - keep init_bot_manager for main.py
+def init_bot_manager(exchange_manager):
+    """Legacy function - kept for compatibility with main.py"""
+    # Database-based implementation doesn't need this
+    # But we keep it to avoid breaking main.py
+    pass
