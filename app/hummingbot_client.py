@@ -47,6 +47,9 @@ class HummingbotClient:
         self.password = os.getenv("HUMMINGBOT_API_PASSWORD", "") or os.getenv(" HUMMINGBOT_API_PASSWORD", "")
         self.api_key = os.getenv("HUMMINGBOT_API_KEY", "") or os.getenv(" HUMMINGBOT_API_KEY", "")
         
+        # Debug logging
+        logger.info(f"Auth config - Username: '{self.username}', Password set: {bool(self.password)}, Password length: {len(self.password) if self.password else 0}")
+        
         # Validate authentication
         if not self.api_key and not self.password:
             error_msg = (
@@ -64,7 +67,7 @@ class HummingbotClient:
             self.headers = {}
             self.auth = (self.username, self.password) if self.password else None
         
-        logger.info(f"HummingbotClient initialized: {self.base_url} (auth: {'API_KEY' if self.api_key else 'BASIC'})")
+        logger.info(f"HummingbotClient initialized: {self.base_url} (auth: {'API_KEY' if self.api_key else 'BASIC'}, username: '{self.username}')")
     
     async def _request(
         self, 
