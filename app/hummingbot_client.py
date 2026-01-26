@@ -128,8 +128,14 @@ class HummingbotClient:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as e:
+            # Log full error details for debugging
+            try:
+                error_detail = e.response.json() if e.response.text else {}
+                logger.error(f"HTTP error {e.response.status_code}: {error_detail}")
+                logger.error(f"Full response text: {e.response.text}")
+            except:
+                logger.error(f"HTTP error {e.response.status_code}: {e.response.text}")
             error_msg = f"HTTP error {e.response.status_code}: {e.response.text}"
-            logger.error(error_msg)
             raise Exception(error_msg)
         except httpx.ConnectError as e:
             error_msg = f"Connection failed to {url}: {str(e)}. Check service name and that Hummingbot API is running."
