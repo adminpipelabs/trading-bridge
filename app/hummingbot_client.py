@@ -61,11 +61,14 @@ class HummingbotClient:
             raise ValueError(error_msg)
         
         # Use API key if available, otherwise basic auth
+        # Always include ngrok header to bypass free tier warning page
+        ngrok_header = {"ngrok-skip-browser-warning": "true"}
+        
         if self.api_key:
-            self.headers = {"X-API-KEY": self.api_key}
+            self.headers = {"X-API-KEY": self.api_key, **ngrok_header}
             self.auth = None
         else:
-            self.headers = {}
+            self.headers = ngrok_header.copy()
             # Use httpx.BasicAuth for proper authentication format
             self.auth = httpx.BasicAuth(self.username, self.password) if self.password else None
         
@@ -99,11 +102,13 @@ class HummingbotClient:
             **kwargs
         }
         
-        # Add authentication
+        # Always include headers (for ngrok bypass and API key if used)
+        if self.headers:
+            request_kwargs.setdefault("headers", {}).update(self.headers)
+        
+        # Add authentication (basic auth or API key via headers)
         if self.auth:
             request_kwargs["auth"] = self.auth
-        elif self.headers:
-            request_kwargs.setdefault("headers", {}).update(self.headers)
         
         try:
             async with httpx.AsyncClient() as client:
