@@ -68,9 +68,15 @@ class HummingbotClient:
             self.headers = {"X-API-KEY": self.api_key, **ngrok_header}
             self.auth = None
         else:
-            self.headers = ngrok_header.copy()
-            # Use httpx.BasicAuth for proper authentication format
-            self.auth = httpx.BasicAuth(self.username, self.password) if self.password else None
+            # Manually construct Authorization header to ensure ngrok header is included
+            import base64
+            credentials = f"{self.username}:{self.password}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            self.headers = {
+                "ngrok-skip-browser-warning": "true",
+                "Authorization": f"Basic {encoded_credentials}"
+            }
+            self.auth = None  # Don't use httpx.BasicAuth, we're handling it manually
         
         logger.info(f"HummingbotClient initialized: {self.base_url} (auth: {'API_KEY' if self.api_key else 'BASIC'}, username: '{self.username}')")
     
@@ -102,19 +108,19 @@ class HummingbotClient:
             **kwargs
         }
         
-        # Always include headers (for ngrok bypass and API key if used)
+        # Always include headers (for ngrok bypass, auth, and API key if used)
         if self.headers:
             request_kwargs.setdefault("headers", {}).update(self.headers)
         
-        # Add authentication (basic auth or API key via headers)
+        # Add authentication if using httpx.BasicAuth (for API key auth, it's in headers)
         if self.auth:
             request_kwargs["auth"] = self.auth
         
-        # Debug: Log headers being sent (mask password)
+        # Debug: Log headers being sent (mask Authorization header)
         headers_to_log = request_kwargs.get("headers", {}).copy()
-        if self.auth:
+        if "Authorization" in headers_to_log:
             headers_to_log["Authorization"] = "BasicAuth (masked)"
-        logger.info(f"Making {method} request to {url} with headers: {headers_to_log}")
+        logger.info(f"Making {method} request to {url} with headers: {list(headers_to_log.keys())}")
         
         try:
             async with httpx.AsyncClient() as client:
