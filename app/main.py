@@ -151,6 +151,26 @@ async def debug_env():
     else:
         auth_header = "NOT SET"
     
+    # Check DATABASE_URL (mask password)
+    db_url_raw = os.getenv("DATABASE_URL", "")
+    if db_url_raw:
+        # Mask password in URL for security
+        if "@" in db_url_raw:
+            parts = db_url_raw.split("@")
+            if len(parts) == 2:
+                user_pass = parts[0].split("://")[-1] if "://" in parts[0] else parts[0]
+                if ":" in user_pass:
+                    user = user_pass.split(":")[0]
+                    db_url_masked = db_url_raw.replace(user_pass, f"{user}:***MASKED***")
+                else:
+                    db_url_masked = db_url_raw
+            else:
+                db_url_masked = db_url_raw
+        else:
+            db_url_masked = db_url_raw
+    else:
+        db_url_masked = "NOT SET"
+    
     return {
         "HUMMINGBOT_API_URL": url_without_space or url_with_space or "NOT SET",
         "HUMMINGBOT_API_USERNAME": username,
@@ -161,5 +181,8 @@ async def debug_env():
         "auth_header_preview": auth_header,
         "all_env_keys": sorted([k for k in os.environ.keys() if "HUMMINGBOT" in k]),
         "url_with_space": url_with_space or "NOT SET",
-        "url_without_space": url_without_space or "NOT SET"
+        "url_without_space": url_without_space or "NOT SET",
+        "DATABASE_URL": db_url_masked,
+        "DATABASE_URL_length": len(db_url_raw),
+        "DATABASE_URL_starts_with": db_url_raw[:30] if db_url_raw else "NOT SET"
     }
