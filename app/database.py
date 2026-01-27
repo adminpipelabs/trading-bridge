@@ -271,6 +271,27 @@ def init_db():
         Base.metadata.create_all(bind=engine)
         logger.info("✅ Table creation command completed")
         
+        # Step 3.5: Add frontend-compatible columns if they don't exist (for Pipe Labs backend compatibility)
+        logger.info("Ensuring frontend-compatible columns exist...")
+        try:
+            with engine.connect() as conn:
+                # Add columns that Pipe Labs backend expects (IF NOT EXISTS prevents errors)
+                conn.execute(text("""
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS wallet_address VARCHAR(100);
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS wallet_type VARCHAR(20);
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active';
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS tier VARCHAR(20);
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'client';
+                    ALTER TABLE clients ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{}';
+                """))
+                conn.commit()
+            logger.info("✅ Frontend-compatible columns verified/added")
+        except Exception as col_error:
+            logger.warning(f"Could not add frontend columns (may already exist): {col_error}")
+            # Don't fail - columns might already exist
+        
         # Step 4: VERIFY tables exist (critical check)
         inspector = inspect(engine)
         created_tables = inspector.get_table_names()
