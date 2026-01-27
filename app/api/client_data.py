@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 import logging
 
-from app.database import get_db, Client, Wallet, Connector
+from app.database import get_db, Client, Wallet, Connector, Bot
 from app.services.exchange import exchange_manager
 
 logger = logging.getLogger(__name__)
@@ -105,13 +105,42 @@ async def get_client_portfolio(
         )
     
     try:
-        balances = await account.get_balances()
-        # Calculate total USD value (simplified - would need price API for accurate conversion)
-        # For now, return balances as-is
+        balances_raw = await account.get_balances()
+        
+        # Transform nested balances to flat array format expected by frontend
+        balances_array = []
+        total_usd = 0.0
+        
+        for exchange_name, exchange_balances in balances_raw.items():
+            if isinstance(exchange_balances, dict) and "error" not in exchange_balances:
+                for asset, balance_data in exchange_balances.items():
+                    if isinstance(balance_data, dict):
+                        balances_array.append({
+                            "exchange": exchange_name,
+                            "asset": asset,
+                            "free": balance_data.get("free", 0),
+                            "total": balance_data.get("total", 0),
+                            "used": balance_data.get("used", 0),
+                            "usd_value": 0  # TODO: Calculate from prices
+                        })
+        
+        # Get bot counts for portfolio (query database directly)
+        try:
+            bots = db.query(Bot).filter(Bot.account == account_identifier).all()
+            active_bots = sum(1 for b in bots if b.status == "running")
+            total_bots = len(bots)
+        except Exception as e:
+            logger.warning(f"Failed to get bot counts: {e}")
+            active_bots = 0
+            total_bots = 0
+        
         return {
             "account": account_identifier,
-            "balances": balances,
-            "total_usd": 0  # TODO: Calculate from prices
+            "balances": balances_array,
+            "total_usd": total_usd,
+            "total_pnl": 0,  # TODO: Calculate from trades
+            "active_bots": active_bots,
+            "total_bots": total_bots
         }
     except Exception as e:
         logger.error(f"Failed to get balances: {e}")
@@ -124,13 +153,11 @@ async def get_client_balances(
     db: Session = Depends(get_db)
 ):
     """
-    Get balances for a client (alias for /portfolio).
+    Get balances for a client.
+    Returns array format expected by frontend.
     """
     portfolio = await get_client_portfolio(wallet_address, db)
-    return {
-        "balances": portfolio["balances"],
-        "total_usd": portfolio.get("total_usd", 0)
-    }
+    return portfolio["balances"]  # Return array directly
 
 
 @router.get("/trades")
@@ -182,14 +209,30 @@ async def get_client_trades(
         
         # Filter by days if needed (exchange_manager may not support this)
         # For now, return all trades (exchanges typically return recent trades)
-        # Sort by timestamp descending (most recent first)
-        trades_sorted = sorted(trades, key=lambda t: t.get("timestamp", 0), reverse=True)
+        # Transform trades to frontend format
+        trades_transformed = []
+        for trade in trades:
+            # Convert symbol format: SHARP/USDT -> SHARP-USDT
+            symbol = trade.get("symbol", "")
+            trading_pair = symbol.replace("/", "-") if "/" in symbol else symbol
+            
+            trades_transformed.append({
+                "trading_pair": trading_pair,
+                "side": trade.get("side", "").lower(),
+                "amount": float(trade.get("amount", 0)),
+                "price": float(trade.get("price", 0)),
+                "timestamp": trade.get("timestamp", 0),
+                "exchange": trade.get("connector", "unknown"),  # Rename connector -> exchange
+                "id": trade.get("id"),
+                "order_id": trade.get("order_id"),
+                "cost": trade.get("cost", 0),
+                "fee": trade.get("fee", {})
+            })
         
-        return {
-            "account": account_identifier,
-            "trades": trades_sorted,
-            "count": len(trades_sorted)
-        }
+        # Sort by timestamp descending (most recent first)
+        trades_sorted = sorted(trades_transformed, key=lambda t: t.get("timestamp", 0), reverse=True)
+        
+        return trades_sorted  # Return array directly (frontend expects array, not object)
     except Exception as e:
         logger.error(f"Failed to get trades: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch trades: {str(e)}")
@@ -205,15 +248,14 @@ async def get_client_volume(
     Get trading volume for a client.
     """
     # Get trades first
-    trades_data = await get_client_trades(wallet_address, limit=1000, days=days, db=db)
-    trades = trades_data.get("trades", [])
+    trades = await get_client_trades(wallet_address, limit=1000, days=days, db=db)
     
     # Calculate volume
     total_volume = 0.0
     volume_by_pair = {}
     
     for trade in trades:
-        pair = trade.get("symbol", trade.get("pair", "unknown"))
+        pair = trade.get("trading_pair", "unknown")
         amount = float(trade.get("amount", 0))
         price = float(trade.get("price", 0))
         volume = amount * price
@@ -222,8 +264,8 @@ async def get_client_volume(
         volume_by_pair[pair] = volume_by_pair.get(pair, 0) + volume
     
     return {
-        "account": trades_data.get("account"),
-        "total_volume_usd": total_volume,
+        "total_volume": total_volume,  # Rename total_volume_usd -> total_volume
+        "trade_count": len(trades),    # Add trade_count
         "volume_by_pair": volume_by_pair,
         "days": days
     }
