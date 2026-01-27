@@ -181,7 +181,9 @@ def list_clients(db: Session = Depends(get_db)):
             "updated_at": client.updated_at.isoformat() if client.updated_at else None
         })
     
-    return result  # Frontend expects array, not {"clients": [...]}
+    # Return format compatible with both frontend (array) and Pipe Labs backend (object)
+    # Frontend code does: (data || []) which works with both formats
+    return {"clients": result}
 
 
 @router.get("/{client_id}", response_model=ClientResponse)
