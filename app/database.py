@@ -205,15 +205,55 @@ def init_db():
         raise RuntimeError("Database engine not available. Check DATABASE_URL configuration.")
     
     try:
+        from sqlalchemy import inspect, text
+        
+        # Check if tables exist and have wrong types
+        inspector = inspect(engine)
+        existing_tables = inspector.get_table_names()
+        
+        # If clients table exists, check its ID column type
+        if 'clients' in existing_tables:
+            logger.info("Checking existing tables for type mismatches...")
+            with engine.connect() as conn:
+                result = conn.execute(text("""
+                    SELECT data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'clients' AND column_name = 'id'
+                """))
+                row = result.fetchone()
+                if row and row[0] == 'uuid':
+                    logger.warning("⚠️  Found 'clients' table with UUID type - dropping to recreate with VARCHAR")
+                    logger.info("Dropping existing tables to fix type mismatches...")
+                    # Drop tables in reverse dependency order
+                    Base.metadata.drop_all(bind=engine, tables=[
+                        Base.metadata.tables['bots'],
+                        Base.metadata.tables['connectors'],
+                        Base.metadata.tables['wallets'],
+                        Base.metadata.tables['clients']
+                    ])
+                    logger.info("✅ Dropped existing tables")
+        
         logger.info("Creating database tables if they don't exist...")
         Base.metadata.create_all(bind=engine)
         logger.info("✅ Database tables created/verified successfully")
         
-        # Verify tables exist by checking one
-        from sqlalchemy import inspect
+        # Verify tables exist
         inspector = inspect(engine)
         tables = inspector.get_table_names()
         logger.info(f"Database tables found: {', '.join(tables)}")
+        
+        # Verify column types match
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name IN ('clients', 'wallets', 'connectors', 'bots')
+                AND column_name IN ('id', 'client_id')
+                ORDER BY table_name, column_name
+            """))
+            logger.info("Column types:")
+            for row in result:
+                logger.info(f"  {row[0]} ({row[1]})")
         
         if 'clients' not in tables or 'bots' not in tables:
             logger.warning(f"Expected tables missing. Found: {tables}")
