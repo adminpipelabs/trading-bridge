@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from app.jupiter_routes import router as jupiter_router
 
 from app.core.config import settings
-from app.api import accounts, connectors, market, orders, portfolio
+from app.api import accounts, connectors, market, orders, portfolio, client_data
 from app.bot_routes import router as bot_router
 from app.clients_routes import router as client_router
 from app.auth_routes import router as auth_router
@@ -120,6 +120,7 @@ app.include_router(connectors.router, tags=["Connectors"])
 app.include_router(market.router, tags=["Market"])
 app.include_router(orders.router, tags=["Orders"])
 app.include_router(portfolio.router, tags=["Portfolio"])
+app.include_router(client_data.router, tags=["Client Data"])
 app.include_router(jupiter_router)
 app.include_router(bot_router, tags=["Bots"])
 app.include_router(client_router, tags=["Clients"])
