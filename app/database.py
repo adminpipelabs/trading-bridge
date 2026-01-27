@@ -215,6 +215,7 @@ def init_db():
         # Step 2: Check for type mismatches and drop if needed
         if 'clients' in existing_tables:
             logger.info("Checking 'clients' table for type mismatches...")
+            needs_drop = False
             try:
                 with engine.connect() as conn:
                     result = conn.execute(text("""
@@ -224,22 +225,33 @@ def init_db():
                     """))
                     row = result.fetchone()
                     if row and row[0] == 'uuid':
-                        logger.warning("⚠️  Found UUID type mismatch - dropping all tables to recreate")
-                        # Drop all tables (ignore errors if some don't exist)
-                        try:
-                            Base.metadata.drop_all(bind=engine)
-                            logger.info("✅ Dropped all existing tables")
-                        except Exception as drop_error:
-                            logger.warning(f"Some tables may not have existed: {drop_error}")
-                            # Continue anyway - create_all will handle it
+                        logger.warning("⚠️  Found UUID type mismatch - MUST drop all tables")
+                        needs_drop = True
             except Exception as check_error:
                 logger.warning(f"Could not check table types: {check_error}")
-                # Continue - try to drop and recreate anyway
+                # If we can't check, drop anyway to be safe
+                needs_drop = True
+            
+            if needs_drop:
+                logger.warning("Dropping ALL tables to fix type mismatch...")
                 try:
-                    Base.metadata.drop_all(bind=engine)
-                    logger.info("✅ Dropped all tables (precautionary)")
-                except Exception:
-                    pass  # Ignore drop errors
+                    # Drop in correct order to avoid foreign key errors
+                    with engine.begin() as conn:
+                        # Drop tables with foreign keys first
+                        conn.execute(text("DROP TABLE IF EXISTS bots CASCADE"))
+                        conn.execute(text("DROP TABLE IF EXISTS connectors CASCADE"))
+                        conn.execute(text("DROP TABLE IF EXISTS wallets CASCADE"))
+                        conn.execute(text("DROP TABLE IF EXISTS clients CASCADE"))
+                    logger.info("✅ Dropped all existing tables")
+                except Exception as drop_error:
+                    logger.error(f"Failed to drop tables: {drop_error}")
+                    # Try using SQLAlchemy drop_all as fallback
+                    try:
+                        Base.metadata.drop_all(bind=engine)
+                        logger.info("✅ Dropped tables using SQLAlchemy")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback drop also failed: {fallback_error}")
+                        raise RuntimeError(f"Cannot drop existing tables with wrong types: {drop_error}")
         
         # Step 3: CREATE ALL TABLES (this is idempotent - won't fail if tables exist)
         logger.info("Creating database tables...")
