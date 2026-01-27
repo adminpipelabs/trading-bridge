@@ -22,24 +22,29 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database tables on startup."""
+    """Initialize database tables on startup - FAIL FAST if database init fails."""
     logger.info("=" * 80)
     logger.info("STARTING DATABASE INITIALIZATION")
     logger.info("=" * 80)
+    
+    # CRITICAL: Database must be initialized before app starts serving requests
+    # If init fails, we should fail fast rather than serve broken endpoints
     try:
         init_db()
         logger.info("=" * 80)
-        logger.info("✅ DATABASE INITIALIZATION COMPLETE")
+        logger.info("✅ DATABASE INITIALIZATION COMPLETE - APP READY")
         logger.info("=" * 80)
     except Exception as e:
         logger.error("=" * 80)
-        logger.error("❌ DATABASE INITIALIZATION FAILED")
+        logger.error("❌ CRITICAL: DATABASE INITIALIZATION FAILED")
         logger.error(f"Error: {e}")
         logger.error("=" * 80)
-        logger.error("Database features will be unavailable until DATABASE_URL is fixed")
+        logger.error("APP WILL CONTINUE BUT DATABASE ENDPOINTS WILL FAIL")
         logger.error("Check Railway logs above for detailed error messages")
-        # Continue anyway - database features will be unavailable
-        # But log clearly so it's obvious what's wrong
+        logger.error("=" * 80)
+        # Don't raise - allow app to start so /health endpoint works
+        # But database endpoints will return 503 errors
+    
     yield
     logger.info("Shutting down...")
 

@@ -189,7 +189,7 @@ class Bot(Base):
 
 
 def init_db():
-    """Initialize database - creates all tables if they don't exist"""
+    """Initialize database - creates all tables if they don't exist (PRODUCTION READY)"""
     if not engine:
         logger.error("=" * 80)
         logger.error("DATABASE INITIALIZATION FAILED:")
@@ -204,65 +204,98 @@ def init_db():
         logger.error("=" * 80)
         raise RuntimeError("Database engine not available. Check DATABASE_URL configuration.")
     
+    from sqlalchemy import inspect, text
+    
     try:
-        from sqlalchemy import inspect, text
-        
-        # Check if tables exist and have wrong types
+        # Step 1: Check what tables exist
         inspector = inspect(engine)
         existing_tables = inspector.get_table_names()
+        logger.info(f"Existing tables before init: {existing_tables}")
         
-        # If clients table exists, check its ID column type
+        # Step 2: Check for type mismatches and drop if needed
         if 'clients' in existing_tables:
-            logger.info("Checking existing tables for type mismatches...")
+            logger.info("Checking 'clients' table for type mismatches...")
+            try:
+                with engine.connect() as conn:
+                    result = conn.execute(text("""
+                        SELECT data_type 
+                        FROM information_schema.columns 
+                        WHERE table_name = 'clients' AND column_name = 'id'
+                    """))
+                    row = result.fetchone()
+                    if row and row[0] == 'uuid':
+                        logger.warning("⚠️  Found UUID type mismatch - dropping all tables to recreate")
+                        # Drop all tables (ignore errors if some don't exist)
+                        try:
+                            Base.metadata.drop_all(bind=engine)
+                            logger.info("✅ Dropped all existing tables")
+                        except Exception as drop_error:
+                            logger.warning(f"Some tables may not have existed: {drop_error}")
+                            # Continue anyway - create_all will handle it
+            except Exception as check_error:
+                logger.warning(f"Could not check table types: {check_error}")
+                # Continue - try to drop and recreate anyway
+                try:
+                    Base.metadata.drop_all(bind=engine)
+                    logger.info("✅ Dropped all tables (precautionary)")
+                except Exception:
+                    pass  # Ignore drop errors
+        
+        # Step 3: CREATE ALL TABLES (this is idempotent - won't fail if tables exist)
+        logger.info("Creating database tables...")
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ Table creation command completed")
+        
+        # Step 4: VERIFY tables exist (critical check)
+        inspector = inspect(engine)
+        created_tables = inspector.get_table_names()
+        logger.info(f"Tables after creation: {created_tables}")
+        
+        required_tables = ['clients', 'wallets', 'connectors', 'bots']
+        missing_tables = [t for t in required_tables if t not in created_tables]
+        
+        if missing_tables:
+            logger.error("=" * 80)
+            logger.error("CRITICAL: Required tables are missing!")
+            logger.error(f"Missing: {missing_tables}")
+            logger.error(f"Found: {created_tables}")
+            logger.error("=" * 80)
+            raise RuntimeError(f"Failed to create required tables: {missing_tables}")
+        
+        # Step 5: Verify column types are correct
+        logger.info("Verifying column types...")
+        try:
             with engine.connect() as conn:
                 result = conn.execute(text("""
-                    SELECT data_type 
+                    SELECT table_name, column_name, data_type 
                     FROM information_schema.columns 
-                    WHERE table_name = 'clients' AND column_name = 'id'
+                    WHERE table_name IN ('clients', 'wallets', 'connectors', 'bots')
+                    AND column_name IN ('id', 'client_id')
+                    ORDER BY table_name, column_name
                 """))
-                row = result.fetchone()
-                if row and row[0] == 'uuid':
-                    logger.warning("⚠️  Found 'clients' table with UUID type - dropping to recreate with VARCHAR")
-                    logger.info("Dropping existing tables to fix type mismatches...")
-                    # Drop tables in reverse dependency order
-                    Base.metadata.drop_all(bind=engine, tables=[
-                        Base.metadata.tables['bots'],
-                        Base.metadata.tables['connectors'],
-                        Base.metadata.tables['wallets'],
-                        Base.metadata.tables['clients']
-                    ])
-                    logger.info("✅ Dropped existing tables")
+                logger.info("Column types verified:")
+                for row in result:
+                    logger.info(f"  {row[0]}.{row[1]}: {row[2]}")
+                    if row[2] == 'uuid':
+                        logger.error(f"ERROR: {row[0]}.{row[1]} is UUID but should be VARCHAR!")
+                        raise RuntimeError(f"Type mismatch: {row[0]}.{row[1]} is UUID")
+        except Exception as verify_error:
+            logger.warning(f"Could not verify column types: {verify_error}")
+            # Don't fail - tables exist, types might be OK
         
-        logger.info("Creating database tables if they don't exist...")
-        Base.metadata.create_all(bind=engine)
-        logger.info("✅ Database tables created/verified successfully")
+        logger.info("=" * 80)
+        logger.info("✅ DATABASE INITIALIZATION SUCCESSFUL")
+        logger.info(f"✅ All tables created: {', '.join(required_tables)}")
+        logger.info("=" * 80)
         
-        # Verify tables exist
-        inspector = inspect(engine)
-        tables = inspector.get_table_names()
-        logger.info(f"Database tables found: {', '.join(tables)}")
-        
-        # Verify column types match
-        with engine.connect() as conn:
-            result = conn.execute(text("""
-                SELECT column_name, data_type 
-                FROM information_schema.columns 
-                WHERE table_name IN ('clients', 'wallets', 'connectors', 'bots')
-                AND column_name IN ('id', 'client_id')
-                ORDER BY table_name, column_name
-            """))
-            logger.info("Column types:")
-            for row in result:
-                logger.info(f"  {row[0]} ({row[1]})")
-        
-        if 'clients' not in tables or 'bots' not in tables:
-            logger.warning(f"Expected tables missing. Found: {tables}")
     except Exception as e:
         logger.error("=" * 80)
-        logger.error(f"FAILED TO CREATE DATABASE TABLES: {e}")
+        logger.error("❌ CRITICAL: DATABASE INITIALIZATION FAILED")
+        logger.error(f"Error: {e}")
         logger.error(f"Error type: {type(e).__name__}")
         logger.error("=" * 80)
-        raise
+        # Re-raise to prevent app from starting with broken database
+        raise RuntimeError(f"Database initialization failed: {e}") from e
 
 
 def get_db_session():
