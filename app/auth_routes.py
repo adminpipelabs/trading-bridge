@@ -11,7 +11,7 @@ import os
 import httpx
 import logging
 
-from app.database import get_db, Client
+from app.database import get_db, Client, Wallet
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
@@ -77,47 +77,24 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
     wallet_address = Web3.to_checksum_address(request.wallet_address)
     wallet_lower = wallet_address.lower()
     
-    # Check if Client exists in local database
-    client = db.query(Client).filter(Client.wallet_address == wallet_lower).first()
+    # Check if Wallet exists (links to Client)
+    wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+    
+    if not wallet:
+        # Wallet not found - reject login
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Wallet address {wallet_address} is not registered. Please contact your admin to create your account."
+        )
+    
+    # Get the Client associated with this wallet
+    client = db.query(Client).filter(Client.id == wallet.client_id).first()
     
     if not client:
-        # Client doesn't exist locally - check trading-bridge for wallet
-        # This handles the case where client exists in trading-bridge but not in local DB
-        TRADING_BRIDGE_URL = os.getenv("TRADING_BRIDGE_URL", "https://trading-bridge-production.up.railway.app")
-        try:
-            with httpx.Client(timeout=5.0) as http_client:
-                tb_response = http_client.get(
-                    f"{TRADING_BRIDGE_URL}/clients/by-wallet/{wallet_lower}",
-                    headers={"Content-Type": "application/json"}
-                )
-                
-                if tb_response.status_code == 200:
-                    tb_client = tb_response.json()
-                    # Auto-create Client from trading-bridge data
-                    client = Client(
-                        name=tb_client.get("name", "Client"),
-                        wallet_address=wallet_lower,
-                        status="active",
-                        tier="Standard"
-                    )
-                    db.add(client)
-                    db.commit()
-                    db.refresh(client)
-                    logger.info(f"✅ Auto-created Client from trading-bridge: {client.name}")
-                else:
-                    # Wallet not found in trading-bridge - reject login
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail=f"Wallet address {wallet_address} is not registered. Please contact your admin to create your account."
-                    )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to check trading-bridge for wallet: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Wallet address {wallet_address} is not registered. Please contact your admin to create your account."
-            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Client record not found for registered wallet"
+        )
     
     # Create a simple access token (in production, use JWT)
     # For now, return a token based on wallet address
