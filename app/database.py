@@ -17,14 +17,22 @@ Base = declarative_base()
 # Also check for Railway service reference format: ${{Postgres.DATABASE_URL}}
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:
-    # Remove Railway reference wrapper if present
-    DATABASE_URL = DATABASE_URL.strip().strip("${{}}").strip()
-    # Convert postgres:// to postgresql+psycopg2:// (explicit sync driver)
-    if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-    elif DATABASE_URL.startswith("postgresql://") and "+psycopg2" not in DATABASE_URL:
-        # Ensure we use psycopg2 (sync driver) not asyncpg
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    # Remove Railway reference wrapper if present (but preserve the actual URL)
+    DATABASE_URL = DATABASE_URL.strip()
+    # Handle Railway reference format: ${{Postgres.DATABASE_URL}}
+    if DATABASE_URL.startswith("${{") and DATABASE_URL.endswith("}}"):
+        # This is a Railway reference - it should be resolved by Railway, but if not, log warning
+        logger.warning(f"Railway reference format detected: {DATABASE_URL[:50]}...")
+        # Don't strip the ${{}} - Railway should resolve it
+    else:
+        # Regular URL - ensure sync driver
+        # Convert postgres:// to postgresql+psycopg2:// (explicit sync driver)
+        if DATABASE_URL.startswith("postgres://"):
+            DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
+        elif DATABASE_URL.startswith("postgresql://"):
+            # Only add +psycopg2 if not already present and not asyncpg
+            if "+psycopg2" not in DATABASE_URL and "+asyncpg" not in DATABASE_URL:
+                DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
 # Create engine with connection pooling
 engine = None
