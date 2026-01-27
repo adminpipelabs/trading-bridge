@@ -60,10 +60,11 @@ if DATABASE_URL:
             logger.error(f"DATABASE_URL contains placeholder 'host' - URL: {DATABASE_URL.split('@')[0]}@...")
             logger.error("")
             logger.error("TO FIX:")
-            logger.error("1. Railway Dashboard → PostgreSQL service → Connect tab")
-            logger.error("2. Copy the DATABASE_URL value")
+            logger.error("1. Railway Dashboard → PostgreSQL service → Variables tab")
+            logger.error("2. Click on DATABASE_URL and copy the value")
             logger.error("3. Railway Dashboard → trading-bridge → Variables")
-            logger.error("4. Update DATABASE_URL with the correct URL from PostgreSQL")
+            logger.error("4. Update DATABASE_URL with: postgresql://postgres:PASSWORD@postgres.railway.internal:5432/railway")
+            logger.error("   (Replace PASSWORD with actual password from PostgreSQL)")
             logger.error("=" * 80)
             # Don't raise - allow app to start, endpoints will return proper errors
             DATABASE_URL = ""  # Set to empty to prevent connection attempts
