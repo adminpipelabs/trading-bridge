@@ -14,16 +14,15 @@ logger = logging.getLogger(__name__)
 Base = declarative_base()
 
 # Handle Railway's postgres:// vs postgresql:// URL format
-# Also check for Railway service reference format: ${{Postgres.DATABASE_URL}}
+# Railway resolves ${{Postgres.DATABASE_URL}} before our code sees it
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if DATABASE_URL:
-    # Remove Railway reference wrapper if present (but preserve the actual URL)
     DATABASE_URL = DATABASE_URL.strip()
-    # Handle Railway reference format: ${{Postgres.DATABASE_URL}}
+    
+    # Check if Railway reference wasn't resolved (shouldn't happen, but handle it)
     if DATABASE_URL.startswith("${{") and DATABASE_URL.endswith("}}"):
-        # This is a Railway reference - it should be resolved by Railway, but if not, log warning
-        logger.warning(f"Railway reference format detected: {DATABASE_URL[:50]}...")
-        # Don't strip the ${{}} - Railway should resolve it
+        logger.error(f"Railway reference not resolved: {DATABASE_URL}. Check Railway configuration.")
+        DATABASE_URL = ""  # Set to empty to prevent connection attempts
     else:
         # Regular URL - ensure sync driver
         # Convert postgres:// to postgresql+psycopg2:// (explicit sync driver)
@@ -33,6 +32,8 @@ if DATABASE_URL:
             # Only add +psycopg2 if not already present and not asyncpg
             if "+psycopg2" not in DATABASE_URL and "+asyncpg" not in DATABASE_URL:
                 DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+        
+        logger.info(f"Using DATABASE_URL format: {DATABASE_URL.split('@')[0]}@...")  # Log without password
 
 # Create engine with connection pooling
 engine = None
