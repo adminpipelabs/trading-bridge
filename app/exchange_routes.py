@@ -41,13 +41,17 @@ async def get_balance(account: str, db: Session = Depends(get_db)):
     
     try:
         balances_raw = await acc.get_balances()
+        logger.info(f"Raw balances from exchange_manager: {balances_raw}")
         
         # Transform to frontend format
         balances = {}
         total_usdt = 0.0
         
         for exchange_name, exchange_balances in balances_raw.items():
-            if isinstance(exchange_balances, dict) and "error" not in exchange_balances:
+            if isinstance(exchange_balances, dict):
+                if "error" in exchange_balances:
+                    logger.error(f"Exchange {exchange_name} returned error: {exchange_balances['error']}")
+                    continue
                 balances[exchange_name] = {}
                 for asset, balance_data in exchange_balances.items():
                     if isinstance(balance_data, dict):
@@ -61,13 +65,14 @@ async def get_balance(account: str, db: Session = Depends(get_db)):
                         if asset == "USDT":
                             total_usdt += total
         
+        logger.info(f"Transformed balances: {balances}, total_usdt: {total_usdt}")
         return {
             "account": account,
             "balances": balances,
             "total_usdt": total_usdt
         }
     except Exception as e:
-        logger.error(f"Failed to get balance for {account}: {e}")
+        logger.error(f"Failed to get balance for {account}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
