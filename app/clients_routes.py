@@ -316,6 +316,32 @@ def add_connector(client_id: str, connector: ConnectorInfo, db: Session = Depend
     }
 
 
+@router.delete("/{client_id}/connector/{connector_id}")
+def delete_connector(client_id: str, connector_id: str, db: Session = Depends(get_db)):
+    """Delete a specific connector from a client."""
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    connector = db.query(Connector).filter(
+        Connector.id == connector_id,
+        Connector.client_id == client_id
+    ).first()
+    
+    if not connector:
+        raise HTTPException(status_code=404, detail="Connector not found")
+    
+    try:
+        db.delete(connector)
+        db.commit()
+        logger.info(f"Deleted connector {connector_id} from client {client_id}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete connector: {str(e)}")
+    
+    return {"status": "deleted", "connector_id": connector_id, "client_id": client_id}
+
+
 @router.delete("/{client_id}")
 def delete_client(client_id: str, db: Session = Depends(get_db)):
     """Delete a client and all associated data (cascade delete)."""
