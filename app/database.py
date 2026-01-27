@@ -53,30 +53,33 @@ if DATABASE_URL:
             elif DATABASE_URL.startswith("postgres://"):
                 DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
         
-        # Check for placeholder hostname
+        # Check for placeholder hostname - log error but don't crash app
         if "@host:" in DATABASE_URL or "@host/" in DATABASE_URL:
+            logger.error("=" * 80)
+            logger.error("DATABASE_URL CONFIGURATION ERROR:")
             logger.error(f"DATABASE_URL contains placeholder 'host' - URL: {DATABASE_URL.split('@')[0]}@...")
-            logger.error("DATABASE_URL must be updated in Railway with real PostgreSQL hostname")
-            logger.error("Go to Railway → PostgreSQL service → Connect tab → Copy DATABASE_URL")
-            logger.error("Then Railway → trading-bridge → Variables → Update DATABASE_URL")
-            raise ValueError(
-                "DATABASE_URL contains placeholder 'host' instead of real PostgreSQL hostname. "
-                "Update DATABASE_URL in Railway Variables with the correct URL from PostgreSQL service."
+            logger.error("")
+            logger.error("TO FIX:")
+            logger.error("1. Railway Dashboard → PostgreSQL service → Connect tab")
+            logger.error("2. Copy the DATABASE_URL value")
+            logger.error("3. Railway Dashboard → trading-bridge → Variables")
+            logger.error("4. Update DATABASE_URL with the correct URL from PostgreSQL")
+            logger.error("=" * 80)
+            # Don't raise - allow app to start, endpoints will return proper errors
+            DATABASE_URL = ""  # Set to empty to prevent connection attempts
+            engine = None
+            SessionLocal = None
+        else:
+            # URL looks valid - try to create engine
+            engine = create_engine(
+                DATABASE_URL,
+                pool_pre_ping=True,  # Verify connections before using
+                pool_size=5,
+                max_overflow=10,
+                connect_args={"connect_timeout": 10}  # Add timeout
             )
-        
-        engine = create_engine(
-            DATABASE_URL,
-            pool_pre_ping=True,  # Verify connections before using
-            pool_size=5,
-            max_overflow=10,
-            connect_args={"connect_timeout": 10}  # Add timeout
-        )
-        SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        logger.info(f"Database engine created successfully with URL: {DATABASE_URL.split('@')[0]}@...")
-    except ValueError as e:
-        # Re-raise ValueError (configuration issue)
-        logger.error(f"Database configuration error: {e}")
-        raise
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            logger.info(f"Database engine created successfully with URL: {DATABASE_URL.split('@')[0]}@...")
     except Exception as e:
         logger.error(f"Failed to create database engine: {e}")
         engine = None
