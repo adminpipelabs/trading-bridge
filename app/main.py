@@ -23,13 +23,23 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database tables on startup."""
-    logger.info("Initializing database...")
+    logger.info("=" * 80)
+    logger.info("STARTING DATABASE INITIALIZATION")
+    logger.info("=" * 80)
     try:
         init_db()
-        logger.info("Database initialized successfully")
+        logger.info("=" * 80)
+        logger.info("✅ DATABASE INITIALIZATION COMPLETE")
+        logger.info("=" * 80)
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
+        logger.error("=" * 80)
+        logger.error("❌ DATABASE INITIALIZATION FAILED")
+        logger.error(f"Error: {e}")
+        logger.error("=" * 80)
+        logger.error("Database features will be unavailable until DATABASE_URL is fixed")
+        logger.error("Check Railway logs above for detailed error messages")
         # Continue anyway - database features will be unavailable
+        # But log clearly so it's obvious what's wrong
     yield
     logger.info("Shutting down...")
 

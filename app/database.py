@@ -191,14 +191,37 @@ class Bot(Base):
 def init_db():
     """Initialize database - creates all tables if they don't exist"""
     if not engine:
-        logger.warning("Database engine not available - skipping table creation")
-        return
+        logger.error("=" * 80)
+        logger.error("DATABASE INITIALIZATION FAILED:")
+        logger.error("Database engine is None - cannot create tables")
+        logger.error("")
+        logger.error("Possible causes:")
+        logger.error("1. DATABASE_URL not set or invalid")
+        logger.error("2. DATABASE_URL contains placeholder 'host'")
+        logger.error("3. Database connection failed during engine creation")
+        logger.error("")
+        logger.error("Check Railway logs for engine creation errors above")
+        logger.error("=" * 80)
+        raise RuntimeError("Database engine not available. Check DATABASE_URL configuration.")
     
     try:
+        logger.info("Creating database tables if they don't exist...")
         Base.metadata.create_all(bind=engine)
-        logger.info("Database tables created/verified successfully")
+        logger.info("✅ Database tables created/verified successfully")
+        
+        # Verify tables exist by checking one
+        from sqlalchemy import inspect
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        logger.info(f"Database tables found: {', '.join(tables)}")
+        
+        if 'clients' not in tables or 'bots' not in tables:
+            logger.warning(f"Expected tables missing. Found: {tables}")
     except Exception as e:
-        logger.error(f"Failed to create database tables: {e}")
+        logger.error("=" * 80)
+        logger.error(f"FAILED TO CREATE DATABASE TABLES: {e}")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error("=" * 80)
         raise
 
 
