@@ -41,13 +41,28 @@ SessionLocal = None
 
 if DATABASE_URL:
     try:
-        # Force sync driver - ensure psycopg2 is used, not asyncpg
-        if "+psycopg2" not in DATABASE_URL and "+asyncpg" not in DATABASE_URL:
+        # CRITICAL: Replace asyncpg with psycopg2 FIRST (before any other processing)
+        if "+asyncpg" in DATABASE_URL:
+            DATABASE_URL = DATABASE_URL.replace("+asyncpg", "+psycopg2")
+            logger.info("Replaced +asyncpg with +psycopg2 in DATABASE_URL")
+        
+        # Ensure psycopg2 driver is used
+        if "+psycopg2" not in DATABASE_URL:
             if DATABASE_URL.startswith("postgresql://"):
                 DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+            elif DATABASE_URL.startswith("postgres://"):
+                DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
         
-        # Remove asyncpg if somehow present
-        DATABASE_URL = DATABASE_URL.replace("+asyncpg", "+psycopg2")
+        # Check for placeholder hostname
+        if "@host:" in DATABASE_URL or "@host/" in DATABASE_URL:
+            logger.error(f"DATABASE_URL contains placeholder 'host' - URL: {DATABASE_URL.split('@')[0]}@...")
+            logger.error("DATABASE_URL must be updated in Railway with real PostgreSQL hostname")
+            logger.error("Go to Railway → PostgreSQL service → Connect tab → Copy DATABASE_URL")
+            logger.error("Then Railway → trading-bridge → Variables → Update DATABASE_URL")
+            raise ValueError(
+                "DATABASE_URL contains placeholder 'host' instead of real PostgreSQL hostname. "
+                "Update DATABASE_URL in Railway Variables with the correct URL from PostgreSQL service."
+            )
         
         engine = create_engine(
             DATABASE_URL,
@@ -57,7 +72,11 @@ if DATABASE_URL:
             connect_args={"connect_timeout": 10}  # Add timeout
         )
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        logger.info(f"Database engine created successfully with URL: {DATABASE_URL[:50]}...")
+        logger.info(f"Database engine created successfully with URL: {DATABASE_URL.split('@')[0]}@...")
+    except ValueError as e:
+        # Re-raise ValueError (configuration issue)
+        logger.error(f"Database configuration error: {e}")
+        raise
     except Exception as e:
         logger.error(f"Failed to create database engine: {e}")
         engine = None
