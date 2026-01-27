@@ -102,13 +102,17 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
     token_data = f"{wallet_address}:{datetime.utcnow().timestamp()}"
     access_token = hashlib.sha256(token_data.encode()).hexdigest()
     
+    # Determine role: admin if account_identifier is 'admin', otherwise use client.role or default to 'client'
+    role = "admin" if client.account_identifier == "admin" else (client.role or "client")
+    
     return VerifyResponse(
         access_token=access_token,
         user={
             "id": str(client.id),
             "wallet_address": client.wallet_address,
             "name": client.name,
-            "role": "client",
+            "role": role,
+            "account_identifier": client.account_identifier,
             "is_active": True
         }
     )
