@@ -21,3 +21,7 @@ solana>=0.30.0
 httpx>=0.24.0
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.0
+
+# Wallet authentication
+eth-account>=0.8.0
+web3>=6.0.0
