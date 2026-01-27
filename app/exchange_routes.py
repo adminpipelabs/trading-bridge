@@ -141,7 +141,7 @@ async def get_pnl(
     Calculate P&L (profit and loss) for an account.
     """
     # Get trades first
-    trades_data = await get_trades(account, limit=1000, db=db)
+    trades_data = await get_trades(account, pair=None, limit=1000, db=db)
     trades = trades_data.get("trades", [])
     
     # Filter by days if needed
@@ -230,7 +230,7 @@ async def get_dashboard(account: str, db: Session = Depends(get_db)):
     try:
         # Get all data in parallel
         balance_data = await get_balance(account, db)
-        trades_data = await get_trades(account, limit=100, db=db)
+        trades_data = await get_trades(account, pair=None, limit=100, db=db)
         pnl_data = await get_pnl(account, days=7, db=db)
         
         # Get bot counts
