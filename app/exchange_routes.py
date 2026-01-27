@@ -97,7 +97,9 @@ async def get_trades(
     
     try:
         # Format pair if provided (SHARP-USDT -> SHARP/USDT for ccxt)
-        formatted_pair = pair.replace("-", "/") if pair else None
+        formatted_pair = None
+        if pair:
+            formatted_pair = str(pair).replace("-", "/")
         trades_raw = await acc.get_trades(trading_pair=formatted_pair, limit=limit)
         
         # Transform to frontend format
