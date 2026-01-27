@@ -137,12 +137,39 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     import os
-    database_status = "postgresql" if os.getenv("DATABASE_URL") else "unavailable"
+    from app.database import engine, SessionLocal
+    database_status = "postgresql" if (os.getenv("DATABASE_URL") and engine and SessionLocal) else "unavailable"
     return {
         "status": "healthy",
         "service": "Trading Bridge",
         "database": database_status
     }
+
+
+@app.post("/init-db")
+def initialize_database():
+    """Manually create database tables - useful for fixing missing tables."""
+    from app.database import Base, engine, init_db
+    try:
+        if not engine:
+            return {
+                "status": "error",
+                "message": "Database engine not available. Check DATABASE_URL configuration."
+            }
+        
+        # Use the robust init_db function
+        init_db()
+        return {
+            "status": "success",
+            "message": "Database tables created/verified successfully"
+        }
+    except Exception as e:
+        logger.error(f"Manual database initialization failed: {e}")
+        return {
+            "status": "error",
+            "message": str(e),
+            "error_type": type(e).__name__
+        }
 
 
 @app.get("/debug/env")
