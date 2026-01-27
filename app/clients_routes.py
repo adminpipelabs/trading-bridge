@@ -141,25 +141,47 @@ def create_client(request: CreateClientRequest, db: Session = Depends(get_db)):
 
 @router.get("", response_model=dict)
 def list_clients(db: Session = Depends(get_db)):
-    """List all clients."""
+    """List all clients - returns frontend-compatible format."""
     # Eagerly load relationships to avoid lazy loading issues
     clients = db.query(Client).options(
         joinedload(Client.wallets),
         joinedload(Client.connectors)
     ).all()
+    
     result = []
     for client in clients:
+        # Get primary wallet address (from wallets relationship or legacy field)
+        primary_wallet = client.wallet_address
+        primary_wallet_type = client.wallet_type
+        if not primary_wallet and client.wallets:
+            primary_wallet = client.wallets[0].address
+            primary_wallet_type = client.wallets[0].chain.upper()
+        
         wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
-        connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
+        connectors = [{"id": c.id, "name": c.name, "api_key": c.api_key, "api_secret": c.api_secret, "memo": c.memo} for c in client.connectors]
+        
+        # Frontend-compatible response
         result.append({
             "id": client.id,
             "name": client.name,
             "account_identifier": client.account_identifier,
+            # Frontend-expected fields
+            "wallet_address": primary_wallet,
+            "wallet_type": primary_wallet_type or "EVM",
+            "email": client.email,
+            "password_hash": client.password_hash,  # Usually not returned, but field exists
+            "status": client.status or "active",
+            "tier": client.tier,
+            "role": client.role or "client",
+            "settings": client.settings or {},
+            # New schema fields
             "wallets": wallets,
             "connectors": connectors,
-            "created_at": client.created_at.isoformat()
+            "created_at": client.created_at.isoformat() if client.created_at else None,
+            "updated_at": client.updated_at.isoformat() if client.updated_at else None
         })
-    return {"clients": result}
+    
+    return result  # Frontend expects array, not {"clients": [...]}
 
 
 @router.get("/{client_id}", response_model=ClientResponse)

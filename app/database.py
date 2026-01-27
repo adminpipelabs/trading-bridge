@@ -93,13 +93,26 @@ class Client(Base):
     """Client model - stores client information and account identifier"""
     __tablename__ = "clients"
     
+    # Primary fields
     id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     account_identifier = Column(String, unique=True, nullable=False, index=True)
+    
+    # Frontend-compatible fields (legacy support)
+    wallet_address = Column(String, nullable=True, index=True)  # Legacy: single wallet address
+    wallet_type = Column(String, nullable=True)  # 'EVM' or 'Solana'
+    email = Column(String, nullable=True)
+    password_hash = Column(String, nullable=True)  # For authentication
+    status = Column(String, default='active')  # 'active', 'invited', 'inactive'
+    tier = Column(String, nullable=True)  # 'Standard', 'Premium', etc.
+    role = Column(String, default='client')  # 'client', 'admin', etc.
+    settings = Column(JSON, nullable=True, default={})  # JSON field for flexible settings
+    
+    # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
+    # Relationships (new schema - multiple wallets per client)
     wallets = relationship("Wallet", back_populates="client", cascade="all, delete-orphan")
     connectors = relationship("Connector", back_populates="client", cascade="all, delete-orphan")
     bots = relationship("Bot", back_populates="client", cascade="all, delete-orphan")
