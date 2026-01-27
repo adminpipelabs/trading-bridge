@@ -32,14 +32,23 @@ SessionLocal = None
 
 if DATABASE_URL:
     try:
+        # Force sync driver - ensure psycopg2 is used, not asyncpg
+        if "+psycopg2" not in DATABASE_URL and "+asyncpg" not in DATABASE_URL:
+            if DATABASE_URL.startswith("postgresql://"):
+                DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+        
+        # Remove asyncpg if somehow present
+        DATABASE_URL = DATABASE_URL.replace("+asyncpg", "+psycopg2")
+        
         engine = create_engine(
             DATABASE_URL,
             pool_pre_ping=True,  # Verify connections before using
             pool_size=5,
-            max_overflow=10
+            max_overflow=10,
+            connect_args={"connect_timeout": 10}  # Add timeout
         )
         SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        logger.info("Database engine created successfully")
+        logger.info(f"Database engine created successfully with URL: {DATABASE_URL[:50]}...")
     except Exception as e:
         logger.error(f"Failed to create database engine: {e}")
         engine = None
