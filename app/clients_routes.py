@@ -172,7 +172,7 @@ def list_clients(db: Session = Depends(get_db)):
             "password_hash": client.password_hash,  # Usually not returned, but field exists
             "status": client.status or "active",
             "tier": client.tier,
-            "role": client.role or "client",
+            "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
             "settings": client.settings or {},
             # New schema fields
             "wallets": wallets,
