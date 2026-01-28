@@ -3,7 +3,7 @@ Bot management routes with PostgreSQL persistence.
 Synchronous routes for SQLAlchemy compatibility.
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Header
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 import uuid
 import logging
 
-from app.database import get_db, Bot, Client
+from app.database import get_db, Bot, Client, Wallet
+from app.security import get_current_client
 
 logger = logging.getLogger(__name__)
 
@@ -120,16 +121,57 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
 @router.get("")
 def list_bots(
     account: Optional[str] = Query(None, description="Filter by account identifier"),
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
     db: Session = Depends(get_db)
 ):
-    """List all bots, optionally filtered by account."""
+    """
+    List bots with authentication and authorization.
+    - Requires authentication (X-Wallet-Address header)
+    - Admin users can see all bots
+    - Client users can only see their own bots
+    - If account parameter is provided, verifies user has access to that account
+    """
+    # Require authentication
+    if not wallet_address:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required. Please provide X-Wallet-Address header."
+        )
+    
+    # Get current client
+    wallet_lower = wallet_address.lower()
+    wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+    
+    if not wallet:
+        raise HTTPException(
+            status_code=403,
+            detail="Wallet address not registered"
+        )
+    
+    current_client = wallet.client
+    
+    # Build query
     query = db.query(Bot)
-
+    
+    # Authorization logic
+    is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+    
     if account:
+        # Account parameter provided - verify access
+        if not is_admin and account != current_client.account_identifier:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied. You can only access your own account ({current_client.account_identifier})"
+            )
         query = query.filter(Bot.account == account)
-
+    else:
+        # No account parameter - return user's own bots (or all if admin)
+        if not is_admin:
+            query = query.filter(Bot.account == current_client.account_identifier)
+        # Admin can see all bots (no filter)
+    
     bots = query.all()
-
+    
     return {"bots": [bot.to_dict() for bot in bots]}
 
 
