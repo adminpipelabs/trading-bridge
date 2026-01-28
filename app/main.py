@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.jupiter_routes import router as jupiter_router
 
+from app.solana_routes import router as solana_router
 from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio, client_data
 from app.bot_routes import router as bot_router
@@ -124,6 +125,7 @@ app.include_router(portfolio.router, tags=["Portfolio"])
 app.include_router(client_data.router, tags=["Client Data"])
 app.include_router(exchange_router, tags=["Exchange Data"])
 app.include_router(jupiter_router)
+app.include_router(solana_router, tags=["Solana"])
 app.include_router(bot_router, tags=["Bots"])
 app.include_router(client_router, tags=["Clients"])
 app.include_router(auth_router)
