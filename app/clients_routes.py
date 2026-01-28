@@ -214,14 +214,13 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
     """
     wallet_lower = wallet_address.lower()
     
-  return {
-        "client_id": client.id,
-        "account_identifier": client.account_identifier,
-        "name": client.name,
-        "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
-        "wallets": wallets,
-        "connectors": connectors
-    }
+    wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+    if not wallet:
+        raise HTTPException(
+            status_code=404,
+            detail="No client found for this wallet address"
+        )
+    
     client = wallet.client
     wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
     connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
@@ -230,6 +229,7 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
         "client_id": client.id,
         "account_identifier": client.account_identifier,
         "name": client.name,
+        "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
         "wallets": wallets,
         "connectors": connectors
     }
