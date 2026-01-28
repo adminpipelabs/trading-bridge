@@ -4,6 +4,7 @@ Supports swaps (volume generation) and limit orders (market making)
 """
 
 import httpx
+import os
 import base64
 import base58
 from typing import Optional, Dict, Any, List
@@ -62,7 +63,9 @@ class JupiterClient:
     
     def __init__(self, rpc_url: str = "https://api.mainnet-beta.solana.com"):
         self.rpc_url = rpc_url
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.api_key = os.getenv("JUPITER_API_KEY", "")
+        headers = {"x-api-key": self.api_key} if self.api_key else {}
+        self.client = httpx.AsyncClient(timeout=30.0, headers=headers)
     
     async def close(self):
         await self.client.aclose()
