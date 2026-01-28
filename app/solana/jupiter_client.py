@@ -52,8 +52,8 @@ class JupiterClient:
     """Client for Jupiter DEX Aggregator API"""
     
     # API endpoints
-    QUOTE_API = "https://api.jup.ag/swap/v1"
-    SWAP_API = "https://api.jup.ag/swap/v1"
+    QUOTE_API = "https://public.jupiterapi.com"
+    SWAP_API = "https://public.jupiterapi.com"
     LIMIT_ORDER_API = "https://api.jup.ag/limit/v2"
     PRICE_API = "https://api.jup.ag/price/v2"
     
