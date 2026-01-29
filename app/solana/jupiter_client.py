@@ -192,10 +192,18 @@ class JupiterClient:
         """
         # Validate and normalize wallet address (must be base58 Solana address)
         import base58
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
             # Try to decode to validate it's a valid base58 address
             decoded = base58.b58decode(user_public_key)
-            if len(decoded) != 32:
+            # Solana addresses can be 32 bytes (standard) or 33 bytes (with version byte)
+            # Accept both but normalize to 32 bytes if it's 33
+            if len(decoded) == 33:
+                # Remove version byte (first byte) if present
+                decoded = decoded[1:]
+            elif len(decoded) != 32:
                 raise ValueError(f"Invalid Solana address length: {len(decoded)}, expected 32 bytes")
             # Re-encode to ensure proper format
             normalized_address = base58.b58encode(decoded).decode('utf-8')
