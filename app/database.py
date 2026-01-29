@@ -3,7 +3,7 @@ Database models and connection for Trading Bridge.
 PostgreSQL persistence for clients, wallets, connectors, and bots.
 """
 import os
-from sqlalchemy import create_engine, Column, String, ForeignKey, JSON, DateTime, Index
+from sqlalchemy import create_engine, Column, String, ForeignKey, JSON, DateTime, Index, Numeric, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -160,29 +160,41 @@ class Bot(Base):
     id = Column(String, primary_key=True)
     client_id = Column(String, ForeignKey("clients.id", ondelete="CASCADE"), nullable=False)
     account = Column(String, nullable=False, index=True)  # Matches client.account_identifier
-    instance_name = Column(String, unique=True, nullable=False)  # Used by Hummingbot
+    instance_name = Column(String, unique=True, nullable=True)  # Used by Hummingbot (nullable for Solana bots)
     name = Column(String, nullable=False)
-    connector = Column(String, nullable=False)
-    pair = Column(String, nullable=False)
-    strategy = Column(String, nullable=False)
+    connector = Column(String, nullable=True)  # Nullable for Solana bots (jupiter is implicit)
+    pair = Column(String, nullable=True)  # Nullable for Solana bots (uses config.base_mint/quote_mint)
+    strategy = Column(String, nullable=True)  # Nullable for Solana bots (uses bot_type instead)
+    bot_type = Column(String, nullable=True)  # 'volume', 'spread', or None (for Hummingbot bots)
     status = Column(String, default="stopped")  # 'running', 'stopped', 'error'
-    config = Column(JSON, nullable=False, default={})
+    config = Column(JSON, nullable=False, default={})  # Bot configuration (chain-specific)
+    stats = Column(JSON, nullable=True, default={})  # Bot statistics (volume_today, trades_today, etc.)
     error = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationship
+    # Relationships
     client = relationship("Client", back_populates="bots")
+    wallets = relationship("BotWallet", back_populates="bot", cascade="all, delete-orphan")
+    trades = relationship("BotTrade", back_populates="bot", cascade="all, delete-orphan")
     
     # Indexes for common queries
     __table_args__ = (
         Index('idx_bots_account', 'account'),
         Index('idx_bots_status', 'status'),
+        Index('idx_bots_type', 'bot_type'),
     )
     
     def to_dict(self):
         """Convert bot to dictionary for API responses"""
-        chain = "solana" if "jupiter" in self.connector.lower() else "evm"
+        # Determine chain: Solana if bot_type is set, otherwise check connector
+        if self.bot_type:
+            chain = "solana"
+        elif self.connector and "jupiter" in self.connector.lower():
+            chain = "solana"
+        else:
+            chain = "evm"
+        
         return {
             "id": self.id,
             "client_id": self.client_id,
@@ -192,13 +204,64 @@ class Bot(Base):
             "connector": self.connector,
             "pair": self.pair,
             "strategy": self.strategy,
+            "bot_type": self.bot_type,  # 'volume', 'spread', or None
             "status": self.status or "stopped",
             "config": self.config or {},
+            "stats": self.stats or {},
             "error": self.error,
             "chain": chain,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class BotWallet(Base):
+    """Bot wallet model - stores encrypted private keys for Solana bots"""
+    __tablename__ = "bot_wallets"
+    
+    id = Column(String, primary_key=True)
+    bot_id = Column(String, ForeignKey("bots.id", ondelete="CASCADE"), nullable=False)
+    wallet_address = Column(String, nullable=False, index=True)  # Public key
+    encrypted_private_key = Column(Text, nullable=False)  # Fernet encrypted private key
+    balance_sol = Column(Numeric(20, 9), nullable=True)
+    balance_token = Column(Numeric(20, 9), nullable=True)
+    last_balance_check = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    bot = relationship("Bot", back_populates="wallets")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_bot_wallets_bot', 'bot_id'),
+        Index('idx_bot_wallets_address', 'wallet_address'),
+    )
+
+
+class BotTrade(Base):
+    """Bot trade model - stores trade history for bots"""
+    __tablename__ = "bot_trades"
+    
+    id = Column(String, primary_key=True)
+    bot_id = Column(String, ForeignKey("bots.id", ondelete="CASCADE"), nullable=False)
+    wallet_address = Column(String, nullable=True)
+    side = Column(String, nullable=True)  # 'buy' or 'sell'
+    amount = Column(Numeric(20, 9), nullable=True)
+    price = Column(Numeric(20, 9), nullable=True)
+    value_usd = Column(Numeric(20, 2), nullable=True)
+    gas_cost = Column(Numeric(20, 9), nullable=True)
+    tx_signature = Column(String, nullable=True)
+    status = Column(String, nullable=True)  # 'success', 'failed', 'pending'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationship
+    bot = relationship("Bot", back_populates="trades")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_bot_trades_bot', 'bot_id'),
+        Index('idx_bot_trades_created', 'created_at'),
+    )
 
 
 def init_db():
@@ -285,6 +348,26 @@ def init_db():
                     ALTER TABLE clients ADD COLUMN IF NOT EXISTS tier VARCHAR(20);
                     ALTER TABLE clients ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'client';
                     ALTER TABLE clients ADD COLUMN IF NOT EXISTS settings JSONB DEFAULT '{}';
+                    
+                    -- Add Solana bot columns to bots table
+                    ALTER TABLE bots ADD COLUMN IF NOT EXISTS bot_type VARCHAR(20);
+                    ALTER TABLE bots ADD COLUMN IF NOT EXISTS stats JSONB DEFAULT '{}';
+                    -- Make columns nullable for Solana bots (if not already nullable)
+                    DO $$
+                    BEGIN
+                        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bots' AND column_name='instance_name' AND is_nullable='NO') THEN
+                            ALTER TABLE bots ALTER COLUMN instance_name DROP NOT NULL;
+                        END IF;
+                        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bots' AND column_name='connector' AND is_nullable='NO') THEN
+                            ALTER TABLE bots ALTER COLUMN connector DROP NOT NULL;
+                        END IF;
+                        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bots' AND column_name='pair' AND is_nullable='NO') THEN
+                            ALTER TABLE bots ALTER COLUMN pair DROP NOT NULL;
+                        END IF;
+                        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='bots' AND column_name='strategy' AND is_nullable='NO') THEN
+                            ALTER TABLE bots ALTER COLUMN strategy DROP NOT NULL;
+                        END IF;
+                    END $$;
                 """))
                 conn.commit()
             logger.info("✅ Frontend-compatible columns verified/added")
@@ -297,7 +380,7 @@ def init_db():
         created_tables = inspector.get_table_names()
         logger.info(f"Tables after creation: {created_tables}")
         
-        required_tables = ['clients', 'wallets', 'connectors', 'bots']
+        required_tables = ['clients', 'wallets', 'connectors', 'bots', 'bot_wallets', 'bot_trades']
         missing_tables = [t for t in required_tables if t not in created_tables]
         
         if missing_tables:
