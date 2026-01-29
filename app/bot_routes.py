@@ -213,30 +213,51 @@ def list_bots(
     # Get wallet_address from header (use parameter or request header)
     wallet_address = wallet_address or request.headers.get("X-Wallet-Address")
     
+    logger.info(f"🔍 list_bots called with wallet_address: {wallet_address[:8] if wallet_address else 'None'}...")
+    
     # If wallet_address provided, get client and check if admin
     if wallet_address:
-        # Try to find wallet (handle case sensitivity for Solana)
-        wallet = None
-        
-        # Try original case first (for Solana addresses - case sensitive)
-        wallet = db.query(Wallet).filter(Wallet.address == wallet_address).first()
-        
-        # Try lowercase if not found (for EVM addresses and case-insensitive lookups)
-        if not wallet:
-            wallet_lower = wallet_address.lower()
-            wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
-        
-        # Also try case-insensitive match (some wallets might be stored in different case)
-        if not wallet:
-            # Use ILIKE for case-insensitive match (PostgreSQL specific)
-            from sqlalchemy import func
-            wallet = db.query(Wallet).filter(
-                func.lower(Wallet.address) == wallet_address.lower()
-            ).first()
-        
-        if wallet:
-            current_client = wallet.client
-            is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+        try:
+            # Try to find wallet (handle case sensitivity for Solana)
+            wallet = None
+            
+            # Try original case first (for Solana addresses - case sensitive)
+            wallet = db.query(Wallet).filter(Wallet.address == wallet_address).first()
+            logger.debug(f"  Original case lookup: {'found' if wallet else 'not found'}")
+            
+            # Try lowercase if not found (for EVM addresses and case-insensitive lookups)
+            if not wallet:
+                wallet_lower = wallet_address.lower()
+                wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+                logger.debug(f"  Lowercase lookup: {'found' if wallet else 'not found'}")
+            
+            # Also try case-insensitive match (some wallets might be stored in different case)
+            if not wallet:
+                # Use ILIKE for case-insensitive match (PostgreSQL specific)
+                from sqlalchemy import func
+                wallet = db.query(Wallet).filter(
+                    func.lower(Wallet.address) == wallet_address.lower()
+                ).first()
+                logger.debug(f"  Case-insensitive lookup: {'found' if wallet else 'not found'}")
+            
+            if wallet:
+                try:
+                    current_client = wallet.client
+                    if current_client:
+                        is_admin = current_client.account_identifier == "admin" or (current_client.role and current_client.role.lower() == "admin")
+                        logger.info(f"  ✅ Wallet found, client: {current_client.account_identifier}, is_admin: {is_admin}")
+                    else:
+                        logger.warning(f"  ⚠️  Wallet found but wallet.client is None")
+                except Exception as client_error:
+                    logger.error(f"  ❌ Error accessing wallet.client: {client_error}")
+                    raise
+        except Exception as wallet_lookup_error:
+            logger.error(f"  ❌ Error in wallet lookup: {wallet_lookup_error}")
+            logger.exception(wallet_lookup_error)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error looking up wallet: {str(wallet_lookup_error)}"
+            )
         else:
             # Wallet not in wallets table - try to find client directly
             # This handles cases where admin wallet is only in clients table
