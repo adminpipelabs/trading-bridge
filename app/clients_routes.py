@@ -84,11 +84,14 @@ def create_client(request: CreateClientRequest, db: Session = Depends(get_db)):
     # Add wallets
     wallet_objs = []
     for wallet_info in request.wallets:
+        # Normalize address: lowercase EVM addresses, keep Solana addresses as-is (case-sensitive)
+        normalized_address = wallet_info.address.lower() if wallet_info.chain.lower() == 'evm' else wallet_info.address
+        
         wallet = Wallet(
             id=str(uuid.uuid4()),
             client_id=client_id,
             chain=wallet_info.chain,
-            address=wallet_info.address.lower(),  # Store lowercase for case-insensitive lookup
+            address=normalized_address,
             created_at=datetime.utcnow()
         )
         db.add(wallet)
@@ -172,7 +175,7 @@ def list_clients(db: Session = Depends(get_db)):
             "password_hash": client.password_hash,  # Usually not returned, but field exists
             "status": client.status or "active",
             "tier": client.tier,
-            "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
+            "role": client.role or "client",
             "settings": client.settings or {},
             # New schema fields
             "wallets": wallets,
@@ -212,9 +215,11 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
     Look up client by wallet address.
     Returns client info including account_identifier for bot filtering.
     """
-    wallet_lower = wallet_address.lower()
+    # Normalize address: lowercase EVM addresses, keep Solana addresses as-is
+    is_evm = wallet_address.startswith("0x")
+    normalized_address = wallet_address.lower() if is_evm else wallet_address
     
-    wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+    wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
     if not wallet:
         raise HTTPException(
             status_code=404,
@@ -229,7 +234,6 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
         "client_id": client.id,
         "account_identifier": client.account_identifier,
         "name": client.name,
-        "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
         "wallets": wallets,
         "connectors": connectors
     }
@@ -243,10 +247,12 @@ def add_wallet(client_id: str, wallet: WalletInfo, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Client not found")
     
     # Check for duplicate wallet
-    wallet_lower = wallet.address.lower()
+    # Normalize address: lowercase EVM addresses, keep Solana addresses as-is
+    normalized_address = wallet.address.lower() if wallet.chain.lower() == 'evm' else wallet.address
+    
     existing = db.query(Wallet).filter(
         Wallet.client_id == client_id,
-        Wallet.address == wallet_lower
+        Wallet.address == normalized_address
     ).first()
     
     if existing:
@@ -256,7 +262,7 @@ def add_wallet(client_id: str, wallet: WalletInfo, db: Session = Depends(get_db)
         id=str(uuid.uuid4()),
         client_id=client_id,
         chain=wallet.chain,
-        address=wallet_lower,
+        address=normalized_address,
         created_at=datetime.utcnow()
     )
     db.add(new_wallet)
