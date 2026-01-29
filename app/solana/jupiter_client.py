@@ -203,11 +203,27 @@ class JupiterClient:
         if compute_unit_price_micro_lamports:
             payload["computeUnitPriceMicroLamports"] = compute_unit_price_micro_lamports
         
+        import logging
+        logger = logging.getLogger(__name__)
+        
         response = await self.client.post(
             f"{self.SWAP_API}/swap",
             json=payload
         )
-        response.raise_for_status()
+        
+        if response.status_code != 200:
+            error_detail = "Unknown error"
+            try:
+                error_data = response.json()
+                error_detail = error_data.get("error", {}).get("message", str(error_data))
+            except:
+                error_detail = response.text[:500]
+            
+            logger.error(f"Jupiter swap API error {response.status_code}: {error_detail}")
+            logger.error(f"Payload keys: {list(payload.keys())}")
+            logger.error(f"Quote response keys: {list(quote.raw_response.keys()) if quote.raw_response else 'None'}")
+            response.raise_for_status()
+        
         data = response.json()
         
         return SwapTransaction(

@@ -40,24 +40,57 @@ class SolanaTransactionSigner:
     @staticmethod
     def keypair_from_private_key(private_key: str) -> Keypair:
         """
-        Create Keypair from base58 encoded private key
+        Create Keypair from private key
+        Supports multiple formats:
+        - Base58 encoded string (64 bytes when decoded = full keypair)
+        - Base58 encoded string (32 bytes when decoded = seed)
+        - JSON array string like "[1,2,3,...]"
+        - Comma-separated string like "1,2,3,..."
         
         Args:
-            private_key: Base58 encoded private key (64 bytes) or seed (32 bytes)
+            private_key: Private key in various formats
         
         Returns:
             Keypair object
         """
-        decoded = base58.b58decode(private_key)
+        import logging
+        logger = logging.getLogger(__name__)
         
-        if len(decoded) == 64:
-            # Full keypair (private + public)
-            return Keypair.from_bytes(decoded)
-        elif len(decoded) == 32:
-            # Seed only
-            return Keypair.from_seed(decoded)
-        else:
-            raise ValueError(f"Invalid private key length: {len(decoded)}")
+        # Try base58 first (most common)
+        try:
+            decoded = base58.b58decode(private_key)
+            
+            if len(decoded) == 64:
+                # Full keypair (private + public)
+                return Keypair.from_bytes(decoded)
+            elif len(decoded) == 32:
+                # Seed only
+                return Keypair.from_seed(decoded)
+            else:
+                raise ValueError(f"Invalid private key length: {len(decoded)}")
+        except Exception as base58_error:
+            # Base58 failed, try JSON array format
+            logger.debug(f"Base58 decode failed: {base58_error}, trying JSON array format...")
+            try:
+                import json
+                # Try parsing as JSON array
+                if private_key.startswith('['):
+                    key_bytes = bytes(json.loads(private_key))
+                elif ',' in private_key:
+                    # Comma-separated numbers
+                    key_bytes = bytes([int(x.strip()) for x in private_key.split(',')])
+                else:
+                    raise ValueError(f"Unknown private key format. Base58 error: {base58_error}")
+                
+                if len(key_bytes) == 64:
+                    return Keypair.from_bytes(key_bytes)
+                elif len(key_bytes) == 32:
+                    return Keypair.from_seed(key_bytes)
+                else:
+                    raise ValueError(f"Invalid key length: {len(key_bytes)}, expected 32 or 64")
+            except Exception as json_error:
+                logger.error(f"Failed to parse private key. Base58 error: {base58_error}, JSON error: {json_error}")
+                raise ValueError(f"Invalid private key format. Must be base58 string or JSON array. Base58 error: {base58_error}")
     
     @staticmethod
     def get_public_key(private_key: str) -> str:
