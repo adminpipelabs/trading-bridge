@@ -84,14 +84,13 @@ def create_client(request: CreateClientRequest, db: Session = Depends(get_db)):
     # Add wallets
     wallet_objs = []
     for wallet_info in request.wallets:
-        # Normalize address: lowercase EVM addresses, keep Solana addresses as-is (case-sensitive)
-        normalized_address = wallet_info.address.lower() if wallet_info.chain.lower() == 'evm' else wallet_info.address
-        
+        # Store addresses in original case (both EVM and Solana)
+        # Solana addresses are case-sensitive, EVM addresses can be stored in original case too
         wallet = Wallet(
             id=str(uuid.uuid4()),
             client_id=client_id,
             chain=wallet_info.chain,
-            address=normalized_address,
+            address=wallet_info.address,  # Store in original case
             created_at=datetime.utcnow()
         )
         db.add(wallet)
@@ -215,18 +214,11 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
     Look up client by wallet address.
     Returns client info including account_identifier for bot filtering.
     """
-    # Normalize address: lowercase EVM addresses, keep Solana addresses as-is
-    is_evm = wallet_address.startswith("0x")
-    
-    if is_evm:
-        normalized_address = wallet_address.lower()
-        wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
-    else:
-        # Solana: try both original case and lowercase (for backward compatibility)
-        normalized_address = wallet_address
-        wallet = db.query(Wallet).filter(
-            (Wallet.address == normalized_address) | (Wallet.address == normalized_address.lower())
-        ).filter(Wallet.chain == 'solana').first()
+    # Try both original case and lowercase for backward compatibility with existing data
+    # New entries are stored in original case, but old entries might be lowercase
+    wallet = db.query(Wallet).filter(
+        (Wallet.address == wallet_address) | (Wallet.address == wallet_address.lower())
+    ).first()
     if not wallet:
         raise HTTPException(
             status_code=404,
@@ -253,23 +245,21 @@ def add_wallet(client_id: str, wallet: WalletInfo, db: Session = Depends(get_db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     
-    # Check for duplicate wallet
-    # Normalize address: lowercase EVM addresses, keep Solana addresses as-is
-    normalized_address = wallet.address.lower() if wallet.chain.lower() == 'evm' else wallet.address
-    
+    # Check for duplicate wallet (try both original case and lowercase for backward compatibility)
     existing = db.query(Wallet).filter(
         Wallet.client_id == client_id,
-        Wallet.address == normalized_address
+        ((Wallet.address == wallet.address) | (Wallet.address == wallet.address.lower()))
     ).first()
     
     if existing:
         raise HTTPException(status_code=400, detail="Wallet already exists for this client")
     
+    # Store address in original case
     new_wallet = Wallet(
         id=str(uuid.uuid4()),
         client_id=client_id,
         chain=wallet.chain,
-        address=normalized_address,
+        address=wallet.address,  # Store in original case
         created_at=datetime.utcnow()
     )
     db.add(new_wallet)

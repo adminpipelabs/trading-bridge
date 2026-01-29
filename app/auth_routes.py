@@ -106,9 +106,8 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
             request.message,
             request.signature
         )
-        # Normalize Solana address (keep as-is, case-sensitive)
+        # Keep Solana address in original case
         wallet_address = request.wallet_address
-        normalized_address = wallet_address  # Solana addresses are case-sensitive
     else:
         # EVM verification (ECDSA)
         valid = verify_wallet_signature(
@@ -116,9 +115,8 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
             request.message,
             request.signature
         )
-        # Normalize EVM wallet address
+        # Use checksum format for EVM (mixed case)
         wallet_address = Web3.to_checksum_address(request.wallet_address)
-        normalized_address = wallet_address.lower()  # EVM addresses are case-insensitive
     
     if not valid:
         raise HTTPException(
@@ -127,15 +125,11 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
         )
     
     # Check if Wallet exists (links to Client)
-    # For Solana: try both original case and lowercase (for backward compatibility with existing data)
-    # For EVM: use lowercase
-    if is_solana:
-        # Try original case first, then lowercase (for existing lowercase entries)
-        wallet = db.query(Wallet).filter(
-            (Wallet.address == normalized_address) | (Wallet.address == normalized_address.lower())
-        ).filter(Wallet.chain == 'solana').first()
-    else:
-        wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
+    # Try both original case and lowercase for backward compatibility with existing data
+    # New entries are stored in original case (both EVM and Solana)
+    wallet = db.query(Wallet).filter(
+        (Wallet.address == wallet_address) | (Wallet.address == wallet_address.lower())
+    ).first()
     
     if not wallet:
         # Wallet not found - reject login
