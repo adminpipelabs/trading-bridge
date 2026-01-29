@@ -1,423 +1,397 @@
 """
-Bot Runner Service - Executes Solana bots continuously.
-Runs VolumeBot and SpreadBot logic in background tasks.
+Bot Runner Service
+Background service that executes Solana trading bots (volume and spread bots).
+Runs continuously, executing trades based on bot configuration.
 """
-
 import asyncio
 import logging
 import random
 import time
 import uuid
-import os
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
 
-from app.database import Bot, BotWallet, BotTrade, get_db_session
+from app.database import get_db_session, Bot, BotWallet, BotTrade
 from app.wallet_encryption import decrypt_private_key
-import httpx
+from app.solana.jupiter_client import JupiterClient
+from app.solana.transaction_signer import SolanaTransactionSigner
 
 logger = logging.getLogger(__name__)
 
-# Trading Bridge URL (for calling our own endpoints)
-TRADING_BRIDGE_URL = os.getenv("TRADING_BRIDGE_URL", "https://trading-bridge-production.up.railway.app")
+# Initialize Jupiter client and signer (will be created per bot)
+# Note: These should be created with proper RPC URL from environment
 
 
 class BotRunner:
-    """Manages running Solana bots"""
+    """Manages running Solana trading bots"""
     
     def __init__(self):
-        self.running_tasks: Dict[str, asyncio.Task] = {}
+        self.running_bots: Dict[str, asyncio.Task] = {}
         self.shutdown_event = asyncio.Event()
+        logger.info("BotRunner initialized")
     
     async def start(self):
-        """Start the bot runner - loads all running bots"""
-        logger.info("Starting bot runner service...")
+        """Start bot runner - load all running bots from database"""
+        logger.info("=" * 80)
+        logger.info("STARTING BOT RUNNER SERVICE")
+        logger.info("=" * 80)
         
-        # Load all bots with status='running'
-        db = get_db_session()
         try:
-            running_bots = db.query(Bot).filter(
-                Bot.status == "running",
-                Bot.bot_type.in_(["volume", "spread"])
-            ).all()
-            
-            for bot in running_bots:
-                await self.start_bot(bot.id, db)
-            
-            logger.info(f"Bot runner started - monitoring {len(running_bots)} bots")
+            db = get_db_session()
+            try:
+                # Load all bots with status='running'
+                running_bots = db.query(Bot).filter(Bot.status == "running").all()
+                logger.info(f"Found {len(running_bots)} bot(s) with status='running'")
+                
+                for bot in running_bots:
+                    logger.info(f"  - Bot ID: {bot.id}, Name: {bot.name}, Type: {bot.bot_type}")
+                    if bot.bot_type in ['volume', 'spread']:
+                        await self.start_bot(bot.id, db)
+                    else:
+                        logger.warning(f"  ⚠️  Skipping bot {bot.id} - unknown bot_type: {bot.bot_type}")
+                
+                logger.info("=" * 80)
+                logger.info("✅ BOT RUNNER SERVICE STARTED")
+                logger.info(f"✅ Monitoring {len(self.running_bots)} bot(s)")
+                logger.info("=" * 80)
+            finally:
+                db.close()
         except Exception as e:
-            logger.error(f"Failed to start bot runner: {e}")
-        finally:
-            db.close()
+            logger.error("=" * 80)
+            logger.error("❌ FAILED TO START BOT RUNNER")
+            logger.error(f"Error: {e}")
+            logger.error("=" * 80)
+            raise
     
     async def start_bot(self, bot_id: str, db: Optional[Session] = None):
         """Start a specific bot"""
-        if bot_id in self.running_tasks:
+        if bot_id in self.running_bots:
             logger.warning(f"Bot {bot_id} is already running")
             return
         
+        logger.info(f"🚀 Starting bot {bot_id}...")
+        
+        # Get bot from database
         if not db:
             db = get_db_session()
+            should_close = True
+        else:
+            should_close = False
         
         try:
             bot = db.query(Bot).filter(Bot.id == bot_id).first()
             if not bot:
-                logger.error(f"Bot {bot_id} not found")
+                logger.error(f"Bot {bot_id} not found in database")
                 return
             
-            if bot.bot_type == "volume":
-                task = asyncio.create_task(self.run_volume_bot(bot_id))
-            elif bot.bot_type == "spread":
-                task = asyncio.create_task(self.run_spread_bot(bot_id))
+            if bot.bot_type == 'volume':
+                task = asyncio.create_task(self._run_volume_bot(bot_id))
+            elif bot.bot_type == 'spread':
+                task = asyncio.create_task(self._run_spread_bot(bot_id))
             else:
-                logger.error(f"Unknown bot type: {bot.bot_type}")
+                logger.error(f"Unknown bot_type '{bot.bot_type}' for bot {bot_id}")
                 return
             
-            self.running_tasks[bot_id] = task
-            logger.info(f"Started bot {bot_id} ({bot.bot_type})")
+            self.running_bots[bot_id] = task
+            logger.info(f"✅ Bot {bot_id} started successfully")
         except Exception as e:
-            logger.error(f"Failed to start bot {bot_id}: {e}")
+            logger.error(f"❌ Failed to start bot {bot_id}: {e}")
+            logger.exception(e)
         finally:
-            if not db:
+            if should_close:
                 db.close()
     
     async def stop_bot(self, bot_id: str):
-        """Stop a specific bot"""
-        if bot_id in self.running_tasks:
-            self.running_tasks[bot_id].cancel()
-            try:
-                await self.running_tasks[bot_id]
-            except asyncio.CancelledError:
-                pass
-            del self.running_tasks[bot_id]
-            logger.info(f"Stopped bot {bot_id}")
-    
-    async def run_volume_bot(self, bot_id: str):
-        """Run VolumeBot - executes swaps at intervals"""
-        logger.info(f"VolumeBot {bot_id} started")
+        """Stop a running bot"""
+        if bot_id not in self.running_bots:
+            logger.warning(f"Bot {bot_id} is not running")
+            return
         
-        while not self.shutdown_event.is_set():
-            try:
-                db = get_db_session()
-                bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                
-                if not bot or bot.status != "running":
-                    logger.info(f"VolumeBot {bot_id} stopped (status changed)")
-                    break
-                
-                # Check if daily target reached
-                stats = bot.stats or {}
-                volume_today = stats.get("volume_today", 0)
-                daily_target = bot.config.get("daily_volume_usd", 0)
-                
-                if volume_today >= daily_target:
-                    # Wait until midnight
-                    await self.sleep_until_midnight()
-                    # Reset stats
-                    stats["volume_today"] = 0
-                    stats["trades_today"] = 0
-                    bot.stats = stats
-                    db.commit()
-                    continue
-                
-                # Get wallets
-                wallets = db.query(BotWallet).filter(BotWallet.bot_id == bot_id).all()
-                if not wallets:
-                    logger.error(f"No wallets configured for bot {bot_id}")
-                    await asyncio.sleep(60)  # Wait 1 minute before retry
-                    db.close()
-                    continue
-                
-                # Pick random wallet
-                wallet = random.choice(wallets)
-                private_key = decrypt_private_key(wallet.encrypted_private_key)
-                
-                # Pick random trade size
-                min_trade = bot.config.get("min_trade_usd", 100)
-                max_trade = bot.config.get("max_trade_usd", 500)
-                size_usd = random.uniform(min_trade, max_trade)
-                
-                # Alternate buy/sell
-                side = "buy" if random.random() > 0.5 else "sell"
-                
-                # Execute swap
-                result = await self.execute_swap(
-                    bot=bot,
-                    wallet=wallet,
-                    private_key=private_key,
-                    size_usd=size_usd,
-                    side=side
-                )
-                
-                # Update stats
-                if result.get("success"):
-                    stats["volume_today"] = stats.get("volume_today", 0) + size_usd
-                    stats["trades_today"] = stats.get("trades_today", 0) + 1
-                    stats["last_trade_at"] = datetime.utcnow().isoformat()
-                    bot.stats = stats
-                    db.commit()
-                
-                # Random interval
-                min_interval = bot.config.get("interval_min_seconds", 900)
-                max_interval = bot.config.get("interval_max_seconds", 2700)
-                interval = random.uniform(min_interval, max_interval)
-                
-                db.close()
-                await asyncio.sleep(interval)
-                
-            except asyncio.CancelledError:
-                logger.info(f"VolumeBot {bot_id} cancelled")
-                break
-            except Exception as e:
-                logger.error(f"VolumeBot {bot_id} error: {e}")
-                await asyncio.sleep(60)  # Wait before retry
-                if db:
-                    db.close()
-    
-    async def run_spread_bot(self, bot_id: str):
-        """Run SpreadBot - places bid/ask orders around current price"""
-        logger.info(f"SpreadBot {bot_id} started")
+        logger.info(f"🛑 Stopping bot {bot_id}...")
+        task = self.running_bots[bot_id]
+        task.cancel()
         
-        while not self.shutdown_event.is_set():
-            try:
-                db = get_db_session()
-                bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                
-                if not bot or bot.status != "running":
-                    logger.info(f"SpreadBot {bot_id} stopped (status changed)")
-                    break
-                
-                # Get wallet (spread bot uses single wallet)
-                wallets = db.query(BotWallet).filter(BotWallet.bot_id == bot_id).all()
-                if not wallets:
-                    logger.error(f"No wallet configured for bot {bot_id}")
-                    await asyncio.sleep(60)
-                    db.close()
-                    continue
-                
-                wallet = wallets[0]
-                private_key = decrypt_private_key(wallet.encrypted_private_key)
-                
-                # Cancel existing orders first
-                await self.cancel_all_orders(wallet.wallet_address, private_key, bot.config)
-                
-                # Get current price
-                price = await self.get_current_price(bot.config)
-                
-                if not price:
-                    logger.warning(f"Could not get price for bot {bot_id}")
-                    await asyncio.sleep(30)
-                    db.close()
-                    continue
-                
-                # Calculate bid/ask
-                spread_bps = bot.config.get("spread_bps", 50)
-                bid_price = price * (1 - spread_bps / 20000)
-                ask_price = price * (1 + spread_bps / 20000)
-                
-                # Convert USD to token amount
-                order_size_usd = bot.config.get("order_size_usd", 500)
-                base_amount = await self.usd_to_token_amount(order_size_usd, bot.config.get("base_mint"), price)
-                
-                # Place spread orders
-                result = await self.place_spread_orders(
-                    bot=bot,
-                    wallet=wallet,
-                    private_key=private_key,
-                    base_amount=base_amount,
-                    spread_bps=spread_bps,
-                    expire_seconds=bot.config.get("expire_seconds", 3600)
-                )
-                
-                # Update stats
-                if result.get("success"):
-                    stats = bot.stats or {}
-                    stats["orders_placed"] = stats.get("orders_placed", 0) + 2
-                    stats["last_refresh_at"] = datetime.utcnow().isoformat()
-                    bot.stats = stats
-                    db.commit()
-                
-                # Wait for refresh interval
-                refresh_seconds = bot.config.get("refresh_seconds", 30)
-                db.close()
-                await asyncio.sleep(refresh_seconds)
-                
-            except asyncio.CancelledError:
-                logger.info(f"SpreadBot {bot_id} cancelled")
-                break
-            except Exception as e:
-                logger.error(f"SpreadBot {bot_id} error: {e}")
-                await asyncio.sleep(30)
-                if db:
-                    db.close()
-    
-    async def execute_swap(self, bot: Bot, wallet: BotWallet, private_key: str, size_usd: float, side: str) -> dict:
-        """Execute a swap via trading-bridge /solana/swap endpoint"""
         try:
-            config = bot.config
-            base_mint = config.get("base_mint")
-            quote_mint = config.get("quote_mint")
-            slippage_bps = config.get("slippage_bps", 50)
-            
-            # Get current price to convert USD to token amount
-            price = await self.get_current_price(config)
-            if not price:
-                return {"success": False, "error": "Could not get price"}
-            
+            await task
+        except asyncio.CancelledError:
+            pass
+        
+        del self.running_bots[bot_id]
+        logger.info(f"✅ Bot {bot_id} stopped")
+    
+    async def _run_volume_bot(self, bot_id: str):
+        """Run volume generation bot"""
+        logger.info(f"📊 Volume bot {bot_id} starting main loop...")
+        
+        # Create Jupiter client and signer for this bot
+        import os
+        rpc_url = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
+        jupiter_client = JupiterClient(rpc_url=rpc_url)
+        signer = SolanaTransactionSigner(rpc_url=rpc_url)
+        
+        try:
+            while not self.shutdown_event.is_set():
+                try:
+                    db = get_db_session()
+                    try:
+                        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                        if not bot or bot.status != "running":
+                            logger.info(f"Bot {bot_id} stopped or not found - exiting loop")
+                            break
+                        
+                        config = bot.config or {}
+                        logger.info(f"📊 Volume bot {bot_id} - Checking daily target...")
+                        
+                        # Get daily volume target
+                        daily_volume_usd = config.get('daily_volume_usd', 10000)
+                        stats = bot.stats or {}
+                        volume_today = stats.get('volume_today', 0)
+                        
+                        logger.info(f"  Target: ${daily_volume_usd:,.2f}, Today: ${volume_today:,.2f}")
+                        
+                        # Check if daily target reached
+                        if volume_today >= daily_volume_usd:
+                            logger.info(f"  ✅ Daily target reached - sleeping until midnight")
+                            # Sleep until midnight
+                            now = datetime.utcnow()
+                            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                            sleep_seconds = (midnight - now).total_seconds()
+                            await asyncio.sleep(min(sleep_seconds, 3600))  # Max 1 hour sleep
+                            continue
+                        
+                        # Get bot wallets
+                        bot_wallets = db.query(BotWallet).filter(BotWallet.bot_id == bot_id).all()
+                        if not bot_wallets:
+                            logger.error(f"  ❌ No wallets configured for bot {bot_id}")
+                            await asyncio.sleep(60)  # Wait 1 minute before retrying
+                            continue
+                        
+                        logger.info(f"  Found {len(bot_wallets)} wallet(s)")
+                        
+                        # Pick random wallet
+                        wallet = random.choice(bot_wallets)
+                        logger.info(f"  Using wallet: {wallet.wallet_address[:8]}...")
+                        
+                        # Decrypt private key
+                        try:
+                            private_key = decrypt_private_key(wallet.encrypted_private_key)
+                            logger.info(f"  ✅ Private key decrypted")
+                        except Exception as e:
+                            logger.error(f"  ❌ Failed to decrypt private key: {e}")
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        # Pick random trade size
+                        min_trade_usd = config.get('min_trade_usd', 100)
+                        max_trade_usd = config.get('max_trade_usd', 500)
+                        trade_size_usd = random.uniform(min_trade_usd, max_trade_usd)
+                        logger.info(f"  Trade size: ${trade_size_usd:,.2f}")
+                        
+                        # Determine side (buy or sell)
+                        side = "buy" if random.random() > 0.5 else "sell"
+                        logger.info(f"  Side: {side}")
+                        
+                        # Get token mints from config
+                        base_mint = config.get('base_mint')
+                        quote_mint = config.get('quote_mint', 'So11111111111111111111111111111111111111112')  # SOL
+                        
+                        if not base_mint:
+                            logger.error(f"  ❌ base_mint not configured")
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        # Execute swap
+                        await self._execute_volume_trade(
+                            bot_id=bot_id,
+                            wallet_address=wallet.wallet_address,
+                            private_key=private_key,
+                            base_mint=base_mint,
+                            quote_mint=quote_mint,
+                            trade_size_usd=trade_size_usd,
+                            side=side,
+                            slippage_bps=config.get('slippage_bps', 50),
+                            db=db,
+                            jupiter_client=jupiter_client,
+                            signer=signer
+                        )
+                        
+                        # Random interval between trades
+                        interval_min = config.get('interval_min_seconds', 900)  # 15 min default
+                        interval_max = config.get('interval_max_seconds', 2700)  # 45 min default
+                        sleep_seconds = random.uniform(interval_min, interval_max)
+                        logger.info(f"  💤 Sleeping for {sleep_seconds/60:.1f} minutes...")
+                        await asyncio.sleep(sleep_seconds)
+                        
+                    finally:
+                        db.close()
+                        
+                except asyncio.CancelledError:
+                    logger.info(f"Volume bot {bot_id} cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"❌ Error in volume bot {bot_id} loop: {e}")
+                    logger.exception(e)
+                    await asyncio.sleep(60)  # Wait before retrying
+        finally:
+            await jupiter_client.close()
+            await signer.close()
+    
+    async def _execute_volume_trade(
+        self,
+        bot_id: str,
+        wallet_address: str,
+        private_key: str,
+        base_mint: str,
+        quote_mint: str,
+        trade_size_usd: float,
+        side: str,
+        slippage_bps: int,
+        db: Session,
+        jupiter_client: JupiterClient,
+        signer: SolanaTransactionSigner
+    ):
+        """Execute a volume trade (swap)"""
+        logger.info(f"  🔄 Executing {side} trade...")
+        
+        try:
             # Determine input/output based on side
             if side == "buy":
                 input_mint = quote_mint  # SOL
-                output_mint = base_mint  # TOKEN
-                amount = int(size_usd / price * 1e9)  # Convert SOL USD to lamports
+                output_mint = base_mint  # Token
             else:
-                input_mint = base_mint  # TOKEN
+                input_mint = base_mint  # Token
                 output_mint = quote_mint  # SOL
-                # Need token decimals - assume 9 for now
-                amount = int(size_usd / price * 1e9)  # Convert token USD to smallest units
             
-            # Call trading-bridge swap endpoint
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{TRADING_BRIDGE_URL}/solana/swap",
-                    json={
-                        "wallet_address": wallet.wallet_address,
-                        "private_key": private_key,
-                        "input_mint": input_mint,
-                        "output_mint": output_mint,
-                        "amount": amount,
-                        "slippage_bps": slippage_bps
-                    },
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    # Record trade
-                    await self.record_trade(bot.id, wallet.wallet_address, side, size_usd, price, result.get("signature"))
-                    return {"success": True, **result}
-                else:
-                    error = response.json().get("detail", "Swap failed")
-                    logger.error(f"Swap failed: {error}")
-                    return {"success": False, "error": error}
-                    
-        except Exception as e:
-            logger.error(f"Execute swap error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def place_spread_orders(self, bot: Bot, wallet: BotWallet, private_key: str, base_amount: int, spread_bps: int, expire_seconds: int) -> dict:
-        """Place spread orders via trading-bridge /solana/spread-orders endpoint"""
-        try:
-            config = bot.config
-            base_mint = config.get("base_mint")
-            quote_mint = config.get("quote_mint")
+            # Convert USD to token amount (simplified - assumes SOL price)
+            # For production, should fetch actual price from Jupiter
+            sol_price_usd = 100  # Approximate - should fetch real price
+            if input_mint == quote_mint:  # Buying with SOL
+                amount_sol = trade_size_usd / sol_price_usd
+                amount = int(amount_sol * 1e9)  # Convert to lamports
+            else:
+                # Selling token - need to get balance or use config
+                # For now, use a fixed amount (should be improved)
+                amount = int(1e6)  # 1 token (assuming 6 decimals)
             
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{TRADING_BRIDGE_URL}/solana/spread-orders",
-                    json={
-                        "wallet_address": wallet.wallet_address,
-                        "private_key": private_key,
-                        "base_mint": base_mint,
-                        "quote_mint": quote_mint,
-                        "base_amount": base_amount,
-                        "spread_bps": spread_bps,
-                        "expire_in_seconds": expire_seconds
-                    },
-                    timeout=30.0
-                )
-                
-                if response.status_code == 200:
-                    return {"success": True, **response.json()}
-                else:
-                    error = response.json().get("detail", "Spread orders failed")
-                    logger.error(f"Spread orders failed: {error}")
-                    return {"success": False, "error": error}
-                    
-        except Exception as e:
-            logger.error(f"Place spread orders error: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def cancel_all_orders(self, wallet_address: str, private_key: str, config: dict):
-        """Cancel all open orders"""
-        try:
-            base_mint = config.get("base_mint")
-            quote_mint = config.get("quote_mint")
+            logger.info(f"  Getting quote: {input_mint[:8]}... → {output_mint[:8]}...")
+            logger.info(f"  Amount: {amount}")
             
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"{TRADING_BRIDGE_URL}/solana/cancel-all-orders",
-                    json={
-                        "wallet_address": wallet_address,
-                        "private_key": private_key,
-                        "input_mint": base_mint,
-                        "output_mint": quote_mint
-                    },
-                    timeout=10.0
-                )
-        except Exception as e:
-            logger.warning(f"Failed to cancel orders: {e}")
-    
-    async def get_current_price(self, config: dict) -> Optional[float]:
-        """Get current price from Jupiter"""
-        try:
-            base_mint = config.get("base_mint")
-            quote_mint = config.get("quote_mint")
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{TRADING_BRIDGE_URL}/solana/price",
-                    params={
-                        "token_mint": base_mint,
-                        "vs_token": quote_mint
-                    },
-                    timeout=10.0
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("price")
-                return None
-        except Exception as e:
-            logger.error(f"Get price error: {e}")
-            return None
-    
-    async def usd_to_token_amount(self, usd_amount: float, token_mint: str, price: float) -> int:
-        """Convert USD amount to token amount (in smallest units)"""
-        # Assume 9 decimals for now (can be improved with token metadata)
-        token_amount = usd_amount / price
-        return int(token_amount * 1e9)
-    
-    async def record_trade(self, bot_id: str, wallet_address: str, side: str, value_usd: float, price: float, tx_signature: Optional[str]):
-        """Record a trade in bot_trades table"""
-        try:
-            db = get_db_session()
-            trade = BotTrade(
-                id=str(uuid.uuid4()),
-                bot_id=bot_id,
-                wallet_address=wallet_address,
-                side=side,
-                amount=None,  # Could calculate from value_usd / price
-                price=price,
-                value_usd=value_usd,
-                tx_signature=tx_signature,
-                status="success" if tx_signature else "pending"
+            # Get quote from Jupiter
+            quote = await jupiter_client.get_quote(
+                input_mint=input_mint,
+                output_mint=output_mint,
+                amount=amount,
+                slippage_bps=slippage_bps
             )
-            db.add(trade)
-            db.commit()
-            db.close()
+            
+            if not quote:
+                logger.error(f"  ❌ Failed to get quote")
+                return
+            
+            logger.info(f"  Quote: {quote.in_amount} → {quote.out_amount} (impact: {quote.price_impact_pct:.2f}%)")
+            
+            # Get swap transaction from Jupiter
+            logger.info(f"  Getting swap transaction...")
+            swap_tx = await jupiter_client.get_swap_transaction(
+                quote=quote,
+                user_public_key=wallet_address,
+                wrap_unwrap_sol=True
+            )
+            
+            if not swap_tx:
+                logger.error(f"  ❌ Failed to get swap transaction")
+                return
+            
+            # Sign and send transaction
+            logger.info(f"  Signing and sending transaction...")
+            result = await signer.sign_and_send_transaction(
+                transaction_base64=swap_tx.transaction,
+                private_key=private_key,
+                skip_preflight=False,
+                max_retries=3
+            )
+            
+            if result.success:
+                logger.info(f"  ✅ Trade successful! Signature: {result.signature[:16]}...")
+                
+                # Calculate actual trade value
+                actual_value_usd = (quote.out_amount / 1e9) * sol_price_usd if output_mint == quote_mint else trade_size_usd
+                
+                # Record trade
+                trade = BotTrade(
+                    id=str(uuid.uuid4()),
+                    bot_id=bot_id,
+                    wallet_address=wallet_address,
+                    side=side,
+                    amount=quote.in_amount,
+                    price=quote.out_amount / quote.in_amount if quote.in_amount > 0 else 0,
+                    value_usd=actual_value_usd,
+                    gas_cost=0.000005,  # Approximate SOL gas cost
+                    tx_signature=result.signature,
+                    status="success",
+                    created_at=datetime.utcnow()
+                )
+                db.add(trade)
+                
+                # Update bot stats
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    stats = bot.stats or {}
+                    stats['volume_today'] = stats.get('volume_today', 0) + actual_value_usd
+                    stats['trades_today'] = stats.get('trades_today', 0) + 1
+                    stats['last_trade_at'] = datetime.utcnow().isoformat()
+                    bot.stats = stats
+                    db.commit()
+                    logger.info(f"  📊 Updated stats: ${stats['volume_today']:,.2f} today")
+            else:
+                logger.error(f"  ❌ Trade failed: {result.error}")
+                
         except Exception as e:
-            logger.error(f"Failed to record trade: {e}")
-            if db:
-                db.close()
+            logger.error(f"  ❌ Error executing trade: {e}")
+            logger.exception(e)
     
-    async def sleep_until_midnight(self):
-        """Sleep until next midnight UTC"""
-        now = datetime.utcnow()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        seconds_until_midnight = (tomorrow - now).total_seconds()
-        await asyncio.sleep(seconds_until_midnight)
+    async def _run_spread_bot(self, bot_id: str):
+        """Run spread/market making bot"""
+        logger.info(f"📈 Spread bot {bot_id} starting main loop...")
+        
+        while not self.shutdown_event.is_set():
+            try:
+                db = get_db_session()
+                try:
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                    if not bot or bot.status != "running":
+                        logger.info(f"Bot {bot_id} stopped or not found - exiting loop")
+                        break
+                    
+                    config = bot.config or {}
+                    logger.info(f"📈 Spread bot {bot_id} - Refreshing orders...")
+                    
+                    # TODO: Implement spread bot logic
+                    logger.warning(f"  ⚠️  Spread bot logic not yet implemented")
+                    
+                    # Sleep for refresh interval
+                    refresh_seconds = config.get('refresh_seconds', 30)
+                    await asyncio.sleep(refresh_seconds)
+                    
+                finally:
+                    db.close()
+                    
+            except asyncio.CancelledError:
+                logger.info(f"Spread bot {bot_id} cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in spread bot {bot_id} loop: {e}")
+                logger.exception(e)
+                await asyncio.sleep(60)
+    
+    def shutdown(self):
+        """Shutdown bot runner"""
+        logger.info("Shutting down bot runner...")
+        self.shutdown_event.set()
+        for bot_id in list(self.running_bots.keys()):
+            asyncio.create_task(self.stop_bot(bot_id))
 
 
-# Global bot runner instance
+# Global instance
 bot_runner = BotRunner()

@@ -215,17 +215,44 @@ def list_bots(
     
     # If wallet_address provided, get client and check if admin
     if wallet_address:
-        wallet_lower = wallet_address.lower()
-        wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+        # Try to find wallet (handle case sensitivity for Solana)
+        wallet = None
         
+        # Try original case first (for Solana addresses - case sensitive)
+        wallet = db.query(Wallet).filter(Wallet.address == wallet_address).first()
+        
+        # Try lowercase if not found (for EVM addresses)
         if not wallet:
-            raise HTTPException(
-                status_code=403,
-                detail="Wallet address not registered"
-            )
+            wallet_lower = wallet_address.lower()
+            wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
         
-        current_client = wallet.client
-        is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+        if wallet:
+            current_client = wallet.client
+            is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+        else:
+            # Wallet not in wallets table - try to find client directly
+            # This handles cases where admin wallet is only in clients table
+            client_by_wallet = db.query(Client).filter(
+                Client.wallet_address == wallet_address
+            ).first()
+            
+            # Also try lowercase for EVM addresses
+            if not client_by_wallet:
+                client_by_wallet = db.query(Client).filter(
+                    Client.wallet_address == wallet_address.lower()
+                ).first()
+            
+            if client_by_wallet:
+                current_client = client_by_wallet
+                is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+            else:
+                # Wallet not found in either table - raise error
+                # But first check if this might be an admin trying to access without wallet
+                # For now, raise error - admin should have wallet registered
+                raise HTTPException(
+                    status_code=403,
+                    detail="Wallet address not registered. Please ensure your wallet is registered in the system."
+                )
     
     # Admin can list all bots (or filter by client_id/account)
     if is_admin:
@@ -397,6 +424,23 @@ def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
         "recent_trades": trades_data,
         "total_trades": len(trades_data)
     }
+
+
+@router.get("/{bot_id}/wallets")
+def get_bot_wallets(bot_id: str, db: Session = Depends(get_db)):
+    """Get all wallets for a bot."""
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    bot_wallets = db.query(BotWallet).filter(BotWallet.bot_id == bot_id).all()
+    
+    return [{
+        "id": w.id,
+        "wallet_address": w.wallet_address,
+        "created_at": w.created_at.isoformat() if w.created_at else None
+    } for w in bot_wallets]
 
 
 @router.post("/{bot_id}/wallets")

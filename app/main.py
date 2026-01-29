@@ -52,16 +52,44 @@ async def lifespan(app: FastAPI):
     # Start bot runner service (in background)
     async def start_bot_runner():
         try:
+            logger.info("=" * 80)
+            logger.info("ATTEMPTING TO START BOT RUNNER")
+            logger.info("=" * 80)
             from app.bot_runner import bot_runner
+            logger.info("✅ Bot runner module imported successfully")
             await bot_runner.start()
+            logger.info("✅ Bot runner started successfully")
+        except ImportError as e:
+            logger.error("=" * 80)
+            logger.error("❌ BOT RUNNER IMPORT FAILED")
+            logger.error(f"Error: {e}")
+            logger.error("Check if app/bot_runner.py exists")
+            logger.error("=" * 80)
         except Exception as e:
-            logger.error(f"Bot runner error: {e}")
+            logger.error("=" * 80)
+            logger.error("❌ BOT RUNNER STARTUP FAILED")
+            logger.error(f"Error: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(traceback.format_exc())
+            logger.error("=" * 80)
     
+    # Start bot runner in background - use create_task to run concurrently
+    logger.info("Creating bot runner task...")
     try:
-        asyncio.create_task(start_bot_runner())
+        # Create task and let it run in background
+        task = asyncio.create_task(start_bot_runner())
+        logger.info("✅ Bot runner task created")
         logger.info("Bot runner service starting...")
+        # Give it a moment to start
+        await asyncio.sleep(0.1)
     except Exception as e:
-        logger.warning(f"Failed to start bot runner: {e}")
+        logger.error("=" * 80)
+        logger.error("❌ FAILED TO CREATE BOT RUNNER TASK")
+        logger.error(f"Error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        logger.error("=" * 80)
         # Don't fail app startup if bot runner fails
     
     yield
@@ -170,11 +198,23 @@ async def health_check():
     """Health check endpoint"""
     import os
     from app.database import engine, SessionLocal
+    
+    # Check bot runner status
+    bot_runner_status = "unknown"
+    bot_runner_running = False
+    try:
+        from app.bot_runner import bot_runner
+        bot_runner_running = len(bot_runner.running_bots) > 0
+        bot_runner_status = f"running ({len(bot_runner.running_bots)} bots)" if bot_runner_running else "started (0 bots)"
+    except Exception as e:
+        bot_runner_status = f"error: {str(e)[:50]}"
+    
     database_status = "postgresql" if (os.getenv("DATABASE_URL") and engine and SessionLocal) else "unavailable"
     return {
         "status": "healthy",
         "service": "Trading Bridge",
-        "database": database_status
+        "database": database_status,
+        "bot_runner": bot_runner_status
     }
 
 

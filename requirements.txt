@@ -20,15 +20,5 @@ solders>=0.18.0
 solana>=0.30.0
 httpx>=0.24.0
 sqlalchemy>=2.0.0
+asyncpg>=0.29.0
 psycopg2-binary>=2.9.0
-
-# Wallet authentication
-eth-account>=0.8.0
-web3>=6.0.0
-
-# Solana signature verification
-pynacl>=1.5.0
-base58>=2.1.0
-
-# Wallet encryption
-cryptography>=41.0.0
