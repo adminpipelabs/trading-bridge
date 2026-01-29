@@ -3,7 +3,7 @@ Bot management routes with PostgreSQL persistence.
 Synchronous routes for SQLAlchemy compatibility.
 """
 
-from fastapi import APIRouter, HTTPException, Query, Depends, Header
+from fastapi import APIRouter, HTTPException, Query, Depends, Header, Request
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
@@ -195,6 +195,7 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
 
 @router.get("")
 def list_bots(
+    request: Request,
     account: Optional[str] = Query(None, description="Filter by account identifier"),
     bot_type: Optional[str] = Query(None, description="Filter by bot type: 'volume', 'spread'"),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
@@ -202,49 +203,58 @@ def list_bots(
 ):
     """
     List bots with authentication and authorization.
-    - Requires authentication (X-Wallet-Address header)
-    - Admin users can see all bots
-    - Client users can only see their own bots
+    - Admin users can see all bots (wallet_address optional if authenticated via token)
+    - Client users must provide X-Wallet-Address header and only see their own bots
     - If account parameter is provided, verifies user has access to that account
     """
-    # Require authentication
+    current_client = None
+    is_admin = False
+    
+    # Get wallet_address from header (use parameter or request header)
+    wallet_address = wallet_address or request.headers.get("X-Wallet-Address")
+    
+    # If wallet_address provided, get client and check if admin
+    if wallet_address:
+        wallet_lower = wallet_address.lower()
+        wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+        
+        if not wallet:
+            raise HTTPException(
+                status_code=403,
+                detail="Wallet address not registered"
+            )
+        
+        current_client = wallet.client
+        is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+    
+    # Admin can list all bots (or filter by client_id/account)
+    if is_admin:
+        query = db.query(Bot)
+        if account:
+            query = query.filter(Bot.account == account)
+        if bot_type:
+            query = query.filter(Bot.bot_type == bot_type)
+        bots = query.all()
+        return {"bots": [bot.to_dict() for bot in bots]}
+    
+    # Non-admin must have wallet, only sees their bots
     if not wallet_address:
         raise HTTPException(
             status_code=401,
             detail="Authentication required. Please provide X-Wallet-Address header."
         )
     
-    # Get current client
-    wallet_lower = wallet_address.lower()
-    wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
-    
-    if not wallet:
-        raise HTTPException(
-            status_code=403,
-            detail="Wallet address not registered"
-        )
-    
-    current_client = wallet.client
-    
-    # Build query
-    query = db.query(Bot)
-    
-    # Authorization logic
-    is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
+    # Build query for client's bots only
+    query = db.query(Bot).filter(Bot.account == current_client.account_identifier)
     
     if account:
         # Account parameter provided - verify access
-        if not is_admin and account != current_client.account_identifier:
+        if account != current_client.account_identifier:
             raise HTTPException(
                 status_code=403,
                 detail=f"Access denied. You can only access your own account ({current_client.account_identifier})"
             )
         query = query.filter(Bot.account == account)
-    else:
-        # No account parameter - return user's own bots (or all if admin)
-        if not is_admin:
-            query = query.filter(Bot.account == current_client.account_identifier)
-        # Admin can see all bots (no filter)
     
     # Filter by bot_type if provided
     if bot_type:
