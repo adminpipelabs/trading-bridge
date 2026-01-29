@@ -311,13 +311,33 @@ class BotRunner:
             
             # Convert USD to token amount
             if input_mint == quote_mint:  # Buying with SOL
-                # Get SOL price in USD
+                # Get SOL price in USD - use quote to get SOL/USDC price
+                # Jupiter price API might not support SOL directly, so get it via quote
                 try:
-                    sol_price_data = await jupiter_client.get_price(quote_mint)
+                    # Try to get SOL price vs USDC
+                    sol_price_data = await jupiter_client.get_price(quote_mint, jupiter_client.USDC_MINT)
                     sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
                 except Exception as e:
-                    logger.error(f"  ❌ Failed to get SOL price: {e}")
-                    sol_price_usd = 100  # Use fallback
+                    logger.warning(f"  ⚠️ Failed to get SOL price from Jupiter: {e}")
+                    # Fallback: Use quote to estimate SOL price
+                    try:
+                        # Get a small quote SOL -> USDC to estimate price
+                        from app.solana.jupiter_client import Quote
+                        test_quote = await jupiter_client.get_quote(
+                            input_mint=quote_mint,  # SOL
+                            output_mint=jupiter_client.USDC_MINT,  # USDC
+                            amount=1e9,  # 1 SOL in lamports
+                            slippage_bps=50
+                        )
+                        if test_quote:
+                            # Price = USDC received / SOL sent
+                            sol_price_usd = test_quote.out_amount / 1e6  # USDC has 6 decimals
+                            logger.info(f"  Estimated SOL price from quote: ${sol_price_usd:.2f}")
+                        else:
+                            sol_price_usd = 100  # Final fallback
+                    except Exception as e2:
+                        logger.error(f"  ❌ Failed to estimate SOL price: {e2}")
+                        sol_price_usd = 100  # Final fallback
                 
                 amount_sol = trade_size_usd / sol_price_usd
                 amount = int(amount_sol * 1e9)  # Convert to lamports
