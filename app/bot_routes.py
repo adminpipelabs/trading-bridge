@@ -193,6 +193,48 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
     return bot.to_dict()
 
 
+@router.get("/debug/auth")
+def debug_auth(
+    request: Request,
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
+    db: Session = Depends(get_db)
+):
+    """Debug endpoint to test wallet lookup and admin check"""
+    wallet_address = wallet_address or request.headers.get("X-Wallet-Address")
+    
+    result = {
+        "wallet_address": wallet_address,
+        "wallet_found": False,
+        "client_found": False,
+        "is_admin": False,
+        "error": None
+    }
+    
+    try:
+        if wallet_address:
+            # Try wallet lookup
+            wallet = db.query(Wallet).filter(Wallet.address == wallet_address.lower()).first()
+            if wallet:
+                result["wallet_found"] = True
+                result["wallet_client_id"] = wallet.client_id
+                
+                # Try to get client
+                client = db.query(Client).filter(Client.id == wallet.client_id).first()
+                if client:
+                    result["client_found"] = True
+                    result["client_account_identifier"] = client.account_identifier
+                    result["client_role"] = client.role
+                    result["is_admin"] = client.account_identifier == "admin" or (client.role and client.role.lower() == "admin")
+        else:
+            result["error"] = "No wallet address provided"
+    except Exception as e:
+        result["error"] = str(e)
+        import traceback
+        result["traceback"] = traceback.format_exc()
+    
+    return result
+
+
 @router.get("")
 def list_bots(
     request: Request,
