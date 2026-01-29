@@ -49,11 +49,17 @@ async def lifespan(app: FastAPI):
         # Don't raise - allow app to start so /health endpoint works
         # But database endpoints will return 503 errors
     
-    # Start bot runner service
+    # Start bot runner service (in background)
+    async def start_bot_runner():
+        try:
+            from app.bot_runner import bot_runner
+            await bot_runner.start()
+        except Exception as e:
+            logger.error(f"Bot runner error: {e}")
+    
     try:
-        from app.bot_runner import bot_runner
-        asyncio.create_task(bot_runner.start())
-        logger.info("Bot runner service started")
+        asyncio.create_task(start_bot_runner())
+        logger.info("Bot runner service starting...")
     except Exception as e:
         logger.warning(f"Failed to start bot runner: {e}")
         # Don't fail app startup if bot runner fails
