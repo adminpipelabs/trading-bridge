@@ -285,6 +285,13 @@ def list_bots(
             detail="Authentication required. Please provide X-Wallet-Address header."
         )
     
+    # Ensure current_client is set for non-admin users
+    if not current_client:
+        raise HTTPException(
+            status_code=403,
+            detail="Wallet address not registered or associated with a client."
+        )
+    
     # Build query for client's bots only
     query = db.query(Bot).filter(Bot.account == current_client.account_identifier)
     
