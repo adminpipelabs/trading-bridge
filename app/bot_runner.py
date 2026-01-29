@@ -86,9 +86,9 @@ class BotRunner:
                 return
             
             if bot.bot_type == 'volume':
-                task = asyncio.create_task(self._run_volume_bot(bot_id))
+                task = asyncio.create_task(self._run_volume_bot_with_error_handling(bot_id))
             elif bot.bot_type == 'spread':
-                task = asyncio.create_task(self._run_spread_bot(bot_id))
+                task = asyncio.create_task(self._run_spread_bot_with_error_handling(bot_id))
             else:
                 logger.error(f"Unknown bot_type '{bot.bot_type}' for bot {bot_id}")
                 return
@@ -120,6 +120,35 @@ class BotRunner:
         del self.running_bots[bot_id]
         logger.info(f"✅ Bot {bot_id} stopped")
     
+    async def _run_volume_bot_with_error_handling(self, bot_id: str):
+        """Wrapper to catch and log any exceptions in bot loop"""
+        try:
+            await self._run_volume_bot(bot_id)
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error(f"❌ CRITICAL: Volume bot {bot_id} crashed with unhandled exception")
+            logger.error(f"Error: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(traceback.format_exc())
+            logger.error("=" * 80)
+            # Remove from running bots since it crashed
+            if bot_id in self.running_bots:
+                del self.running_bots[bot_id]
+            # Update bot status in DB
+            try:
+                db = get_db_session()
+                try:
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                    if bot:
+                        bot.status = "error"
+                        bot.error = f"Bot crashed: {str(e)[:200]}"
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception as db_error:
+                logger.error(f"Failed to update bot status in DB: {db_error}")
+    
     async def _run_volume_bot(self, bot_id: str):
         """Run volume generation bot"""
         logger.info(f"📊 Volume bot {bot_id} starting main loop...")
@@ -127,8 +156,14 @@ class BotRunner:
         # Create Jupiter client and signer for this bot
         import os
         rpc_url = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
-        jupiter_client = JupiterClient(rpc_url=rpc_url)
-        signer = SolanaTransactionSigner(rpc_url=rpc_url)
+        logger.info(f"  Initializing Jupiter client with RPC: {rpc_url}")
+        try:
+            jupiter_client = JupiterClient(rpc_url=rpc_url)
+            signer = SolanaTransactionSigner(rpc_url=rpc_url)
+            logger.info(f"  ✅ Jupiter client and signer initialized")
+        except Exception as e:
+            logger.error(f"  ❌ Failed to initialize Jupiter client/signer: {e}")
+            raise
         
         try:
             while not self.shutdown_event.is_set():
@@ -350,6 +385,35 @@ class BotRunner:
         except Exception as e:
             logger.error(f"  ❌ Error executing trade: {e}")
             logger.exception(e)
+    
+    async def _run_spread_bot_with_error_handling(self, bot_id: str):
+        """Wrapper to catch and log any exceptions in spread bot loop"""
+        try:
+            await self._run_spread_bot(bot_id)
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error(f"❌ CRITICAL: Spread bot {bot_id} crashed with unhandled exception")
+            logger.error(f"Error: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(traceback.format_exc())
+            logger.error("=" * 80)
+            # Remove from running bots since it crashed
+            if bot_id in self.running_bots:
+                del self.running_bots[bot_id]
+            # Update bot status in DB
+            try:
+                db = get_db_session()
+                try:
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                    if bot:
+                        bot.status = "error"
+                        bot.error = f"Bot crashed: {str(e)[:200]}"
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception as db_error:
+                logger.error(f"Failed to update bot status in DB: {db_error}")
     
     async def _run_spread_bot(self, bot_id: str):
         """Run spread/market making bot"""
