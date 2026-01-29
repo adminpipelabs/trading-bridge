@@ -106,9 +106,9 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
             request.message,
             request.signature
         )
-        # Normalize Solana address (keep as-is, lowercase for DB lookup)
+        # Normalize Solana address (keep as-is, case-sensitive)
         wallet_address = request.wallet_address
-        wallet_lower = wallet_address.lower()
+        normalized_address = wallet_address  # Solana addresses are case-sensitive
     else:
         # EVM verification (ECDSA)
         valid = verify_wallet_signature(
@@ -118,7 +118,7 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
         )
         # Normalize EVM wallet address
         wallet_address = Web3.to_checksum_address(request.wallet_address)
-        wallet_lower = wallet_address.lower()
+        normalized_address = wallet_address.lower()  # EVM addresses are case-insensitive
     
     if not valid:
         raise HTTPException(
@@ -127,8 +127,7 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
         )
     
     # Check if Wallet exists (links to Client)
-    # Normalize address: lowercase EVM addresses, keep Solana addresses as-is
-    normalized_address = wallet_lower if not is_solana else wallet_address
+    # Use normalized address for lookup (lowercase for EVM, original case for Solana)
     wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
     
     if not wallet:
