@@ -309,16 +309,40 @@ class BotRunner:
                 input_mint = base_mint  # Token
                 output_mint = quote_mint  # SOL
             
-            # Convert USD to token amount (simplified - assumes SOL price)
-            # For production, should fetch actual price from Jupiter
-            sol_price_usd = 100  # Approximate - should fetch real price
+            # Convert USD to token amount
             if input_mint == quote_mint:  # Buying with SOL
+                # Get SOL price in USD
+                sol_price_data = await jupiter_client.get_price(quote_mint)
+                sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
                 amount_sol = trade_size_usd / sol_price_usd
                 amount = int(amount_sol * 1e9)  # Convert to lamports
+                logger.info(f"  Buy: ${trade_size_usd:.2f} = {amount_sol:.6f} SOL = {amount} lamports")
             else:
-                # Selling token - need to get balance or use config
-                # For now, use a fixed amount (should be improved)
-                amount = int(1e6)  # 1 token (assuming 6 decimals)
+                # Selling token - calculate amount from USD value
+                # Get token price (Token/SOL) and SOL price (SOL/USD)
+                token_price_data = await jupiter_client.get_price(base_mint, quote_mint)
+                token_price = token_price_data.get("price", 0)
+                
+                if token_price == 0:
+                    logger.error(f"  ❌ Could not get price for {base_mint}")
+                    return
+                
+                sol_price_data = await jupiter_client.get_price(quote_mint)
+                sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                
+                # Calculate token price in USD: (Token/SOL) * (SOL/USD) = Token/USD
+                token_price_usd = token_price * sol_price_usd
+                
+                # Calculate token amount needed for trade_size_usd
+                token_amount = trade_size_usd / token_price_usd
+                
+                # Convert to smallest units (assume 9 decimals like most Solana tokens)
+                token_decimals = 9  # TODO: Fetch from token metadata
+                amount = int(token_amount * (10 ** token_decimals))
+                
+                logger.info(f"  Sell: ${trade_size_usd:.2f} = {token_amount:.6f} tokens = {amount} smallest units")
+                logger.info(f"  Token price: {token_price:.8f} {quote_mint[:8]}.../token")
+                logger.info(f"  Token price USD: ${token_price_usd:.6f}/token")
             
             logger.info(f"  Getting quote: {input_mint[:8]}... → {output_mint[:8]}...")
             logger.info(f"  Amount: {amount}")
