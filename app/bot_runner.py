@@ -312,26 +312,43 @@ class BotRunner:
             # Convert USD to token amount
             if input_mint == quote_mint:  # Buying with SOL
                 # Get SOL price in USD
-                sol_price_data = await jupiter_client.get_price(quote_mint)
-                sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                try:
+                    sol_price_data = await jupiter_client.get_price(quote_mint)
+                    sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                except Exception as e:
+                    logger.error(f"  ❌ Failed to get SOL price: {e}")
+                    sol_price_usd = 100  # Use fallback
+                
                 amount_sol = trade_size_usd / sol_price_usd
                 amount = int(amount_sol * 1e9)  # Convert to lamports
-                logger.info(f"  Buy: ${trade_size_usd:.2f} = {amount_sol:.6f} SOL = {amount} lamports")
+                logger.info(f"  Buy: ${trade_size_usd:.2f} = {amount_sol:.6f} SOL = {amount} lamports (SOL price: ${sol_price_usd:.2f})")
             else:
                 # Selling token - calculate amount from USD value
                 # Get token price (Token/SOL) and SOL price (SOL/USD)
-                token_price_data = await jupiter_client.get_price(base_mint, quote_mint)
-                token_price = token_price_data.get("price", 0)
-                
-                if token_price == 0:
-                    logger.error(f"  ❌ Could not get price for {base_mint}")
+                try:
+                    token_price_data = await jupiter_client.get_price(base_mint, quote_mint)
+                    token_price = token_price_data.get("price", 0)
+                except Exception as e:
+                    logger.error(f"  ❌ Failed to get token price for {base_mint}: {e}")
                     return
                 
-                sol_price_data = await jupiter_client.get_price(quote_mint)
-                sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                if token_price == 0:
+                    logger.error(f"  ❌ Could not get price for {base_mint} (price is 0)")
+                    return
+                
+                try:
+                    sol_price_data = await jupiter_client.get_price(quote_mint)
+                    sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                except Exception as e:
+                    logger.error(f"  ❌ Failed to get SOL price: {e}")
+                    sol_price_usd = 100  # Use fallback
                 
                 # Calculate token price in USD: (Token/SOL) * (SOL/USD) = Token/USD
                 token_price_usd = token_price * sol_price_usd
+                
+                if token_price_usd == 0:
+                    logger.error(f"  ❌ Token price USD is 0 (token_price={token_price}, sol_price_usd={sol_price_usd})")
+                    return
                 
                 # Calculate token amount needed for trade_size_usd
                 token_amount = trade_size_usd / token_price_usd
