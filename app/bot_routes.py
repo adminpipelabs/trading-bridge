@@ -247,10 +247,37 @@ def list_bots(
                         is_admin = current_client.account_identifier == "admin" or (current_client.role and current_client.role.lower() == "admin")
                         logger.info(f"  ✅ Wallet found, client: {current_client.account_identifier}, is_admin: {is_admin}")
                     else:
-                        logger.warning(f"  ⚠️  Wallet found but wallet.client is None")
+                        logger.warning(f"  ⚠️  Wallet found but wallet.client is None (client_id: {wallet.client_id})")
+                        # Fallback: Load client directly
+                        current_client = db.query(Client).filter(Client.id == wallet.client_id).first()
+                        if current_client:
+                            is_admin = current_client.account_identifier == "admin" or (current_client.role and current_client.role.lower() == "admin")
+                            logger.info(f"  ✅ Fallback: Loaded client directly: {current_client.account_identifier}, is_admin: {is_admin}")
+                        else:
+                            logger.error(f"  ❌ Client not found for wallet.client_id: {wallet.client_id}")
                 except Exception as client_error:
                     logger.error(f"  ❌ Error accessing wallet.client: {client_error}")
-                    raise
+                    logger.exception(client_error)
+                    # Fallback: Try to load client directly
+                    try:
+                        current_client = db.query(Client).filter(Client.id == wallet.client_id).first()
+                        if current_client:
+                            is_admin = current_client.account_identifier == "admin" or (current_client.role and current_client.role.lower() == "admin")
+                            logger.info(f"  ✅ Exception fallback: Loaded client directly: {current_client.account_identifier}, is_admin: {is_admin}")
+                        else:
+                            logger.error(f"  ❌ Exception fallback: Client not found for wallet.client_id: {wallet.client_id}")
+                            raise HTTPException(
+                                status_code=500,
+                                detail=f"Wallet found but associated client not found: {wallet.client_id}"
+                            )
+                    except HTTPException:
+                        raise
+                    except Exception as fallback_error:
+                        logger.error(f"  ❌ Fallback client load also failed: {fallback_error}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Error loading client for wallet: {str(fallback_error)}"
+                        )
         except Exception as wallet_lookup_error:
             logger.error(f"  ❌ Error in wallet lookup: {wallet_lookup_error}")
             logger.exception(wallet_lookup_error)
