@@ -5,6 +5,7 @@ Connects Pipe Labs Dashboard to cryptocurrency exchanges via ccxt
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 from app.jupiter_routes import router as jupiter_router
 from app.solana_routes import router as solana_router
 
@@ -48,7 +49,25 @@ async def lifespan(app: FastAPI):
         # Don't raise - allow app to start so /health endpoint works
         # But database endpoints will return 503 errors
     
+    # Start bot runner service
+    try:
+        from app.bot_runner import bot_runner
+        asyncio.create_task(bot_runner.start())
+        logger.info("Bot runner service started")
+    except Exception as e:
+        logger.warning(f"Failed to start bot runner: {e}")
+        # Don't fail app startup if bot runner fails
+    
     yield
+    
+    # Shutdown bot runner
+    try:
+        from app.bot_runner import bot_runner
+        bot_runner.shutdown_event.set()
+        logger.info("Bot runner service stopped")
+    except Exception as e:
+        logger.warning(f"Error stopping bot runner: {e}")
+    
     logger.info("Shutting down...")
 
 

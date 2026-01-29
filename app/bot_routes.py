@@ -14,6 +14,7 @@ import logging
 from app.database import get_db, Bot, Client, Wallet, BotWallet, BotTrade
 from app.security import get_current_client
 from app.wallet_encryption import encrypt_private_key, decrypt_private_key
+from app.bot_runner import bot_runner
 from typing import List
 
 logger = logging.getLogger(__name__)
@@ -266,7 +267,7 @@ def get_bot(bot_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{bot_id}/start")
-def start_bot(bot_id: str, db: Session = Depends(get_db)):
+async def start_bot(bot_id: str, db: Session = Depends(get_db)):
     """Start a stopped bot."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
 
@@ -277,21 +278,33 @@ def start_bot(bot_id: str, db: Session = Depends(get_db)):
         return {"status": "already_running", "bot_id": bot_id}
 
     try:
-        # TODO: Integrate with hummingbot_client when ready
-        # from app.hummingbot_client import hummingbot
-        # hummingbot.start_bot(bot.instance_name)
-        bot.status = "running"
-        bot.error = None
-        db.commit()
-        logger.info(f"Bot {bot_id} started")
+        # For Solana bots, start via bot runner
+        if bot.bot_type in ['volume', 'spread']:
+            bot.status = "running"
+            bot.error = None
+            db.commit()
+            # Start bot in background
+            await bot_runner.start_bot(bot_id, db)
+            logger.info(f"Solana bot {bot_id} started")
+        else:
+            # Hummingbot bots (future)
+            # TODO: Integrate with hummingbot_client when ready
+            bot.status = "running"
+            bot.error = None
+            db.commit()
+            logger.info(f"Bot {bot_id} started")
+        
         return {"status": "started", "bot_id": bot_id}
     except Exception as e:
         logger.error(f"Failed to start bot {bot_id}: {e}")
+        bot.status = "error"
+        bot.error = str(e)
+        db.commit()
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/{bot_id}/stop")
-def stop_bot(bot_id: str, db: Session = Depends(get_db)):
+async def stop_bot(bot_id: str, db: Session = Depends(get_db)):
     """Stop a running bot."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
 
@@ -302,12 +315,19 @@ def stop_bot(bot_id: str, db: Session = Depends(get_db)):
         return {"status": "already_stopped", "bot_id": bot_id}
 
     try:
-        # TODO: Integrate with hummingbot_client when ready
-        # from app.hummingbot_client import hummingbot
-        # hummingbot.stop_bot(bot.instance_name)
-        bot.status = "stopped"
-        db.commit()
-        logger.info(f"Bot {bot_id} stopped")
+        # For Solana bots, stop via bot runner
+        if bot.bot_type in ['volume', 'spread']:
+            await bot_runner.stop_bot(bot_id)
+            bot.status = "stopped"
+            db.commit()
+            logger.info(f"Solana bot {bot_id} stopped")
+        else:
+            # Hummingbot bots (future)
+            # TODO: Integrate with hummingbot_client when ready
+            bot.status = "stopped"
+            db.commit()
+            logger.info(f"Bot {bot_id} stopped")
+        
         return {"status": "stopped", "bot_id": bot_id}
     except Exception as e:
         logger.error(f"Failed to stop bot {bot_id}: {e}")
