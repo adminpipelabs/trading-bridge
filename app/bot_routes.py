@@ -221,10 +221,18 @@ def list_bots(
         # Try original case first (for Solana addresses - case sensitive)
         wallet = db.query(Wallet).filter(Wallet.address == wallet_address).first()
         
-        # Try lowercase if not found (for EVM addresses)
+        # Try lowercase if not found (for EVM addresses and case-insensitive lookups)
         if not wallet:
             wallet_lower = wallet_address.lower()
             wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+        
+        # Also try case-insensitive match (some wallets might be stored in different case)
+        if not wallet:
+            # Use ILIKE for case-insensitive match (PostgreSQL specific)
+            from sqlalchemy import func
+            wallet = db.query(Wallet).filter(
+                func.lower(Wallet.address) == wallet_address.lower()
+            ).first()
         
         if wallet:
             current_client = wallet.client
