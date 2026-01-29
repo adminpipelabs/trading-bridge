@@ -322,21 +322,22 @@ class BotRunner:
                     # Fallback: Use quote to estimate SOL price
                     try:
                         # Get a small quote SOL -> USDC to estimate price
-                        from app.solana.jupiter_client import Quote
+                        # Amount must be integer (not float)
                         test_quote = await jupiter_client.get_quote(
                             input_mint=quote_mint,  # SOL
                             output_mint=jupiter_client.USDC_MINT,  # USDC
-                            amount=1e9,  # 1 SOL in lamports
+                            amount=int(1e9),  # 1 SOL in lamports (integer)
                             slippage_bps=50
                         )
-                        if test_quote:
+                        if test_quote and test_quote.out_amount > 0:
                             # Price = USDC received / SOL sent
                             sol_price_usd = test_quote.out_amount / 1e6  # USDC has 6 decimals
-                            logger.info(f"  Estimated SOL price from quote: ${sol_price_usd:.2f}")
+                            logger.info(f"  Estimated SOL price from quote: ${sol_price_usd:.2f} (1 SOL = {test_quote.out_amount/1e6:.2f} USDC)")
                         else:
+                            logger.warning(f"  ⚠️ Quote returned invalid data, using fallback $100")
                             sol_price_usd = 100  # Final fallback
                     except Exception as e2:
-                        logger.error(f"  ❌ Failed to estimate SOL price: {e2}")
+                        logger.warning(f"  ⚠️ Failed to estimate SOL price from quote: {e2}, using fallback $100")
                         sol_price_usd = 100  # Final fallback
                 
                 amount_sol = trade_size_usd / sol_price_usd
