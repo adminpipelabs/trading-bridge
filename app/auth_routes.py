@@ -11,6 +11,11 @@ import os
 import httpx
 import logging
 
+# Solana signature verification imports
+import base58
+from nacl.signing import VerifyKey
+from nacl.exceptions import BadSignatureError
+
 from app.database import get_db, Client, Wallet
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -31,6 +36,27 @@ class VerifyResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: dict
+
+
+def verify_solana_signature(wallet_address: str, message: str, signature: str) -> bool:
+    """Verify a Solana wallet signature (ed25519)"""
+    try:
+        # Decode the public key from base58
+        public_key_bytes = base58.b58decode(wallet_address)
+        
+        # Decode signature from base58
+        signature_bytes = base58.b58decode(signature)
+        
+        # Message as bytes
+        message_bytes = message.encode('utf-8')
+        
+        # Verify using nacl (ed25519)
+        verify_key = VerifyKey(public_key_bytes)
+        verify_key.verify(message_bytes, signature_bytes)
+        return True
+    except (BadSignatureError, Exception) as e:
+        logger.error(f"Solana signature verification failed: {e}")
+        return False
 
 
 def verify_wallet_signature(wallet_address: str, message: str, signature: str) -> bool:
@@ -64,18 +90,41 @@ def get_auth_message(wallet_address: str):
 def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
     """
     Verify wallet signature and authenticate user
+    Supports both EVM (Ethereum) and Solana wallets
     Auto-creates Client if wallet exists in trading-bridge but not in local DB
     """
-    # Verify signature
-    if not verify_wallet_signature(request.wallet_address, request.message, request.signature):
+    # Detect chain by address format
+    # Solana: base58, 32-44 chars, doesn't start with 0x
+    # EVM: starts with 0x, 42 chars total
+    is_solana = not request.wallet_address.startswith("0x") and len(request.wallet_address) >= 32
+    
+    # Verify signature based on chain type
+    if is_solana:
+        # Solana verification (ed25519)
+        valid = verify_solana_signature(
+            request.wallet_address,
+            request.message,
+            request.signature
+        )
+        # Normalize Solana address (keep as-is, lowercase for DB lookup)
+        wallet_address = request.wallet_address
+        wallet_lower = wallet_address.lower()
+    else:
+        # EVM verification (ECDSA)
+        valid = verify_wallet_signature(
+            request.wallet_address,
+            request.message,
+            request.signature
+        )
+        # Normalize EVM wallet address
+        wallet_address = Web3.to_checksum_address(request.wallet_address)
+        wallet_lower = wallet_address.lower()
+    
+    if not valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid signature"
         )
-    
-    # Normalize wallet address
-    wallet_address = Web3.to_checksum_address(request.wallet_address)
-    wallet_lower = wallet_address.lower()
     
     # Check if Wallet exists (links to Client)
     wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
