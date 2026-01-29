@@ -6,8 +6,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.jupiter_routes import router as jupiter_router
-
 from app.solana_routes import router as solana_router
+
 from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio, client_data
 from app.bot_routes import router as bot_router
