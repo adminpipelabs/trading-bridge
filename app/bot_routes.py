@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 import uuid
 import logging
 
-from app.database import get_db, Bot, Client, Wallet
+from app.database import get_db, Bot, Client, Wallet, BotWallet, BotTrade
 from app.security import get_current_client
+from app.wallet_encryption import encrypt_private_key, decrypt_private_key
+from typing import List
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +35,17 @@ class BotConfig(BaseModel):
 class CreateBotRequest(BaseModel):
     name: str = Field(..., description="Bot display name")
     account: str = Field(..., description="Account identifier (must match client account_identifier)")
-    connector: str = Field(..., description="Exchange connector: 'bitmart', 'jupiter'")
-    pair: str = Field(..., description="Trading pair: 'SHARP/USDT', 'SOL/USDC'")
-    strategy: str = Field(..., description="Strategy: 'spread', 'volume', 'grid'")
-    config: Optional[BotConfig] = Field(default_factory=BotConfig)
+    connector: Optional[str] = Field(None, description="Exchange connector: 'bitmart', 'jupiter' (optional for Solana bots)")
+    pair: Optional[str] = Field(None, description="Trading pair: 'SHARP/USDT', 'SOL/USDC' (optional for Solana bots)")
+    strategy: Optional[str] = Field(None, description="Strategy: 'spread', 'volume', 'grid' (optional for Solana bots)")
+    bot_type: Optional[str] = Field(None, description="Bot type: 'volume', 'spread' (for Solana bots)")
+    config: Optional[dict] = Field(default_factory=dict, description="Bot configuration (JSON object)")
+    wallets: Optional[List[dict]] = Field(default_factory=list, description="Wallets for Solana bots: [{'address': str, 'private_key': str}]")
+
+
+class WalletInfo(BaseModel):
+    address: str
+    private_key: str
 
 
 # ============================================================
@@ -60,10 +69,12 @@ def generate_instance_name(bot_id: str, account: str) -> str:
 
 @router.post("/create")
 def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
-    """Create a new bot and persist to database."""
+    """
+    Create a new bot and persist to database.
+    Supports both Hummingbot-style bots and Solana bots.
+    """
     bot_id = str(uuid.uuid4())
-    instance_name = generate_instance_name(bot_id, request.account)
-
+    
     # Verify client exists
     client = db.query(Client).filter(
         Client.account_identifier == request.account
@@ -75,6 +86,19 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
             detail=f"No client found with account_identifier '{request.account}'"
         )
 
+    # Determine if this is a Solana bot
+    is_solana_bot = request.bot_type in ['volume', 'spread']
+    
+    # Generate instance_name only for Hummingbot bots
+    instance_name = None
+    if not is_solana_bot:
+        instance_name = generate_instance_name(bot_id, request.account)
+        if not request.connector or not request.pair or not request.strategy:
+            raise HTTPException(
+                status_code=400,
+                detail="connector, pair, and strategy are required for Hummingbot bots"
+            )
+
     # Create bot record
     bot = Bot(
         id=bot_id,
@@ -85,32 +109,48 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
         connector=request.connector,
         pair=request.pair,
         strategy=request.strategy,
-        status="created",
-        config=request.config.dict() if request.config else {},
+        bot_type=request.bot_type,
+        status="stopped",  # Start stopped, user must explicitly start
+        config=request.config if isinstance(request.config, dict) else (request.config.dict() if request.config else {}),
+        stats={}  # Initialize empty stats
     )
 
     db.add(bot)
+    db.flush()  # Flush to get bot.id
 
-    # Deploy to Hummingbot
-    try:
-        # TODO: Integrate with hummingbot_client when ready
-        # from app.hummingbot_client import hummingbot
-        # hummingbot.deploy_script(
-        #     instance_name=instance_name,
-        #     credentials_profile=request.account,
-        #     script_name=f"{request.strategy}_strategy",
-        #     config={
-        #         "connector": request.connector,
-        #         "trading_pair": request.pair,
-        #         **bot.config
-        #     }
-        # )
-        bot.status = "running"
-        logger.info(f"Bot {bot_id} created successfully")
-    except Exception as e:
-        logger.error(f"Failed to deploy bot {bot_id}: {e}")
-        bot.status = "deploy_failed"
-        bot.error = str(e)
+    # For Solana bots, add wallets
+    if is_solana_bot and request.wallets:
+        for wallet_info in request.wallets:
+            try:
+                encrypted_key = encrypt_private_key(wallet_info['private_key'])
+                bot_wallet = BotWallet(
+                    id=str(uuid.uuid4()),
+                    bot_id=bot_id,
+                    wallet_address=wallet_info['address'],
+                    encrypted_private_key=encrypted_key
+                )
+                db.add(bot_wallet)
+            except Exception as e:
+                logger.error(f"Failed to add wallet to bot {bot_id}: {e}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Failed to encrypt wallet private key: {e}"
+                )
+
+    # Deploy to Hummingbot (only for Hummingbot bots)
+    if not is_solana_bot:
+        try:
+            # TODO: Integrate with hummingbot_client when ready
+            # from app.hummingbot_client import hummingbot
+            # hummingbot.deploy_script(...)
+            bot.status = "created"
+            logger.info(f"Bot {bot_id} created successfully")
+        except Exception as e:
+            logger.error(f"Failed to deploy bot {bot_id}: {e}")
+            bot.status = "deploy_failed"
+            bot.error = str(e)
+    else:
+        logger.info(f"Solana bot {bot_id} created successfully")
 
     db.commit()
     db.refresh(bot)
@@ -121,6 +161,7 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
 @router.get("")
 def list_bots(
     account: Optional[str] = Query(None, description="Filter by account identifier"),
+    bot_type: Optional[str] = Query(None, description="Filter by bot type: 'volume', 'spread'"),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
     db: Session = Depends(get_db)
 ):
@@ -169,6 +210,10 @@ def list_bots(
         if not is_admin:
             query = query.filter(Bot.account == current_client.account_identifier)
         # Admin can see all bots (no filter)
+    
+    # Filter by bot_type if provided
+    if bot_type:
+        query = query.filter(Bot.bot_type == bot_type)
     
     bots = query.all()
     
@@ -233,6 +278,134 @@ def stop_bot(bot_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Failed to stop bot {bot_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/{bot_id}")
+def update_bot(bot_id: str, request: dict, db: Session = Depends(get_db)):
+    """Update bot configuration."""
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    # Update fields if provided
+    if "name" in request:
+        bot.name = request["name"]
+    if "config" in request:
+        bot.config = request["config"]
+    if "status" in request:
+        bot.status = request["status"]
+    
+    bot.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(bot)
+
+    return bot.to_dict()
+
+
+@router.get("/{bot_id}/stats")
+def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
+    """Get bot statistics."""
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    # Get recent trades
+    recent_trades = db.query(BotTrade).filter(
+        BotTrade.bot_id == bot_id
+    ).order_by(BotTrade.created_at.desc()).limit(100).all()
+
+    trades_data = [{
+        "id": t.id,
+        "side": t.side,
+        "amount": float(t.amount) if t.amount else None,
+        "price": float(t.price) if t.price else None,
+        "value_usd": float(t.value_usd) if t.value_usd else None,
+        "tx_signature": t.tx_signature,
+        "status": t.status,
+        "created_at": t.created_at.isoformat() if t.created_at else None
+    } for t in recent_trades]
+
+    return {
+        "bot_id": bot_id,
+        "stats": bot.stats or {},
+        "recent_trades": trades_data,
+        "total_trades": len(trades_data)
+    }
+
+
+@router.post("/{bot_id}/wallets")
+def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db)):
+    """Add a wallet to a Solana bot."""
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    if not bot.bot_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallets can only be added to Solana bots (bot_type must be set)"
+        )
+
+    # Check if wallet already exists
+    existing = db.query(BotWallet).filter(
+        BotWallet.bot_id == bot_id,
+        BotWallet.wallet_address == wallet.address
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Wallet already exists for this bot"
+        )
+
+    try:
+        encrypted_key = encrypt_private_key(wallet.private_key)
+        bot_wallet = BotWallet(
+            id=str(uuid.uuid4()),
+            bot_id=bot_id,
+            wallet_address=wallet.address,
+            encrypted_private_key=encrypted_key
+        )
+        db.add(bot_wallet)
+        db.commit()
+        db.refresh(bot_wallet)
+
+        return {
+            "id": bot_wallet.id,
+            "wallet_address": bot_wallet.wallet_address,
+            "created_at": bot_wallet.created_at.isoformat() if bot_wallet.created_at else None
+        }
+    except Exception as e:
+        logger.error(f"Failed to add wallet to bot {bot_id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to add wallet: {e}"
+        )
+
+
+@router.delete("/{bot_id}/wallets/{wallet_address}")
+def remove_bot_wallet(bot_id: str, wallet_address: str, db: Session = Depends(get_db)):
+    """Remove a wallet from a Solana bot."""
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    bot_wallet = db.query(BotWallet).filter(
+        BotWallet.bot_id == bot_id,
+        BotWallet.wallet_address == wallet_address
+    ).first()
+
+    if not bot_wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found for this bot")
+
+    db.delete(bot_wallet)
+    db.commit()
+
+    return {"status": "deleted", "wallet_address": wallet_address}
 
 
 @router.delete("/{bot_id}")
