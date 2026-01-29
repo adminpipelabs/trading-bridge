@@ -159,10 +159,16 @@ class Bot(Base):
         Index('idx_bots_status', 'status'),
     )
     
-    def to_dict(self):
-        """Convert bot to dictionary for API responses"""
-        chain = "solana" if "jupiter" in self.connector.lower() else "evm"
-        return {
+           def to_dict(self):
+               """Convert bot to dictionary for API responses"""
+               # Handle None connector (for Solana bots that might not have connector set)
+               if self.connector:
+                   chain = "solana" if "jupiter" in self.connector.lower() else "evm"
+               elif self.bot_type in ['volume', 'spread']:
+                   chain = "solana"  # Solana bots
+               else:
+                   chain = "evm"  # Default to EVM
+               return {
             "id": self.id,
             "client_id": self.client_id,
             "account": self.account,
