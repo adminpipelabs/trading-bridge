@@ -217,9 +217,16 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
     """
     # Normalize address: lowercase EVM addresses, keep Solana addresses as-is
     is_evm = wallet_address.startswith("0x")
-    normalized_address = wallet_address.lower() if is_evm else wallet_address
     
-    wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
+    if is_evm:
+        normalized_address = wallet_address.lower()
+        wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
+    else:
+        # Solana: try both original case and lowercase (for backward compatibility)
+        normalized_address = wallet_address
+        wallet = db.query(Wallet).filter(
+            (Wallet.address == normalized_address) | (Wallet.address == normalized_address.lower())
+        ).filter(Wallet.chain == 'solana').first()
     if not wallet:
         raise HTTPException(
             status_code=404,

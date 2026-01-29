@@ -127,8 +127,15 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
         )
     
     # Check if Wallet exists (links to Client)
-    # Use normalized address for lookup (lowercase for EVM, original case for Solana)
-    wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
+    # For Solana: try both original case and lowercase (for backward compatibility with existing data)
+    # For EVM: use lowercase
+    if is_solana:
+        # Try original case first, then lowercase (for existing lowercase entries)
+        wallet = db.query(Wallet).filter(
+            (Wallet.address == normalized_address) | (Wallet.address == normalized_address.lower())
+        ).filter(Wallet.chain == 'solana').first()
+    else:
+        wallet = db.query(Wallet).filter(Wallet.address == normalized_address).first()
     
     if not wallet:
         # Wallet not found - reject login
