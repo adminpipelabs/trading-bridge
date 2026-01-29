@@ -89,6 +89,40 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
     # Determine if this is a Solana bot
     is_solana_bot = request.bot_type in ['volume', 'spread']
     
+    # Validate bot_type if provided
+    if request.bot_type and request.bot_type not in ['volume', 'spread']:
+        raise HTTPException(
+            status_code=400,
+            detail="bot_type must be 'volume' or 'spread' for Solana bots"
+        )
+    
+    # Validate Solana bot requirements
+    if is_solana_bot:
+        if not request.config:
+            raise HTTPException(
+                status_code=400,
+                detail="config is required for Solana bots"
+            )
+        if not request.wallets or len(request.wallets) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one wallet is required for Solana bots"
+            )
+        # Validate wallet format
+        for wallet_info in request.wallets:
+            if 'address' not in wallet_info or 'private_key' not in wallet_info:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Each wallet must have 'address' and 'private_key' fields"
+                )
+            # Basic Solana address validation (32-44 base58 chars)
+            addr = wallet_info['address']
+            if not (32 <= len(addr) <= 44):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid Solana wallet address format: {addr} (must be 32-44 characters)"
+                )
+    
     # Generate instance_name only for Hummingbot bots
     instance_name = None
     if not is_solana_bot:
