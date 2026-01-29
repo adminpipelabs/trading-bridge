@@ -257,6 +257,27 @@ def list_bots(
     
     logger.info(f"🔍 list_bots called with wallet_address: {wallet_address[:8] if wallet_address else 'None'}...")
     
+    # FIRST: Check if admin account exists (for admin access without wallet_address)
+    # This allows admin to access without X-Wallet-Address header
+    admin_client = db.query(Client).filter(Client.account_identifier == "admin").first()
+    if admin_client:
+        # If no wallet_address provided, assume admin access (for admin users)
+        # Admin can access via JWT token without wallet_address header
+        if not wallet_address:
+            logger.info("  ℹ️  No wallet_address provided - checking for admin access...")
+            # Check Authorization header for admin token
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                # Token provided - allow admin access if admin account exists
+                logger.info("  ✅ Authorization token found - granting admin access")
+                current_client = admin_client
+                is_admin = True
+            else:
+                logger.warning("  ⚠️  No Authorization token - requiring wallet_address")
+        else:
+            # Wallet address provided - check if it's admin wallet
+            logger.info(f"  🔍 Wallet address provided: {wallet_address[:8]}...")
+    
     # If wallet_address provided, get client and check if admin
     if wallet_address:
         try:
