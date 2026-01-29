@@ -210,8 +210,10 @@ class BotRunner:
                         
                         # Decrypt private key
                         try:
-                            private_key = decrypt_private_key(wallet.encrypted_private_key)
-                            logger.info(f"  ✅ Private key decrypted")
+                            private_key_raw = decrypt_private_key(wallet.encrypted_private_key)
+                            # Log first/last few chars for debugging (don't log full key!)
+                            logger.info(f"  ✅ Private key decrypted (length: {len(private_key_raw)}, starts with: {private_key_raw[:4]}..., ends with: ...{private_key_raw[-4:]})")
+                            private_key = private_key_raw
                         except Exception as e:
                             logger.error(f"  ❌ Failed to decrypt private key: {e}")
                             await asyncio.sleep(60)
@@ -236,10 +238,19 @@ class BotRunner:
                             await asyncio.sleep(60)
                             continue
                         
+                        # Validate wallet address format (must be base58 Solana address)
+                        wallet_address = wallet.wallet_address.strip()
+                        if not wallet_address or len(wallet_address) < 32:
+                            logger.error(f"  ❌ Invalid wallet address format: {wallet_address[:20]}...")
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        logger.info(f"  Wallet address: {wallet_address[:8]}...{wallet_address[-8:]}")
+                        
                         # Execute swap
                         await self._execute_volume_trade(
                             bot_id=bot_id,
-                            wallet_address=wallet.wallet_address,
+                            wallet_address=wallet_address,
                             private_key=private_key,
                             base_mint=base_mint,
                             quote_mint=quote_mint,

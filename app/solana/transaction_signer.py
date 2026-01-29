@@ -69,18 +69,35 @@ class SolanaTransactionSigner:
             else:
                 raise ValueError(f"Invalid private key length: {len(decoded)}")
         except Exception as base58_error:
-            # Base58 failed, try JSON array format
-            logger.debug(f"Base58 decode failed: {base58_error}, trying JSON array format...")
+            # Base58 failed, try other formats
+            logger.debug(f"Base58 decode failed: {base58_error}, trying alternative formats...")
             try:
                 import json
-                # Try parsing as JSON array
+                key_bytes = None
+                
+                # Try JSON array format
                 if private_key.startswith('['):
                     key_bytes = bytes(json.loads(private_key))
+                # Try comma-separated numbers
                 elif ',' in private_key:
-                    # Comma-separated numbers
                     key_bytes = bytes([int(x.strip()) for x in private_key.split(',')])
+                # Try hex format (with or without 0x prefix, with or without underscores)
+                elif '0x' in private_key.lower() or all(c in '0123456789abcdefABCDEF_' for c in private_key):
+                    # Remove 0x prefix and underscores
+                    hex_str = private_key.replace('0x', '').replace('0X', '').replace('_', '').replace('-', '')
+                    try:
+                        key_bytes = bytes.fromhex(hex_str)
+                    except ValueError as hex_error:
+                        logger.error(f"Failed to parse hex: {hex_error}")
+                        raise ValueError(f"Invalid hex format. Base58 error: {base58_error}")
+                # Try underscore-separated decimal numbers
+                elif '_' in private_key and all(c.isdigit() or c == '_' for c in private_key):
+                    key_bytes = bytes([int(x) for x in private_key.split('_') if x])
                 else:
                     raise ValueError(f"Unknown private key format. Base58 error: {base58_error}")
+                
+                if not key_bytes:
+                    raise ValueError(f"Could not parse private key. Base58 error: {base58_error}")
                 
                 if len(key_bytes) == 64:
                     return Keypair.from_bytes(key_bytes)
@@ -88,9 +105,10 @@ class SolanaTransactionSigner:
                     return Keypair.from_seed(key_bytes)
                 else:
                     raise ValueError(f"Invalid key length: {len(key_bytes)}, expected 32 or 64")
-            except Exception as json_error:
-                logger.error(f"Failed to parse private key. Base58 error: {base58_error}, JSON error: {json_error}")
-                raise ValueError(f"Invalid private key format. Must be base58 string or JSON array. Base58 error: {base58_error}")
+            except Exception as parse_error:
+                logger.error(f"Failed to parse private key. Base58 error: {base58_error}, Parse error: {parse_error}")
+                logger.error(f"Private key sample (first 50 chars): {private_key[:50]}...")
+                raise ValueError(f"Invalid private key format. Must be base58, JSON array, hex, or comma/underscore-separated. Base58 error: {base58_error}, Parse error: {parse_error}")
     
     @staticmethod
     def get_public_key(private_key: str) -> str:

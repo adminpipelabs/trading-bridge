@@ -190,9 +190,22 @@ class JupiterClient:
         Returns:
             SwapTransaction with base64 encoded transaction
         """
+        # Validate and normalize wallet address (must be base58 Solana address)
+        import base58
+        try:
+            # Try to decode to validate it's a valid base58 address
+            decoded = base58.b58decode(user_public_key)
+            if len(decoded) != 32:
+                raise ValueError(f"Invalid Solana address length: {len(decoded)}, expected 32 bytes")
+            # Re-encode to ensure proper format
+            normalized_address = base58.b58encode(decoded).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Invalid wallet address format: {user_public_key[:20]}... Error: {e}")
+            raise ValueError(f"Invalid Solana wallet address format: {e}")
+        
         payload = {
             "quoteResponse": quote.raw_response,
-            "userPublicKey": user_public_key,
+            "userPublicKey": normalized_address,
             "wrapAndUnwrapSol": wrap_unwrap_sol,
             "dynamicComputeUnitLimit": True
         }
