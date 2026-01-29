@@ -140,20 +140,13 @@ class SolanaTransactionSigner:
         # Get keypair
         keypair = self.keypair_from_private_key(private_key)
         
-        # Sign the transaction - solders VersionedTransaction doesn't have .sign()
-        # Instead, sign the message and create a new VersionedTransaction with signatures
+        # Sign the transaction - solders VersionedTransaction constructor takes keypairs, not signatures
+        # It will sign internally when we pass keypairs
         message = tx.message
-        signatures = list(tx.signatures)
         
-        # Sign the message bytes
-        message_bytes = bytes(message)
-        signature = keypair.sign_message(message_bytes)
-        
-        # Replace first signature (usually the signer)
-        signatures[0] = signature
-        
-        # Create new signed transaction with message and signatures
-        signed_tx = VersionedTransaction(message, signatures)
+        # Create signed transaction with keypair (solders will sign internally)
+        # VersionedTransaction(message, [keypair1, keypair2, ...])
+        signed_tx = VersionedTransaction(message, [keypair])
         
         # Return base64 encoded
         return base64.b64encode(bytes(signed_tx)).decode('utf-8')
