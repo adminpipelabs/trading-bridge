@@ -254,9 +254,13 @@ def list_bots(
                 
                 if admin_client:
                     # Allow admin access even if wallet not in wallets table
+                    # Check by account_identifier == "admin" (more reliable than role field)
                     current_client = admin_client
-                    is_admin = True
-                    logger.info(f"Admin access granted via account_identifier check for wallet: {wallet_address[:8]}...")
+                    is_admin = admin_client.account_identifier == "admin"
+                    if is_admin:
+                        logger.info(f"Admin access granted via account_identifier check for wallet: {wallet_address[:8]}...")
+                    else:
+                        logger.warning(f"Account with identifier 'admin' found but is_admin=False. Role: {admin_client.role}")
                 else:
                     # Wallet not found and no admin account - raise error
                     raise HTTPException(
