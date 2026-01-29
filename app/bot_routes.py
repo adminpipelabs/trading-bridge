@@ -246,13 +246,23 @@ def list_bots(
                 current_client = client_by_wallet
                 is_admin = current_client.account_identifier == "admin" or current_client.role == "admin"
             else:
-                # Wallet not found in either table - raise error
-                # But first check if this might be an admin trying to access without wallet
-                # For now, raise error - admin should have wallet registered
-                raise HTTPException(
-                    status_code=403,
-                    detail="Wallet address not registered. Please ensure your wallet is registered in the system."
-                )
+                # Wallet not found - check if admin account exists and allow access
+                # This handles cases where admin wallet isn't in wallets table
+                admin_client = db.query(Client).filter(
+                    Client.account_identifier == "admin"
+                ).first()
+                
+                if admin_client:
+                    # Allow admin access even if wallet not in wallets table
+                    current_client = admin_client
+                    is_admin = True
+                    logger.info(f"Admin access granted via account_identifier check for wallet: {wallet_address[:8]}...")
+                else:
+                    # Wallet not found and no admin account - raise error
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Wallet address not registered. Please ensure your wallet is registered in the system."
+                    )
     
     # Admin can list all bots (or filter by client_id/account)
     if is_admin:
