@@ -16,6 +16,7 @@ from app.database import get_db_session, Bot, BotWallet, BotTrade
 from app.wallet_encryption import decrypt_private_key
 from app.solana.jupiter_client import JupiterClient
 from app.solana.transaction_signer import SolanaTransactionSigner
+from circuitbreaker import CircuitBreakerError
 
 logger = logging.getLogger(__name__)
 

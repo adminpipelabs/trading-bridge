@@ -7,9 +7,18 @@ import httpx
 import os
 import base64
 import base58
+import logging
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
+from circuitbreaker import circuit
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    RetryError
+)
 
 
 class OrderStatus(str, Enum):
@@ -49,7 +58,7 @@ class LimitOrder:
 
 
 class JupiterClient:
-    """Client for Jupiter DEX Aggregator API"""
+    """Client for Jupiter DEX Aggregator API with circuit breaker and retry logic"""
     
     # API endpoints
     QUOTE_API = "https://public.jupiterapi.com"
@@ -66,15 +75,24 @@ class JupiterClient:
         self.api_key = os.getenv("JUPITER_API_KEY", "")
         headers = {"x-api-key": self.api_key} if self.api_key else {}
         self.client = httpx.AsyncClient(timeout=30.0, headers=headers)
+        self.logger = logging.getLogger(__name__)
     
     async def close(self):
         await self.client.aclose()
     
     # ============ PRICE FEEDS ============
     
+    @circuit(failure_threshold=5, recovery_timeout=60, expected_exception=httpx.HTTPStatusError)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
+        reraise=True
+    )
     async def get_price(self, token_mint: str, vs_token: str = None) -> Dict[str, Any]:
         """
         Get token price from Jupiter Price API
+        Protected by circuit breaker and retry logic
         
         Args:
             token_mint: Token mint address
@@ -82,49 +100,93 @@ class JupiterClient:
         
         Returns:
             Price data including price, confidence, etc.
+        
+        Raises:
+            httpx.HTTPStatusError: On API errors (retried up to 3 times)
+            circuitbreaker.CircuitBreakerError: When circuit is open
         """
         vs = vs_token or self.USDC_MINT
         
-        response = await self.client.get(
-            f"{self.PRICE_API}",
-            params={
-                "ids": token_mint,
-                "vsToken": vs
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        if token_mint in data.get("data", {}):
-            token_data = data["data"][token_mint]
-            return {
-                "mint": token_mint,
-                "price": float(token_data.get("price", 0)),
-                "vs_token": vs,
-                "confidence": token_data.get("confidence"),
-                "timestamp": data.get("timeTaken")
-            }
-        
-        raise ValueError(f"Price not found for {token_mint}")
+        try:
+            response = await self.client.get(
+                f"{self.PRICE_API}",
+                params={
+                    "ids": token_mint,
+                    "vsToken": vs
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            if token_mint in data.get("data", {}):
+                token_data = data["data"][token_mint]
+                return {
+                    "mint": token_mint,
+                    "price": float(token_data.get("price", 0)),
+                    "vs_token": vs,
+                    "confidence": token_data.get("confidence"),
+                    "timestamp": data.get("timeTaken")
+                }
+            
+            raise ValueError(f"Price not found for {token_mint}")
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(
+                f"Jupiter price API error: {e.response.status_code}",
+                extra={"token_mint": token_mint, "vs_token": vs, "status_code": e.response.status_code}
+            )
+            raise
+        except httpx.RequestError as e:
+            self.logger.warning(
+                f"Jupiter price API request error: {e}",
+                extra={"token_mint": token_mint, "vs_token": vs}
+            )
+            raise
     
+    @circuit(failure_threshold=5, recovery_timeout=60, expected_exception=httpx.HTTPStatusError)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
+        reraise=True
+    )
     async def get_prices_batch(self, token_mints: List[str]) -> Dict[str, float]:
-        """Get prices for multiple tokens"""
-        response = await self.client.get(
-            f"{self.PRICE_API}",
-            params={"ids": ",".join(token_mints)}
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        prices = {}
-        for mint in token_mints:
-            if mint in data.get("data", {}):
-                prices[mint] = float(data["data"][mint].get("price", 0))
-        
-        return prices
+        """Get prices for multiple tokens (protected by circuit breaker and retry)"""
+        try:
+            response = await self.client.get(
+                f"{self.PRICE_API}",
+                params={"ids": ",".join(token_mints)}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            prices = {}
+            for mint in token_mints:
+                if mint in data.get("data", {}):
+                    prices[mint] = float(data["data"][mint].get("price", 0))
+            
+            return prices
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(
+                f"Jupiter batch price API error: {e.response.status_code}",
+                extra={"token_count": len(token_mints), "status_code": e.response.status_code}
+            )
+            raise
+        except httpx.RequestError as e:
+            self.logger.warning(
+                f"Jupiter batch price API request error: {e}",
+                extra={"token_count": len(token_mints)}
+            )
+            raise
     
     # ============ SWAPS (Volume Generation) ============
     
+    @circuit(failure_threshold=5, recovery_timeout=60, expected_exception=httpx.HTTPStatusError)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
+        reraise=True
+    )
     async def get_quote(
         self,
         input_mint: str,
@@ -134,7 +196,7 @@ class JupiterClient:
         swap_mode: str = "ExactIn"
     ) -> Quote:
         """
-        Get a swap quote from Jupiter
+        Get a swap quote from Jupiter (protected by circuit breaker and retry)
         
         Args:
             input_mint: Input token mint address
@@ -146,29 +208,54 @@ class JupiterClient:
         Returns:
             Quote object with route and amounts
         """
-        response = await self.client.get(
-            f"{self.QUOTE_API}/quote",
-            params={
-                "inputMint": input_mint,
-                "outputMint": output_mint,
-                "amount": str(amount),
-                "slippageBps": slippage_bps,
-                "swapMode": swap_mode
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        return Quote(
-            input_mint=data["inputMint"],
-            output_mint=data["outputMint"],
-            in_amount=int(data["inAmount"]),
-            out_amount=int(data["outAmount"]),
-            price_impact_pct=float(data.get("priceImpactPct", 0)),
-            route_plan=data.get("routePlan", []),
-            raw_response=data
-        )
+        try:
+            response = await self.client.get(
+                f"{self.QUOTE_API}/quote",
+                params={
+                    "inputMint": input_mint,
+                    "outputMint": output_mint,
+                    "amount": str(amount),
+                    "slippageBps": slippage_bps,
+                    "swapMode": swap_mode
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            return Quote(
+                input_mint=data["inputMint"],
+                output_mint=data["outputMint"],
+                in_amount=int(data["inAmount"]),
+                out_amount=int(data["outAmount"]),
+                price_impact_pct=float(data.get("priceImpactPct", 0)),
+                route_plan=data.get("routePlan", []),
+                raw_response=data
+            )
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(
+                f"Jupiter quote API error: {e.response.status_code}",
+                extra={
+                    "input_mint": input_mint[:8] + "...",
+                    "output_mint": output_mint[:8] + "...",
+                    "amount": amount,
+                    "status_code": e.response.status_code
+                }
+            )
+            raise
+        except httpx.RequestError as e:
+            self.logger.warning(
+                f"Jupiter quote API request error: {e}",
+                extra={"input_mint": input_mint[:8] + "...", "output_mint": output_mint[:8] + "..."}
+            )
+            raise
     
+    @circuit(failure_threshold=5, recovery_timeout=60, expected_exception=httpx.HTTPStatusError)
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.RequestError)),
+        reraise=True
+    )
     async def get_swap_transaction(
         self,
         quote: Quote,
@@ -178,7 +265,7 @@ class JupiterClient:
         compute_unit_price_micro_lamports: Optional[int] = None
     ) -> SwapTransaction:
         """
-        Get a swap transaction to sign
+        Get a swap transaction to sign (protected by circuit breaker and retry)
         
         Args:
             quote: Quote from get_quote()
@@ -203,17 +290,30 @@ class JupiterClient:
         if compute_unit_price_micro_lamports:
             payload["computeUnitPriceMicroLamports"] = compute_unit_price_micro_lamports
         
-        response = await self.client.post(
-            f"{self.SWAP_API}/swap",
-            json=payload
-        )
-        response.raise_for_status()
-        data = response.json()
-        
-        return SwapTransaction(
-            transaction=data["swapTransaction"],
-            last_valid_block_height=data.get("lastValidBlockHeight", 0)
-        )
+        try:
+            response = await self.client.post(
+                f"{self.SWAP_API}/swap",
+                json=payload
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            return SwapTransaction(
+                transaction=data["swapTransaction"],
+                last_valid_block_height=data.get("lastValidBlockHeight", 0)
+            )
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(
+                f"Jupiter swap API error: {e.response.status_code}",
+                extra={"user_public_key": user_public_key[:8] + "...", "status_code": e.response.status_code}
+            )
+            raise
+        except httpx.RequestError as e:
+            self.logger.warning(
+                f"Jupiter swap API request error: {e}",
+                extra={"user_public_key": user_public_key[:8] + "..."}
+            )
+            raise
     
     # ============ LIMIT ORDERS (Market Making) ============
     
