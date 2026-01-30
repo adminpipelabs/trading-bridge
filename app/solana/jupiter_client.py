@@ -190,30 +190,9 @@ class JupiterClient:
         Returns:
             SwapTransaction with base64 encoded transaction
         """
-        # Validate and normalize wallet address (must be base58 Solana address)
-        import base58
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        try:
-            # Try to decode to validate it's a valid base58 address
-            decoded = base58.b58decode(user_public_key)
-            # Solana addresses can be 32 bytes (standard) or 33 bytes (with version byte)
-            # Accept both but normalize to 32 bytes if it's 33
-            if len(decoded) == 33:
-                # Remove version byte (first byte) if present
-                decoded = decoded[1:]
-            elif len(decoded) != 32:
-                raise ValueError(f"Invalid Solana address length: {len(decoded)}, expected 32 bytes")
-            # Re-encode to ensure proper format
-            normalized_address = base58.b58encode(decoded).decode('utf-8')
-        except Exception as e:
-            logger.error(f"Invalid wallet address format: {user_public_key[:20]}... Error: {e}")
-            raise ValueError(f"Invalid Solana wallet address format: {e}")
-        
         payload = {
             "quoteResponse": quote.raw_response,
-            "userPublicKey": normalized_address,
+            "userPublicKey": user_public_key,
             "wrapAndUnwrapSol": wrap_unwrap_sol,
             "dynamicComputeUnitLimit": True
         }
@@ -224,27 +203,11 @@ class JupiterClient:
         if compute_unit_price_micro_lamports:
             payload["computeUnitPriceMicroLamports"] = compute_unit_price_micro_lamports
         
-        import logging
-        logger = logging.getLogger(__name__)
-        
         response = await self.client.post(
             f"{self.SWAP_API}/swap",
             json=payload
         )
-        
-        if response.status_code != 200:
-            error_detail = "Unknown error"
-            try:
-                error_data = response.json()
-                error_detail = error_data.get("error", {}).get("message", str(error_data))
-            except:
-                error_detail = response.text[:500]
-            
-            logger.error(f"Jupiter swap API error {response.status_code}: {error_detail}")
-            logger.error(f"Payload keys: {list(payload.keys())}")
-            logger.error(f"Quote response keys: {list(quote.raw_response.keys()) if quote.raw_response else 'None'}")
-            response.raise_for_status()
-        
+        response.raise_for_status()
         data = response.json()
         
         return SwapTransaction(

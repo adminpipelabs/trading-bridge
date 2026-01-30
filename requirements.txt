@@ -33,3 +33,6 @@ psycopg2-binary>=2.9.0
 
 # Encryption
 cryptography>=41.0.0
+
+# Rate limiting
+slowapi>=0.1.9

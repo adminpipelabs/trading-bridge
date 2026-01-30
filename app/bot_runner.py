@@ -421,7 +421,15 @@ class BotRunner:
             )
             
             if result.success:
-                logger.info(f"  ✅ Trade successful! Signature: {result.signature[:16]}...")
+                logger.info(
+                    "Trade successful",
+                    extra={
+                        "bot_id": str(bot_id),
+                        "side": side,
+                        "amount": trade_size_usd,
+                        "signature": result.signature[:20] + "..." if result.signature else None,
+                    }
+                )
                 
                 # Calculate actual trade value
                 actual_value_usd = (quote.out_amount / 1e9) * sol_price_usd if output_mint == quote_mint else trade_size_usd
@@ -453,7 +461,15 @@ class BotRunner:
                     db.commit()
                     logger.info(f"  📊 Updated stats: ${stats['volume_today']:,.2f} today")
             else:
-                logger.error(f"  ❌ Trade failed: {result.error}")
+                logger.error(
+                    "Trade failed",
+                    extra={
+                        "bot_id": str(bot_id),
+                        "side": side,
+                        "amount": trade_size_usd,
+                        "error": str(result.error)[:200] if result.error else "Unknown error",
+                    }
+                )
                 
         except Exception as e:
             logger.error(f"  ❌ Error executing trade: {e}")

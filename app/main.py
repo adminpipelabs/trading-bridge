@@ -2,8 +2,11 @@
 Trading Bridge - Main FastAPI Application
 Connects Pipe Labs Dashboard to cryptocurrency exchanges via ccxt
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 import asyncio
 from app.jupiter_routes import router as jupiter_router
@@ -19,8 +22,63 @@ from app.database import init_db
 from app.services.exchange import exchange_manager
 import os
 import logging
+import json
+from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+
+class JSONFormatter(logging.Formatter):
+    """Custom JSON formatter for structured logging."""
+    def format(self, record):
+        log_obj = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        
+        # Add extra fields if present
+        if hasattr(record, 'bot_id'):
+            log_obj['bot_id'] = record.bot_id
+        if hasattr(record, 'trade_id'):
+            log_obj['trade_id'] = record.trade_id
+        if hasattr(record, 'amount'):
+            log_obj['amount'] = record.amount
+        if hasattr(record, 'side'):
+            log_obj['side'] = record.side
+        if hasattr(record, 'signature'):
+            log_obj['signature'] = record.signature
+        if hasattr(record, 'error'):
+            log_obj['error'] = record.error
+            
+        # Add exception info if present
+        if record.exc_info:
+            log_obj['exception'] = self.formatException(record.exc_info)
+            
+        return json.dumps(log_obj)
+
+
+def setup_logging():
+    """Configure structured JSON logging."""
+    # Root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Remove existing handlers
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add JSON handler
+    handler = logging.StreamHandler()
+    handler.setFormatter(JSONFormatter())
+    root_logger.addHandler(handler)
+    
+    # Reduce noise from libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+# Setup structured logging
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -160,14 +218,26 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# CORS middleware - Restricted to specific origins for security
+ALLOWED_ORIGINS = [
+    "https://app.pipelabs.xyz",
+    "https://pipelabs.xyz",
+    "http://localhost:3000",  # Local development
+    "http://localhost:5173",  # Vite dev server
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure as needed for production
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Rate limiting - Initialize limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Include routers
 app.include_router(accounts.router, tags=["Accounts"])
@@ -194,18 +264,22 @@ async def root():
 
 
 @app.get("/health")
-async def health_check():
-    """Health check endpoint"""
+@limiter.limit("1000/minute")  # Health checks need frequent access
+async def health_check(request: Request):
+    """Main health check endpoint."""
     import os
     from app.database import engine, SessionLocal
+    from datetime import datetime
     
     # Check bot runner status
     bot_runner_status = "unknown"
     bot_runner_running = False
+    active_bots = 0
     try:
         from app.bot_runner import bot_runner
-        bot_runner_running = len(bot_runner.running_bots) > 0
-        bot_runner_status = f"running ({len(bot_runner.running_bots)} bots)" if bot_runner_running else "started (0 bots)"
+        active_bots = len(bot_runner.running_bots) if bot_runner else 0
+        bot_runner_running = active_bots > 0
+        bot_runner_status = "running" if bot_runner_running else "idle"
     except Exception as e:
         bot_runner_status = f"error: {str(e)[:50]}"
     
@@ -214,8 +288,63 @@ async def health_check():
         "status": "healthy",
         "service": "Trading Bridge",
         "database": database_status,
-        "bot_runner": bot_runner_status
+        "bot_runner": {
+            "status": bot_runner_status,
+            "active_bots": active_bots,
+        },
+        "timestamp": datetime.utcnow().isoformat(),
     }
+
+
+@app.get("/health/bot-runner")
+@limiter.limit("1000/minute")  # Health checks need frequent access
+async def bot_runner_health(request: Request):
+    """Health check specifically for bot runner service."""
+    from datetime import datetime
+    from app.database import get_db_session, Bot
+    
+    try:
+        from app.bot_runner import bot_runner
+        
+        if not bot_runner:
+            return {
+                "status": "not_initialized",
+                "running_bots": 0,
+                "bots": [],
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        
+        # Get bot details from database
+        db = get_db_session()
+        bots_info = []
+        try:
+            for bot_id in bot_runner.running_bots.keys():
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bots_info.append({
+                        "id": str(bot_id),
+                        "name": bot.name or "Unknown",
+                        "status": "running",
+                        "bot_type": bot.bot_type or "unknown",
+                        "last_check": datetime.utcnow().isoformat(),  # Could track actual last check if we add it
+                    })
+        finally:
+            db.close()
+        
+        return {
+            "status": "healthy",
+            "running_bots": len(bot_runner.running_bots),
+            "bots": bots_info,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "running_bots": 0,
+            "bots": [],
+            "timestamp": datetime.utcnow().isoformat(),
+        }
 
 
 @app.post("/init-db")
