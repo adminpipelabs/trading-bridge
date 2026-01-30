@@ -602,3 +602,58 @@ class BotRunner:
         )
         db.add(trade)
         db.commit()
+    
+    async def _run_spread_bot(self, bot_id: str):
+        """Run spread/market making bot"""
+        logger.info(f"📈 Spread bot {bot_id} starting main loop...")
+        
+        while not self.shutdown_event.is_set():
+            try:
+                db = get_db_session()
+                try:
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                    if not bot or bot.status != "running":
+                        logger.info(f"Bot {bot_id} stopped or not found - exiting loop")
+                        break
+                    
+                    config = bot.config or {}
+                    logger.info(f"📈 Spread bot {bot_id} - Refreshing orders...")
+                    
+                    # TODO: Implement spread bot logic
+                    logger.warning(f"  ⚠️  Spread bot logic not yet implemented")
+                    
+                    # Sleep for refresh interval
+                    refresh_seconds = config.get('refresh_seconds', 30)
+                    await asyncio.sleep(refresh_seconds)
+                    
+                finally:
+                    db.close()
+                    
+            except asyncio.CancelledError:
+                logger.info(f"Spread bot {bot_id} cancelled")
+                break
+            except Exception as e:
+                logger.error(f"❌ Error in spread bot {bot_id} loop: {e}")
+                logger.exception(e)
+                await asyncio.sleep(60)
+    
+    async def _run_spread_bot_with_error_handling(self, bot_id: str):
+        """Wrapper to handle errors in spread bot"""
+        try:
+            await self._run_spread_bot(bot_id)
+        except Exception as e:
+            logger.error(f"❌ CRITICAL: Spread bot {bot_id} crashed: {e}")
+            logger.exception(e)
+            if bot_id in self.running_bots:
+                del self.running_bots[bot_id]
+    
+    def shutdown(self):
+        """Shutdown bot runner"""
+        logger.info("Shutting down bot runner...")
+        self.shutdown_event.set()
+        for bot_id in list(self.running_bots.keys()):
+            asyncio.create_task(self.stop_bot(bot_id))
+
+
+# Global instance
+bot_runner = BotRunner()
