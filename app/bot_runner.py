@@ -318,6 +318,10 @@ class BotRunner:
                     # Try to get SOL price vs USDC
                     sol_price_data = await jupiter_client.get_price(quote_mint, jupiter_client.USDC_MINT)
                     sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                except CircuitBreakerError as e:
+                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                    logger.warning(f"  ⚠️ Using fallback SOL price: $100.00")
+                    sol_price_usd = 100
                 except Exception as e:
                     logger.warning(f"  ⚠️ Failed to get SOL price from Jupiter: {e}")
                     # Fallback: Use quote to estimate SOL price
@@ -337,6 +341,10 @@ class BotRunner:
                         else:
                             logger.warning(f"  ⚠️ Quote returned invalid data, using fallback $100")
                             sol_price_usd = 100  # Final fallback
+                    except CircuitBreakerError:
+                        logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable")
+                        sol_price_usd = 100
+                        logger.warning(f"  ⚠️ Using fallback SOL price: ${sol_price_usd:.2f}")
                     except Exception as e2:
                         logger.warning(f"  ⚠️ Failed to estimate SOL price from quote: {e2}, using fallback $100")
                         sol_price_usd = 100  # Final fallback
@@ -350,6 +358,10 @@ class BotRunner:
                 try:
                     token_price_data = await jupiter_client.get_price(base_mint, quote_mint)
                     token_price = token_price_data.get("price", 0)
+                except CircuitBreakerError as e:
+                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                    logger.info(f"  ⏭️ Skipping trade - Jupiter API unavailable")
+                    return
                 except Exception as e:
                     logger.error(f"  ❌ Failed to get token price for {base_mint}: {e}")
                     return
@@ -361,6 +373,10 @@ class BotRunner:
                 try:
                     sol_price_data = await jupiter_client.get_price(quote_mint)
                     sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                except CircuitBreakerError as e:
+                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                    logger.warning(f"  ⚠️ Using fallback SOL price: $100.00")
+                    sol_price_usd = 100
                 except Exception as e:
                     logger.error(f"  ❌ Failed to get SOL price: {e}")
                     sol_price_usd = 100  # Use fallback
@@ -387,12 +403,17 @@ class BotRunner:
             logger.info(f"  Amount: {amount}")
             
             # Get quote from Jupiter
-            quote = await jupiter_client.get_quote(
-                input_mint=input_mint,
-                output_mint=output_mint,
-                amount=amount,
-                slippage_bps=slippage_bps
-            )
+            try:
+                quote = await jupiter_client.get_quote(
+                    input_mint=input_mint,
+                    output_mint=output_mint,
+                    amount=amount,
+                    slippage_bps=slippage_bps
+                )
+            except CircuitBreakerError as e:
+                logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                logger.info(f"  ⏭️ Skipping trade - Jupiter API unavailable")
+                return
             
             if not quote:
                 logger.error(f"  ❌ Failed to get quote")
