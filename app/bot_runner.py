@@ -1,6 +1,6 @@
 """
 Bot Runner Service
-Background service that executes Solana trading bots (volume and spread bots).
+Background service that executes Solana and EVM trading bots (volume and spread bots).
 Runs continuously, executing trades based on bot configuration.
 """
 import asyncio
@@ -16,6 +16,9 @@ from app.database import get_db_session, Bot, BotWallet, BotTrade
 from app.wallet_encryption import decrypt_private_key
 from app.solana.jupiter_client import JupiterClient
 from app.solana.transaction_signer import SolanaTransactionSigner
+from app.evm.chains import get_chain
+from app.evm.evm_signer import EVMSigner
+from app.evm.uniswap_client import UniswapClient
 from circuitbreaker import CircuitBreakerError
 
 logger = logging.getLogger(__name__)
@@ -25,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 class BotRunner:
-    """Manages running Solana trading bots"""
+    """Manages running Solana and EVM trading bots"""
     
     def __init__(self):
         self.running_bots: Dict[str, asyncio.Task] = {}
@@ -86,8 +89,18 @@ class BotRunner:
                 logger.error(f"Bot {bot_id} not found in database")
                 return
             
+            # Determine chain (default to solana for backward compatibility)
+            config = bot.config or {}
+            chain = config.get("chain", "solana")
+            
             if bot.bot_type == 'volume':
-                task = asyncio.create_task(self._run_volume_bot_with_error_handling(bot_id))
+                if chain == "solana":
+                    task = asyncio.create_task(self._run_volume_bot_with_error_handling(bot_id))
+                elif chain in ["polygon", "arbitrum", "base", "ethereum"]:
+                    task = asyncio.create_task(self._run_evm_volume_bot_with_error_handling(bot_id))
+                else:
+                    logger.warning(f"Unknown chain '{chain}' for bot {bot_id}, defaulting to solana")
+                    task = asyncio.create_task(self._run_volume_bot_with_error_handling(bot_id))
             elif bot.bot_type == 'spread':
                 task = asyncio.create_task(self._run_spread_bot_with_error_handling(bot_id))
             else:
@@ -150,8 +163,37 @@ class BotRunner:
             except Exception as db_error:
                 logger.error(f"Failed to update bot status in DB: {db_error}")
     
+    async def _run_evm_volume_bot_with_error_handling(self, bot_id: str):
+        """Wrapper to catch and log any exceptions in EVM bot loop"""
+        try:
+            await self._run_evm_volume_bot(bot_id)
+        except Exception as e:
+            logger.error("=" * 80)
+            logger.error(f"❌ CRITICAL: EVM volume bot {bot_id} crashed with unhandled exception")
+            logger.error(f"Error: {e}")
+            logger.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logger.error(traceback.format_exc())
+            logger.error("=" * 80)
+            # Remove from running bots since it crashed
+            if bot_id in self.running_bots:
+                del self.running_bots[bot_id]
+            # Update bot status in DB
+            try:
+                db = get_db_session()
+                try:
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                    if bot:
+                        bot.status = "error"
+                        bot.error = f"Bot crashed: {str(e)[:200]}"
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception as db_error:
+                logger.error(f"Failed to update bot status in DB: {db_error}")
+    
     async def _run_volume_bot(self, bot_id: str):
-        """Run volume generation bot"""
+        """Run Solana volume generation bot"""
         logger.info(f"📊 Volume bot {bot_id} starting main loop...")
         
         # Create Jupiter client and signer for this bot
@@ -284,289 +326,279 @@ class BotRunner:
             await jupiter_client.close()
             await signer.close()
     
-    async def _execute_volume_trade(
+    async def _run_evm_volume_bot(self, bot_id: str):
+        """Run EVM volume generation bot using Uniswap"""
+        logger.info(f"📊 EVM Volume bot {bot_id} starting main loop...")
+        
+        db = get_db_session()
+        try:
+            bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            if not bot:
+                logger.error(f"Bot {bot_id} not found")
+                return
+            
+            config = bot.config or {}
+            chain_name = config.get("chain", "polygon")
+            
+            # Get chain configuration
+            try:
+                chain_config = get_chain(chain_name)
+                logger.info(f"  Initializing Uniswap client for {chain_config.name}")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to get chain config: {e}")
+                return
+            
+            # Initialize Uniswap client
+            try:
+                uniswap_client = UniswapClient(chain_config)
+                logger.info(f"  ✅ Uniswap client initialized")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to initialize Uniswap client: {e}")
+                return
+            
+            # Get token addresses
+            base_token = config.get("base_token")
+            quote_token = config.get("quote_token", chain_config.usdc)  # Default to USDC
+            
+            if not base_token:
+                logger.error(f"  ❌ base_token not configured")
+                return
+            
+            logger.info(f"  Base token: {base_token[:10]}...")
+            logger.info(f"  Quote token: {quote_token[:10]}...")
+            
+        finally:
+            db.close()
+        
+        try:
+            while not self.shutdown_event.is_set():
+                try:
+                    db = get_db_session()
+                    try:
+                        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                        if not bot or bot.status != "running":
+                            logger.info(f"Bot {bot_id} stopped or not found - exiting loop")
+                            break
+                        
+                        config = bot.config or {}
+                        logger.info(f"📊 EVM Volume bot {bot_id} - Checking daily target...")
+                        
+                        # Get daily volume target
+                        daily_volume_usd = config.get('daily_volume_usd', 1000)
+                        stats = bot.stats or {}
+                        volume_today = stats.get('volume_today', 0)
+                        
+                        logger.info(f"  Target: ${daily_volume_usd:,.2f}, Today: ${volume_today:,.2f}")
+                        
+                        # Check if daily target reached
+                        if volume_today >= daily_volume_usd:
+                            logger.info(f"  ✅ Daily target reached - sleeping until midnight")
+                            now = datetime.utcnow()
+                            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                            sleep_seconds = (midnight - now).total_seconds()
+                            await asyncio.sleep(min(sleep_seconds, 3600))
+                            continue
+                        
+                        # Get bot wallets
+                        bot_wallets = db.query(BotWallet).filter(BotWallet.bot_id == bot_id).all()
+                        if not bot_wallets:
+                            logger.error(f"  ❌ No wallets configured for bot {bot_id}")
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        logger.info(f"  Found {len(bot_wallets)} wallet(s)")
+                        
+                        # Pick random wallet
+                        wallet = random.choice(bot_wallets)
+                        logger.info(f"  Using wallet: {wallet.wallet_address[:8]}...")
+                        
+                        # Decrypt private key
+                        try:
+                            private_key_raw = decrypt_private_key(wallet.encrypted_private_key)
+                            logger.info(f"  ✅ Private key decrypted")
+                            private_key = private_key_raw
+                        except Exception as e:
+                            logger.error(f"  ❌ Failed to decrypt private key: {e}")
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        # Initialize EVM signer
+                        try:
+                            signer = EVMSigner(chain_config, private_key)
+                            logger.info(f"  ✅ EVM signer initialized: {signer.address[:10]}...")
+                        except Exception as e:
+                            logger.error(f"  ❌ Failed to initialize EVM signer: {e}")
+                            await asyncio.sleep(60)
+                            continue
+                        
+                        # Pick random trade size
+                        min_trade_usd = config.get('min_trade_usd', 10)
+                        max_trade_usd = config.get('max_trade_usd', 50)
+                        trade_size_usd = random.uniform(min_trade_usd, max_trade_usd)
+                        logger.info(f"  Trade size: ${trade_size_usd:,.2f}")
+                        
+                        # Determine side (buy or sell)
+                        side = "buy" if random.random() > 0.5 else "sell"
+                        logger.info(f"  Side: {side}")
+                        
+                        # Execute trade
+                        tx_hash = await self._execute_evm_trade(
+                            uniswap_client=uniswap_client,
+                            signer=signer,
+                            base_token=base_token,
+                            quote_token=quote_token,
+                            side=side,
+                            amount_usd=trade_size_usd,
+                            slippage_bps=config.get('slippage_bps', 50),
+                        )
+                        
+                        if tx_hash:
+                            # Record trade
+                            self._record_trade(
+                                bot_id=bot_id,
+                                side=side,
+                                amount_usd=trade_size_usd,
+                                tx_signature=tx_hash,
+                                db=db
+                            )
+                            
+                            # Update stats
+                            stats = bot.stats or {}
+                            stats['volume_today'] = stats.get('volume_today', 0) + trade_size_usd
+                            stats['trades_today'] = stats.get('trades_today', 0) + 1
+                            stats['last_trade_at'] = datetime.utcnow().isoformat()
+                            bot.stats = stats
+                            db.commit()
+                            
+                            logger.info(f"  ✅ Trade complete: {tx_hash[:20]}...")
+                            logger.info(f"  📊 Updated stats: ${stats.get('volume_today', 0):,.2f} today")
+                        
+                        # Random interval between trades
+                        interval_min = config.get('interval_min_seconds', 900)
+                        interval_max = config.get('interval_max_seconds', 2700)
+                        sleep_seconds = random.uniform(interval_min, interval_max)
+                        logger.info(f"  💤 Sleeping for {sleep_seconds/60:.1f} minutes...")
+                        await asyncio.sleep(sleep_seconds)
+                        
+                    finally:
+                        db.close()
+                        
+                except asyncio.CancelledError:
+                    logger.info(f"EVM volume bot {bot_id} cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"❌ Error in EVM volume bot {bot_id} loop: {e}")
+                    logger.exception(e)
+                    await asyncio.sleep(60)
+        except Exception as e:
+            logger.error(f"❌ Fatal error in EVM volume bot {bot_id}: {e}")
+            logger.exception(e)
+    
+    async def _execute_evm_trade(
         self,
-        bot_id: str,
-        wallet_address: str,
-        private_key: str,
-        base_mint: str,
-        quote_mint: str,
-        trade_size_usd: float,
+        uniswap_client: UniswapClient,
+        signer: EVMSigner,
+        base_token: str,
+        quote_token: str,
         side: str,
+        amount_usd: float,
         slippage_bps: int,
-        db: Session,
-        jupiter_client: JupiterClient,
-        signer: SolanaTransactionSigner
-    ):
-        """Execute a volume trade (swap)"""
+    ) -> Optional[str]:
+        """Execute single EVM trade via Uniswap"""
         logger.info(f"  🔄 Executing {side} trade...")
         
         try:
-            # Determine input/output based on side
+            # Get token decimals
+            quote_decimals = signer.get_token_decimals(quote_token)
+            base_decimals = signer.get_token_decimals(base_token)
+            
             if side == "buy":
-                input_mint = quote_mint  # SOL
-                output_mint = base_mint  # Token
+                # Buy: USDC -> SHARP (or quote -> base)
+                amount_in = int(amount_usd * (10 ** quote_decimals))
+                token_in = quote_token
+                token_out = base_token
+                
+                logger.info(f"  Buy: ${amount_usd:.2f} = {amount_in} smallest units")
             else:
-                input_mint = base_mint  # Token
-                output_mint = quote_mint  # SOL
-            
-            # Convert USD to token amount
-            if input_mint == quote_mint:  # Buying with SOL
-                # Get SOL price in USD - use quote to get SOL/USDC price
-                # Jupiter price API might not support SOL directly, so get it via quote
+                # Sell: SHARP -> USDC (or base -> quote)
+                # Get quote to determine price
                 try:
-                    # Try to get SOL price vs USDC
-                    sol_price_data = await jupiter_client.get_price(quote_mint, jupiter_client.USDC_MINT)
-                    sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
+                    quote = await uniswap_client.get_quote(
+                        base_token,
+                        quote_token,
+                        10 ** base_decimals  # 1 token
+                    )
+                    token_price_usd = quote.output_amount / (10 ** quote_decimals)
+                    
+                    # Calculate token amount needed
+                    token_amount = amount_usd / token_price_usd
+                    amount_in = int(token_amount * (10 ** base_decimals))
+                    token_in = base_token
+                    token_out = quote_token
+                    
+                    logger.info(f"  Sell: ${amount_usd:.2f} = {token_amount:.6f} tokens = {amount_in} smallest units")
+                    logger.info(f"  Token price: ${token_price_usd:.6f}")
                 except CircuitBreakerError as e:
-                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
-                    logger.warning(f"  ⚠️ Using fallback SOL price: $100.00")
-                    sol_price_usd = 100
+                    logger.error(f"  ❌ Circuit breaker open - Uniswap API unavailable: {e}")
+                    return None
                 except Exception as e:
-                    logger.warning(f"  ⚠️ Failed to get SOL price from Jupiter: {e}")
-                    # Fallback: Use quote to estimate SOL price
-                    try:
-                        # Get a small quote SOL -> USDC to estimate price
-                        # Amount must be integer (not float)
-                        test_quote = await jupiter_client.get_quote(
-                            input_mint=quote_mint,  # SOL
-                            output_mint=jupiter_client.USDC_MINT,  # USDC
-                            amount=int(1e9),  # 1 SOL in lamports (integer)
-                            slippage_bps=50
-                        )
-                        if test_quote and test_quote.out_amount > 0:
-                            # Price = USDC received / SOL sent
-                            sol_price_usd = test_quote.out_amount / 1e6  # USDC has 6 decimals
-                            logger.info(f"  Estimated SOL price from quote: ${sol_price_usd:.2f} (1 SOL = {test_quote.out_amount/1e6:.2f} USDC)")
-                        else:
-                            logger.warning(f"  ⚠️ Quote returned invalid data, using fallback $100")
-                            sol_price_usd = 100  # Final fallback
-                    except CircuitBreakerError:
-                        logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable")
-                        sol_price_usd = 100
-                        logger.warning(f"  ⚠️ Using fallback SOL price: ${sol_price_usd:.2f}")
-                    except Exception as e2:
-                        logger.warning(f"  ⚠️ Failed to estimate SOL price from quote: {e2}, using fallback $100")
-                        sol_price_usd = 100  # Final fallback
-                
-                amount_sol = trade_size_usd / sol_price_usd
-                amount = int(amount_sol * 1e9)  # Convert to lamports
-                logger.info(f"  Buy: ${trade_size_usd:.2f} = {amount_sol:.6f} SOL = {amount} lamports (SOL price: ${sol_price_usd:.2f})")
-            else:
-                # Selling token - calculate amount from USD value
-                # Get token price (Token/SOL) and SOL price (SOL/USD)
-                try:
-                    token_price_data = await jupiter_client.get_price(base_mint, quote_mint)
-                    token_price = token_price_data.get("price", 0)
-                except CircuitBreakerError as e:
-                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
-                    logger.info(f"  ⏭️ Skipping trade - Jupiter API unavailable")
-                    return
-                except Exception as e:
-                    logger.error(f"  ❌ Failed to get token price for {base_mint}: {e}")
-                    return
-                
-                if token_price == 0:
-                    logger.error(f"  ❌ Could not get price for {base_mint} (price is 0)")
-                    return
-                
-                try:
-                    sol_price_data = await jupiter_client.get_price(quote_mint)
-                    sol_price_usd = sol_price_data.get("price", 100)  # Fallback to $100
-                except CircuitBreakerError as e:
-                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
-                    logger.warning(f"  ⚠️ Using fallback SOL price: $100.00")
-                    sol_price_usd = 100
-                except Exception as e:
-                    logger.error(f"  ❌ Failed to get SOL price: {e}")
-                    sol_price_usd = 100  # Use fallback
-                
-                # Calculate token price in USD: (Token/SOL) * (SOL/USD) = Token/USD
-                token_price_usd = token_price * sol_price_usd
-                
-                if token_price_usd == 0:
-                    logger.error(f"  ❌ Token price USD is 0 (token_price={token_price}, sol_price_usd={sol_price_usd})")
-                    return
-                
-                # Calculate token amount needed for trade_size_usd
-                token_amount = trade_size_usd / token_price_usd
-                
-                # Convert to smallest units (assume 9 decimals like most Solana tokens)
-                token_decimals = 9  # TODO: Fetch from token metadata
-                amount = int(token_amount * (10 ** token_decimals))
-                
-                logger.info(f"  Sell: ${trade_size_usd:.2f} = {token_amount:.6f} tokens = {amount} smallest units")
-                logger.info(f"  Token price: {token_price:.8f} {quote_mint[:8]}.../token")
-                logger.info(f"  Token price USD: ${token_price_usd:.6f}/token")
+                    logger.error(f"  ❌ Failed to get quote: {e}")
+                    return None
             
-            logger.info(f"  Getting quote: {input_mint[:8]}... → {output_mint[:8]}...")
-            logger.info(f"  Amount: {amount}")
-            
-            # Get quote from Jupiter
+            # Execute swap
             try:
-                quote = await jupiter_client.get_quote(
-                    input_mint=input_mint,
-                    output_mint=output_mint,
-                    amount=amount,
-                    slippage_bps=slippage_bps
+                tx_hash = await uniswap_client.execute_swap(
+                    signer=signer,
+                    token_in=token_in,
+                    token_out=token_out,
+                    amount_in=amount_in,
+                    slippage_bps=slippage_bps,
                 )
+                
+                logger.info(f"  ✅ Trade successful! TX: {tx_hash}")
+                return tx_hash
+                
             except CircuitBreakerError as e:
-                logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
-                logger.info(f"  ⏭️ Skipping trade - Jupiter API unavailable")
-                return
-            
-            if not quote:
-                logger.error(f"  ❌ Failed to get quote")
-                return
-            
-            logger.info(f"  Quote: {quote.in_amount} → {quote.out_amount} (impact: {quote.price_impact_pct:.2f}%)")
-            
-            # Get swap transaction from Jupiter
-            logger.info(f"  Getting swap transaction...")
-            swap_tx = await jupiter_client.get_swap_transaction(
-                quote=quote,
-                user_public_key=wallet_address,
-                wrap_unwrap_sol=True
-            )
-            
-            if not swap_tx:
-                logger.error(f"  ❌ Failed to get swap transaction")
-                return
-            
-            # Sign and send transaction
-            logger.info(f"  Signing and sending transaction...")
-            result = await signer.sign_and_send_transaction(
-                transaction_base64=swap_tx.transaction,
-                private_key=private_key,
-                skip_preflight=False,
-                max_retries=3
-            )
-            
-            if result.success:
-                logger.info(
-                    "Trade successful",
-                    extra={
-                        "bot_id": str(bot_id),
-                        "side": side,
-                        "amount": trade_size_usd,
-                        "signature": result.signature[:20] + "..." if result.signature else None,
-                    }
-                )
-                
-                # Calculate actual trade value
-                actual_value_usd = (quote.out_amount / 1e9) * sol_price_usd if output_mint == quote_mint else trade_size_usd
-                
-                # Record trade
-                trade = BotTrade(
-                    id=str(uuid.uuid4()),
-                    bot_id=bot_id,
-                    wallet_address=wallet_address,
-                    side=side,
-                    amount=quote.in_amount,
-                    price=quote.out_amount / quote.in_amount if quote.in_amount > 0 else 0,
-                    value_usd=actual_value_usd,
-                    gas_cost=0.000005,  # Approximate SOL gas cost
-                    tx_signature=result.signature,
-                    status="success",
-                    created_at=datetime.utcnow()
-                )
-                db.add(trade)
-                
-                # Update bot stats
-                bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                if bot:
-                    stats = bot.stats or {}
-                    stats['volume_today'] = stats.get('volume_today', 0) + actual_value_usd
-                    stats['trades_today'] = stats.get('trades_today', 0) + 1
-                    stats['last_trade_at'] = datetime.utcnow().isoformat()
-                    bot.stats = stats
-                    db.commit()
-                    logger.info(f"  📊 Updated stats: ${stats['volume_today']:,.2f} today")
-            else:
-                logger.error(
-                    "Trade failed",
-                    extra={
-                        "bot_id": str(bot_id),
-                        "side": side,
-                        "amount": trade_size_usd,
-                        "error": str(result.error)[:200] if result.error else "Unknown error",
-                    }
-                )
-                
-        except Exception as e:
-            logger.error(f"  ❌ Error executing trade: {e}")
-            logger.exception(e)
-    
-    async def _run_spread_bot_with_error_handling(self, bot_id: str):
-        """Wrapper to catch and log any exceptions in spread bot loop"""
-        try:
-            await self._run_spread_bot(bot_id)
-        except Exception as e:
-            logger.error("=" * 80)
-            logger.error(f"❌ CRITICAL: Spread bot {bot_id} crashed with unhandled exception")
-            logger.error(f"Error: {e}")
-            logger.error(f"Error type: {type(e).__name__}")
-            import traceback
-            logger.error(traceback.format_exc())
-            logger.error("=" * 80)
-            # Remove from running bots since it crashed
-            if bot_id in self.running_bots:
-                del self.running_bots[bot_id]
-            # Update bot status in DB
-            try:
-                db = get_db_session()
-                try:
-                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                    if bot:
-                        bot.status = "error"
-                        bot.error = f"Bot crashed: {str(e)[:200]}"
-                        db.commit()
-                finally:
-                    db.close()
-            except Exception as db_error:
-                logger.error(f"Failed to update bot status in DB: {db_error}")
-    
-    async def _run_spread_bot(self, bot_id: str):
-        """Run spread/market making bot"""
-        logger.info(f"📈 Spread bot {bot_id} starting main loop...")
-        
-        while not self.shutdown_event.is_set():
-            try:
-                db = get_db_session()
-                try:
-                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                    if not bot or bot.status != "running":
-                        logger.info(f"Bot {bot_id} stopped or not found - exiting loop")
-                        break
-                    
-                    config = bot.config or {}
-                    logger.info(f"📈 Spread bot {bot_id} - Refreshing orders...")
-                    
-                    # TODO: Implement spread bot logic
-                    logger.warning(f"  ⚠️  Spread bot logic not yet implemented")
-                    
-                    # Sleep for refresh interval
-                    refresh_seconds = config.get('refresh_seconds', 30)
-                    await asyncio.sleep(refresh_seconds)
-                    
-                finally:
-                    db.close()
-                    
-            except asyncio.CancelledError:
-                logger.info(f"Spread bot {bot_id} cancelled")
-                break
+                logger.error(f"  ❌ Circuit breaker open - Uniswap API unavailable: {e}")
+                return None
             except Exception as e:
-                logger.error(f"❌ Error in spread bot {bot_id} loop: {e}")
-                logger.exception(e)
-                await asyncio.sleep(60)
+                logger.error(f"  ❌ Trade failed: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"  ❌ Error executing EVM trade: {e}")
+            logger.exception(e)
+            return None
     
-    def shutdown(self):
-        """Shutdown bot runner"""
-        logger.info("Shutting down bot runner...")
-        self.shutdown_event.set()
-        for bot_id in list(self.running_bots.keys()):
-            asyncio.create_task(self.stop_bot(bot_id))
-
-
-# Global instance
-bot_runner = BotRunner()
+    def _get_volume_today(self, bot_id: str) -> float:
+        """Get today's volume for a bot"""
+        db = get_db_session()
+        try:
+            bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            if not bot:
+                return 0.0
+            stats = bot.stats or {}
+            return stats.get('volume_today', 0.0)
+        finally:
+            db.close()
+    
+    def _record_trade(
+        self,
+        bot_id: str,
+        side: str,
+        amount_usd: float,
+        tx_signature: str,
+        db: Session
+    ):
+        """Record a trade in the database"""
+        trade = BotTrade(
+            id=str(uuid.uuid4()),
+            bot_id=bot_id,
+            side=side,
+            value_usd=str(amount_usd),
+            tx_signature=tx_signature,
+            status="success",
+            created_at=datetime.utcnow()
+        )
+        db.add(trade)
+        db.commit()
