@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.api import accounts, connectors, market, orders, portfolio, client_data
 from app.bot_routes import router as bot_router
 from app.clients_routes import router as client_router
+from app.auth_routes import router as auth_router
 from app.exchange_routes import router as exchange_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
@@ -250,6 +251,7 @@ app.include_router(jupiter_router)
 app.include_router(solana_router, tags=["Solana"])
 app.include_router(bot_router, tags=["Bots"])
 app.include_router(client_router, tags=["Clients"])
+app.include_router(auth_router)
 
 @app.get("/")
 async def root():
