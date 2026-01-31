@@ -570,6 +570,182 @@ class BotRunner:
             logger.exception(e)
             return None
     
+    async def _execute_volume_trade(
+        self,
+        bot_id: str,
+        wallet_address: str,
+        private_key: str,
+        base_mint: str,
+        quote_mint: str,
+        trade_size_usd: float,
+        side: str,
+        slippage_bps: int,
+        db: Session,
+        jupiter_client: JupiterClient,
+        signer: SolanaTransactionSigner
+    ):
+        """Execute single Solana volume trade via Jupiter"""
+        logger.info(f"  🔄 Executing {side} trade...")
+        
+        try:
+            # Get SOL price for USD conversion
+            try:
+                sol_price_data = await jupiter_client.get_price(quote_mint, jupiter_client.USDC_MINT)
+                sol_price_usd = float(sol_price_data.get('price', 100.0))
+            except Exception as e:
+                logger.warning(f"  ⚠️ Failed to get SOL price from Jupiter: {e}")
+                # Fallback: try to estimate from quote
+                try:
+                    quote = await jupiter_client.get_quote(
+                        input_mint=quote_mint,
+                        output_mint=jupiter_client.USDC_MINT,
+                        amount=int(1e9),  # 1 SOL
+                        slippage_bps=slippage_bps
+                    )
+                    sol_price_usd = quote.out_amount / 1e6  # USDC has 6 decimals
+                except Exception as quote_error:
+                    logger.error(f"  ❌ Failed to estimate SOL price: {quote_error}")
+                    sol_price_usd = 100.0  # Fallback to $100
+            
+            if side == "buy":
+                # Buy: SOL → Token (quote_mint → base_mint)
+                # Calculate SOL amount needed
+                sol_amount = trade_size_usd / sol_price_usd
+                amount_in = int(sol_amount * 1e9)  # Convert to lamports
+                input_mint = quote_mint
+                output_mint = base_mint
+                
+                logger.info(f"  Buy: ${trade_size_usd:.2f} = {sol_amount:.6f} SOL = {amount_in} lamports (SOL price: ${sol_price_usd:.2f})")
+            else:
+                # Sell: Token → SOL (base_mint → quote_mint)
+                # Get token price and calculate amount
+                try:
+                    # Try to get token price directly from Jupiter price API
+                    try:
+                        token_price_data = await jupiter_client.get_price(base_mint, jupiter_client.USDC_MINT)
+                        token_price_usd = float(token_price_data.get('price', 0))
+                    except Exception as price_error:
+                        logger.warning(f"  ⚠️ Failed to get token price from API: {price_error}")
+                        token_price_usd = 0
+                    
+                    # If price API failed, estimate from quote
+                    if token_price_usd <= 0:
+                        # Use quote to estimate price (assume 9 decimals for most Solana tokens)
+                        token_decimals = 9
+                        try:
+                            quote = await jupiter_client.get_quote(
+                                input_mint=base_mint,
+                                output_mint=jupiter_client.USDC_MINT,
+                                amount=int(10 ** token_decimals),  # 1 token
+                                slippage_bps=slippage_bps
+                            )
+                            # Price per token in USDC (USDC has 6 decimals)
+                            token_price_usd = quote.out_amount / 1e6
+                        except Exception as quote_error:
+                            logger.error(f"  ❌ Failed to estimate token price from quote: {quote_error}")
+                            return
+                    
+                    # Calculate token amount needed for USD trade size
+                    token_amount = trade_size_usd / token_price_usd
+                    
+                    # Use 9 decimals (most Solana tokens) - Jupiter will handle if wrong
+                    token_decimals = 9
+                    amount_in = int(token_amount * (10 ** token_decimals))
+                    
+                    input_mint = base_mint
+                    output_mint = quote_mint
+                    
+                    logger.info(f"  Sell: ${trade_size_usd:.2f} = {token_amount:.6f} tokens = {amount_in} smallest units")
+                    logger.info(f"  Token price: ${token_price_usd:.6f} per token")
+                except CircuitBreakerError as e:
+                    logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                    return
+                except Exception as e:
+                    logger.error(f"  ❌ Failed to get token price: {e}")
+                    logger.exception(e)
+                    return
+            
+            # Get quote
+            logger.info(f"  Getting quote: {input_mint[:8]}... → {output_mint[:8]}...")
+            logger.info(f"  Amount: {amount_in}")
+            
+            try:
+                quote = await jupiter_client.get_quote(
+                    input_mint=input_mint,
+                    output_mint=output_mint,
+                    amount=amount_in,
+                    slippage_bps=slippage_bps
+                )
+                logger.info(f"  Quote: {quote.in_amount} → {quote.out_amount} (impact: {quote.price_impact_pct:.2f}%)")
+            except CircuitBreakerError as e:
+                logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                return
+            except Exception as e:
+                logger.error(f"  ❌ Failed to get quote: {e}")
+                logger.exception(e)
+                return
+            
+            # Get swap transaction
+            logger.info(f"  Getting swap transaction...")
+            try:
+                swap_tx = await jupiter_client.get_swap_transaction(
+                    quote=quote,
+                    user_public_key=wallet_address
+                )
+            except CircuitBreakerError as e:
+                logger.error(f"  ❌ Circuit breaker open - Jupiter API unavailable: {e}")
+                return
+            except Exception as e:
+                logger.error(f"  ❌ Failed to get swap transaction: {e}")
+                logger.exception(e)
+                return
+            
+            # Sign and send transaction
+            logger.info(f"  Signing and sending transaction...")
+            try:
+                result = await signer.sign_and_send_transaction(
+                    transaction_base64=swap_tx.transaction,
+                    private_key=private_key
+                )
+                
+                if not result.success:
+                    logger.error(f"  ❌ Trade failed: {result.error}")
+                    return
+                
+                signature = result.signature
+                logger.info(f"  ✅ Trade successful! Signature: {signature[:20]}...")
+                
+                # Record trade
+                self._record_trade(
+                    bot_id=bot_id,
+                    side=side,
+                    amount_usd=trade_size_usd,
+                    tx_signature=signature,
+                    db=db
+                )
+                
+                # Update stats
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    stats = bot.stats or {}
+                    stats['volume_today'] = stats.get('volume_today', 0) + trade_size_usd
+                    stats['trades_today'] = stats.get('trades_today', 0) + 1
+                    stats['last_trade_at'] = datetime.utcnow().isoformat()
+                    bot.stats = stats
+                    db.commit()
+                    
+                    logger.info(f"  📊 Updated stats: ${stats.get('volume_today', 0):,.2f} today")
+                
+            except Exception as e:
+                logger.error(f"  ❌ Trade execution failed: {e}")
+                logger.exception(e)
+                return
+                
+        except Exception as e:
+            logger.error(f"  ❌ Error executing volume trade: {e}")
+            logger.exception(e)
+            return
+    
     def _get_volume_today(self, bot_id: str) -> float:
         """Get today's volume for a bot"""
         db = get_db_session()
