@@ -162,10 +162,25 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
         # Determine chain from bot config or default to solana
         chain = "solana"  # Solana bots are always on Solana chain
         
+        # Import address derivation functions
+        from app.client_setup_routes import derive_solana_address, derive_evm_address
+        
         for wallet_info in request.wallets:
             try:
                 encrypted_key = encrypt_private_key(wallet_info['private_key'])
-                wallet_address = wallet_info['address']
+                
+                # Use provided address or derive from private key
+                wallet_address = wallet_info.get('address')
+                if not wallet_address:
+                    # Derive address from private key
+                    try:
+                        wallet_address = derive_solana_address(wallet_info['private_key'])
+                    except Exception as e:
+                        logger.warning(f"Failed to derive wallet address, using provided address: {e}")
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Wallet address required or provide valid private key to derive address"
+                        )
                 
                 # Store in bot_wallets table (for bot execution)
                 bot_wallet = BotWallet(
@@ -178,22 +193,25 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
                 
                 # Also store in trading_keys table (for client-level key management)
                 # This allows key rotation/revocation to work for admin-created bots too
-                # Use ON CONFLICT to handle case where client already has a key
+                # Mark as added by admin since this is the admin endpoint
                 try:
                     db.execute(text("""
-                        INSERT INTO trading_keys (client_id, encrypted_key, chain, created_at, updated_at)
-                        VALUES (:client_id, :encrypted_key, :chain, NOW(), NOW())
+                        INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
+                        VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'admin', NOW(), NOW())
                         ON CONFLICT (client_id) 
                         DO UPDATE SET 
                             encrypted_key = :encrypted_key,
                             chain = :chain,
+                            wallet_address = :wallet_address,
+                            added_by = 'admin',
                             updated_at = NOW()
                     """), {
                         "client_id": client.id,
                         "encrypted_key": encrypted_key,
-                        "chain": chain
+                        "chain": chain,
+                        "wallet_address": wallet_address
                     })
-                    logger.info(f"Stored encrypted key in trading_keys table for client {client.id}")
+                    logger.info(f"Stored encrypted key in trading_keys table for client {client.id} (added by admin)")
                 except Exception as trading_keys_error:
                     # If trading_keys table doesn't exist yet (migration not run), log warning but don't fail
                     # The bot can still be created and work, just key rotation won't be available

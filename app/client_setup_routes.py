@@ -103,6 +103,27 @@ def derive_solana_address(private_key: str) -> str:
         raise HTTPException(status_code=400, detail=f"Invalid Solana private key: {str(e)}")
 
 
+def derive_evm_address(private_key: str) -> str:
+    """Derive EVM wallet address from private key."""
+    try:
+        from eth_account import Account
+        # Handle hex string (with or without 0x prefix)
+        if private_key.startswith('0x'):
+            private_key_hex = private_key[2:]
+        else:
+            private_key_hex = private_key
+        account = Account.from_key('0x' + private_key_hex)
+        return account.address
+    except ImportError:
+        raise HTTPException(
+            status_code=500,
+            detail="EVM dependencies not available. Install eth-account package."
+        )
+    except Exception as e:
+        logger.error(f"Failed to derive EVM address: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid EVM private key: {str(e)}")
+
+
 # Request/Response models
 class BotOptionResponse(BaseModel):
     bot_type: str
@@ -220,11 +241,18 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     bot_config = BOT_TYPE_CONFIGS[request.bot_type]
     chain = bot_config["chain"]
 
-    # Derive wallet address from private key (for Solana)
+    # Derive wallet address from private key
     wallet_address = None
     if chain == "solana":
         try:
             wallet_address = derive_solana_address(request.private_key)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+    elif chain == "evm":
+        try:
+            wallet_address = derive_evm_address(request.private_key)
         except HTTPException:
             raise
         except Exception as e:
@@ -238,19 +266,23 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         raise HTTPException(status_code=500, detail="Failed to encrypt private key")
 
     # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
+    # Mark as added by client since this is the client self-service endpoint
     try:
         db.execute(text("""
-            INSERT INTO trading_keys (client_id, encrypted_key, chain, created_at, updated_at)
-            VALUES (:client_id, :encrypted_key, :chain, NOW(), NOW())
+            INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
+            VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'client', NOW(), NOW())
             ON CONFLICT (client_id) 
             DO UPDATE SET 
                 encrypted_key = :encrypted_key,
                 chain = :chain,
+                wallet_address = :wallet_address,
+                added_by = 'client',
                 updated_at = NOW()
         """), {
             "client_id": client_id,
             "encrypted_key": encrypted_key,
-            "chain": chain
+            "chain": chain,
+            "wallet_address": wallet_address
         })
         db.commit()
     except Exception as e:
@@ -390,6 +422,49 @@ def rotate_key(client_id: str, request: RotateKeyRequest, db: Session = Depends(
         "success": True,
         "message": "Key rotated successfully. All bots will use the new key."
     }
+
+
+@router.get("/{client_id}/key-status")
+def get_key_status(client_id: str, db: Session = Depends(get_db)):
+    """
+    Check if a client has connected their trading key.
+    Returns status WITHOUT exposing the key itself.
+    """
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Query trading_keys table
+    try:
+        result = db.execute(text("""
+            SELECT created_at, chain, wallet_address, added_by
+            FROM trading_keys
+            WHERE client_id = :client_id
+        """), {"client_id": client_id})
+        key_record = result.fetchone()
+    except Exception as e:
+        logger.error(f"Failed to query key status: {e}")
+        # If table doesn't exist, return no key
+        key_record = None
+
+    if key_record:
+        return {
+            "client_id": client_id,
+            "has_key": True,
+            "key_added_by": key_record.added_by or "unknown",
+            "key_connected_at": key_record.created_at.isoformat() if key_record.created_at else None,
+            "wallet_address": key_record.wallet_address,
+            "chain": key_record.chain or client.chain or "solana",
+        }
+    else:
+        return {
+            "client_id": client_id,
+            "has_key": False,
+            "key_added_by": None,
+            "key_connected_at": None,
+            "wallet_address": None,
+            "chain": client.chain or "solana",
+        }
 
 
 @router.delete("/{client_id}/revoke-key")

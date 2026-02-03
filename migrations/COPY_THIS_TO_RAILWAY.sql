@@ -75,17 +75,38 @@ CREATE TABLE IF NOT EXISTS trading_keys (
     client_id VARCHAR(255) UNIQUE NOT NULL,
     encrypted_key TEXT NOT NULL,
     chain VARCHAR(20) DEFAULT 'solana',
+    wallet_address VARCHAR(255),
+    added_by VARCHAR(20) DEFAULT 'client',
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
 -- Index for efficient lookups
 CREATE INDEX IF NOT EXISTS idx_trading_keys_client_id ON trading_keys(client_id);
+CREATE INDEX IF NOT EXISTS idx_trading_keys_wallet_address ON trading_keys(wallet_address);
+
+-- Add columns if table already exists (for existing deployments)
+DO $$ 
+BEGIN
+    -- Add wallet_address column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'trading_keys' AND column_name = 'wallet_address') THEN
+        ALTER TABLE trading_keys ADD COLUMN wallet_address VARCHAR(255);
+    END IF;
+    
+    -- Add added_by column if it doesn't exist
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name = 'trading_keys' AND column_name = 'added_by') THEN
+        ALTER TABLE trading_keys ADD COLUMN added_by VARCHAR(20) DEFAULT 'client';
+    END IF;
+END $$;
 
 -- Add comments
 COMMENT ON TABLE trading_keys IS 'Encrypted private keys for client self-service bot setup';
 COMMENT ON COLUMN trading_keys.encrypted_key IS 'Fernet-encrypted private key (never decrypt in API responses)';
 COMMENT ON COLUMN trading_keys.client_id IS 'Foreign key to clients.id (UNIQUE - one key per client)';
+COMMENT ON COLUMN trading_keys.wallet_address IS 'Public wallet address derived from private key';
+COMMENT ON COLUMN trading_keys.added_by IS 'Who added the key: "client" or "admin"';
 
 -- ============================================================
 -- VERIFICATION QUERIES (run these after migration to verify)

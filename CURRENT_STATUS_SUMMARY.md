@@ -1,98 +1,117 @@
 # Current Status Summary
 
-**Date:** 2026-01-26  
-**Status:** ✅ Root Cause Found | ⚠️ Need to Create Credentials Profile
+## ✅ What's Working
 
----
+1. **Backend is deployed and running**
+   - Service: `trading-bridge` is online
+   - Handling API requests successfully (200 OK responses in logs)
+   - Health monitor code is deployed and started
 
-## ✅ **What's Fixed**
+2. **Frontend is deployed**
+   - Service: `ai-trading-ui` is online
+   - Health badges and client self-service UI pushed
 
-1. **Authentication** ✅
-   - Password corrected (`admin`)
-   - ngrok header working
-   - All requests authenticated successfully
+3. **Code pushed to GitHub**
+   - Backend: All commits pushed (health monitor, client setup routes)
+   - Frontend: Health badges and client setup components pushed
 
-2. **Request Format** ✅
-   - All required fields included (`instance_name`, `credentials_profile`)
-   - Request reaches Hummingbot API
+## ⚠️ Issues Found
 
-3. **ngrok Tunnel** ✅
-   - Online and accessible
-   - Railway can reach Hummingbot API
+### 1. Database Migration Not Run
+**Problem:** Health monitor is failing because `bot_health_logs` table doesn't exist
 
----
-
-## 🔍 **Root Cause Identified**
-
-**Error:** `FileNotFoundError: [Errno 2] No such file or directory: 'bots/credentials/client_sharp'`
-
-**What's happening:**
-- Hummingbot API tries to copy credentials from `bots/credentials/client_sharp`
-- This directory doesn't exist
-- API crashes with `FileNotFoundError` → returns 500 error
-
-**Location:** `/hummingbot-api/services/docker_service.py`, line 182
-```python
-shutil.copytree(source_credentials_dir, destination_credentials_dir)
+**Error in logs:**
+```
+relation "bot_health_logs" does not exist
 ```
 
----
+**Impact:**
+- Health monitor can't log health checks
+- Bot statuses stuck showing "running" 
+- Health status fields not populated
 
-## 📋 **Current State**
+**Fix:** Run `migrations/run_all_migrations.sql` against Railway PostgreSQL
 
-### **What Exists:**
-- ✅ `bots/credentials/master_account/` - Example credentials profile
-- ✅ `bots/credentials/master_account/connectors/` - Connector configs
-- ✅ `bots/credentials/master_account/conf_client.yml` - Client config
-- ✅ `bots/credentials/master_account/.password_verification` - Password file
+### 2. Login "Failed to Fetch" Errors
+**Possible causes:**
+- Network timeouts (backend slow to respond)
+- CORS issues (though origins are configured)
+- Backend errors from health monitor failures
 
-### **What's Missing:**
-- ❌ `bots/credentials/client_sharp/` - Doesn't exist
-- ❌ BitMart connector config for `client_sharp`
+**CORS Configuration:**
+- ✅ `https://app.pipelabs.xyz` is in ALLOWED_ORIGINS
+- ✅ `https://pipelabs.xyz` is in ALLOWED_ORIGINS
+- ✅ Localhost origins configured
 
----
+### 3. Health Monitor Errors
+**Current errors:**
+- `bot_health_logs` table missing → causing health check failures
+- Unknown exchange "uniswap" → warning (not critical)
+- Jupiter API 404 errors → expected for some tokens
 
-## 🛠️ **Next Steps**
+## 📋 What Needs to Be Done
 
-### **1. Create Credentials Profile Directory**
+### Priority 1: Run Database Migration (URGENT)
+```sql
+-- Run migrations/run_all_migrations.sql via Railway Query tab
+-- This will:
+-- 1. Add health_status columns to bots table
+-- 2. Create bot_health_logs table
+-- 3. Create trading_keys table
+```
+
+**After migration:**
+- Health monitor will start working
+- Bot statuses will update correctly
+- Login errors should reduce
+
+### Priority 2: Add ENCRYPTION_KEY
+- Generate key: `python3 scripts/generate_encryption_key.py`
+- Add to Railway: `ENCRYPTION_KEY` = (generated key)
+- Needed for client self-service features
+
+### Priority 3: Verify Login Flow
+After migration runs, test login:
+- Check browser console for errors
+- Verify CORS headers in network tab
+- Check Railway logs for auth errors
+
+## 🔍 Debugging Login Issues
+
+**Check browser console for:**
+- CORS errors
+- Network timeouts
+- 500 errors from backend
+
+**Check Railway logs:**
 ```bash
-docker exec hummingbot-api mkdir -p bots/credentials/client_sharp
+railway logs --tail 100 | grep -i "auth\|error\|cors"
 ```
 
-### **2. Copy Structure from master_account**
+**Test auth endpoint directly:**
 ```bash
-# Copy the directory structure
-docker exec hummingbot-api cp -r bots/credentials/master_account/* bots/credentials/client_sharp/
+curl https://trading-bridge-production.up.railway.app/auth/message/test123
 ```
 
-### **3. Configure BitMart Connector**
-- Add BitMart API keys to `bots/credentials/client_sharp/connectors/`
-- Update config files with `client_sharp` account details
+## 📊 Deployment Status
 
-### **4. Test Bot Creation**
-After creating the directory, bot creation should work!
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Backend Code | ✅ Pushed | All commits on main branch |
+| Frontend Code | ✅ Pushed | Health badges + client setup |
+| Railway Deployment | ✅ Running | Service online, handling requests |
+| Health Monitor | ⚠️ Started but failing | Missing database tables |
+| Database Migration | ❌ Not run | Need to execute SQL |
+| ENCRYPTION_KEY | ❌ Not set | Need to generate and add |
+| Login Flow | ⚠️ Intermittent errors | May be related to health monitor errors |
 
----
+## 🎯 Next Steps
 
-## 🎯 **Progress**
-
-| Component | Status |
-|-----------|--------|
-| Authentication | ✅ Fixed |
-| Request Format | ✅ Fixed |
-| ngrok Tunnel | ✅ Working |
-| Root Cause | ✅ Found |
-| Credentials Profile | ⚠️ Need to Create |
-| Bot Creation | ⏳ Waiting for credentials |
-
----
-
-## 💡 **Key Finding**
-
-Hummingbot API requires credentials profile directories to exist BEFORE deploying scripts. The `deploy-v2-script` endpoint copies credentials from `bots/credentials/{profile_name}/` to the bot instance.
-
-**Solution:** Create `bots/credentials/client_sharp/` directory with BitMart connector configuration.
+1. **Run database migration** (fixes health monitor errors)
+2. **Add ENCRYPTION_KEY** to Railway (enables client self-service)
+3. **Test login** after migration (should work better)
+4. **Monitor logs** for any remaining errors
 
 ---
 
-**Status: Ready to create credentials profile!** 🚀
+**Bottom line:** Backend is deployed and running, but the database migration needs to be run for everything to work properly. The health monitor errors might be causing intermittent backend issues that affect login.
