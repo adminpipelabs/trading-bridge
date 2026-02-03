@@ -20,13 +20,13 @@ router = APIRouter(prefix="/bots", tags=["bot-health"])
 # ──────────────────────────────────────────────────────────────
 
 class HeartbeatRequest(BaseModel):
-    bot_id: int
+    bot_id: str
     status: Optional[str] = "running"
     metadata: Optional[dict] = None
 
 
 class HealthResponse(BaseModel):
-    bot_id: int
+    bot_id: str
     name: str
     status: str
     health_status: str
@@ -51,7 +51,7 @@ class HealthSummaryResponse(BaseModel):
 # ──────────────────────────────────────────────────────────────
 
 @router.get("/{bot_id}/health", response_model=HealthResponse)
-async def get_bot_health(bot_id: int, request: Request):
+async def get_bot_health(bot_id: str, request: Request):
     """Get health status for a specific bot."""
     pool = request.app.state.db_pool
 
@@ -78,7 +78,7 @@ async def get_bot_health(bot_id: int, request: Request):
 
 
 @router.post("/{bot_id}/health/check")
-async def check_bot_health_now(bot_id: int, request: Request):
+async def check_bot_health_now(bot_id: str, request: Request):
     """
     Trigger an immediate health check for a specific bot.
     Returns health status including balance info.
@@ -98,7 +98,7 @@ async def check_bot_health_now(bot_id: int, request: Request):
 
 
 @router.get("/{bot_id}/balance")
-async def get_bot_balance(bot_id: int, request: Request):
+async def get_bot_balance(bot_id: str, request: Request):
     """
     Check wallet balance for a specific bot's trading pair.
     Shows exactly why a bot might not be trading.
@@ -222,7 +222,7 @@ async def receive_heartbeat(payload: HeartbeatRequest, request: Request):
 
 @router.get("/{bot_id}/health/history")
 async def get_health_history(
-    bot_id: int,
+    bot_id: str,
     request: Request,
     limit: int = 50
 ):
@@ -260,7 +260,7 @@ async def get_health_history(
 
 
 @router.get("/{bot_id}/balance/solana")
-async def get_solana_bot_balance(bot_id: int, request: Request):
+async def get_solana_bot_balance(bot_id: str, request: Request):
     """
     Get on-chain Solana balance for a Jupiter bot.
     Shows SOL (gas + quote), base token balance, and whether the bot can trade.
