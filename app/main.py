@@ -19,6 +19,7 @@ from app.clients_routes import router as client_router
 from app.auth_routes import router as auth_router
 from app.exchange_routes import router as exchange_router
 from app.health_routes import router as health_router
+from app.client_setup_routes import router as client_setup_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
 import os
@@ -304,6 +305,7 @@ app.include_router(bot_router, tags=["Bots"])
 app.include_router(client_router, tags=["Clients"])
 app.include_router(auth_router)
 app.include_router(health_router)
+app.include_router(client_setup_router)
 
 @app.get("/")
 async def root():
