@@ -696,36 +696,64 @@ def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db
     if not client:
         raise HTTPException(status_code=404, detail="Client not found for this bot")
     
+    # Import address derivation functions
+    from app.client_setup_routes import derive_solana_address, derive_evm_address
+    
     try:
         encrypted_key = encrypt_private_key(wallet.private_key)
         chain = bot.chain or "solana"  # Default to solana for Solana bots
+        
+        # Use provided address or derive from private key
+        wallet_address = wallet.address
+        if not wallet_address:
+            # Derive address from private key
+            try:
+                if chain == "solana":
+                    wallet_address = derive_solana_address(wallet.private_key)
+                elif chain in ["evm", "ethereum", "polygon"]:
+                    wallet_address = derive_evm_address(wallet.private_key)
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Wallet address required or provide valid private key to derive address"
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to derive wallet address: {e}")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Wallet address required or provide valid private key to derive address"
+                )
         
         # Store in bot_wallets table (for bot execution)
         bot_wallet = BotWallet(
             id=str(uuid.uuid4()),
             bot_id=bot_id,
-            wallet_address=wallet.address,
+            wallet_address=wallet_address,
             encrypted_private_key=encrypted_key
         )
         db.add(bot_wallet)
         
         # Also store in trading_keys table (for client-level key management)
         # This allows key rotation/revocation to work for admin-added wallets too
+        # Mark as added by admin since this is the admin endpoint
         try:
             db.execute(text("""
-                INSERT INTO trading_keys (client_id, encrypted_key, chain, created_at, updated_at)
-                VALUES (:client_id, :encrypted_key, :chain, NOW(), NOW())
+                INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
+                VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'admin', NOW(), NOW())
                 ON CONFLICT (client_id) 
                 DO UPDATE SET 
                     encrypted_key = :encrypted_key,
                     chain = :chain,
+                    wallet_address = :wallet_address,
+                    added_by = 'admin',
                     updated_at = NOW()
             """), {
                 "client_id": client.id,
                 "encrypted_key": encrypted_key,
-                "chain": chain
+                "chain": chain,
+                "wallet_address": wallet_address
             })
-            logger.info(f"Stored encrypted key in trading_keys table for client {client.id}")
+            logger.info(f"Stored encrypted key in trading_keys table for client {client.id} (added by admin)")
         except Exception as trading_keys_error:
             # If trading_keys table doesn't exist yet (migration not run), log warning but don't fail
             logger.warning(
