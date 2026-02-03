@@ -186,16 +186,36 @@ class BotHealthMonitor:
             return
 
         # Run Solana health check
-        result = await self.solana_checker.check_health(
-            wallet_address=wallet_address,
-            base_mint=base_mint,
-            quote_mint=quote_mint,
-            stale_minutes=STALE_THRESHOLD_MINUTES,
-            stopped_minutes=STOPPED_THRESHOLD_MINUTES,
-        )
+        try:
+            result = await self.solana_checker.check_health(
+                wallet_address=wallet_address,
+                base_mint=base_mint,
+                quote_mint=quote_mint,
+                stale_minutes=STALE_THRESHOLD_MINUTES,
+                stopped_minutes=STOPPED_THRESHOLD_MINUTES,
+            )
+        except Exception as e:
+            logger.error(f"Solana health check failed for bot {bot_id}: {e}", exc_info=True)
+            await self._update_health(
+                conn, bot_id, bot['status'],
+                health_status='error',
+                new_status=None,
+                reason=f"Health check error: {str(e)[:100]}"
+            )
+            return
 
-        health_status = result['health_status']
-        reason = result['reason']
+        # Validate result structure
+        if not result or not isinstance(result, dict):
+            await self._update_health(
+                conn, bot_id, bot['status'],
+                health_status='error',
+                new_status=None,
+                reason="Health check returned invalid result"
+            )
+            return
+
+        health_status = result.get('health_status', 'unknown')
+        reason = result.get('reason', 'Unknown reason')
 
         # Map health to display status
         new_status = None
@@ -205,14 +225,19 @@ class BotHealthMonitor:
             new_status = 'stopped'
         # 'stale' keeps current status
 
-        last_trade = result['transactions'].get('last_tx_time')
+        # Safely get transactions data
+        transactions = result.get('transactions', {})
+        if not isinstance(transactions, dict):
+            transactions = {}
+        last_trade = transactions.get('last_tx_time')
+        trade_count = transactions.get('count', 0)
 
         await self._update_health(
             conn, bot_id, bot['status'],
             health_status=health_status,
             new_status=new_status,
             reason=reason,
-            trade_count=result['transactions'].get('count', 0),
+            trade_count=trade_count,
             last_trade=last_trade
         )
 
@@ -232,12 +257,30 @@ class BotHealthMonitor:
         """
         now = datetime.now(timezone.utc)
         bot_id = bot['id']
-        pair = bot['pair']           # e.g. "SHARP/USDT"
-        connector = bot['connector'] # e.g. "BitMart"
+        pair = bot.get('pair')        # e.g. "SHARP/USDT" (may be None)
+        connector = bot.get('connector') # e.g. "BitMart"
+
+        # Validate required fields
+        if not pair:
+            await self._update_health(
+                conn, bot_id, bot['status'],
+                health_status='error',
+                new_status=None,
+                reason="Bot missing pair configuration"
+            )
+            return
 
         # ── Check heartbeat first (if bot pushes heartbeats) ──
         if bot['last_heartbeat']:
-            heartbeat_age = now - bot['last_heartbeat'].replace(tzinfo=timezone.utc)
+            # Handle both timezone-aware and naive datetimes
+            heartbeat = bot['last_heartbeat']
+            if heartbeat.tzinfo is None:
+                # Naive datetime - make it UTC-aware
+                heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+            else:
+                # Already timezone-aware - ensure UTC
+                heartbeat = heartbeat.astimezone(timezone.utc)
+            heartbeat_age = now - heartbeat
             if heartbeat_age < timedelta(minutes=HEARTBEAT_TIMEOUT_MINUTES):
                 await self._update_health(
                     conn, bot_id, bot['status'],
@@ -376,6 +419,8 @@ class BotHealthMonitor:
             return None
 
         # Parse pair → base/quote
+        if not pair:
+            return None
         parts = pair.split('/')
         if len(parts) != 2:
             return None
