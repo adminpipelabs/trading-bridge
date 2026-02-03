@@ -29,7 +29,7 @@ ADD COLUMN IF NOT EXISTS config JSONB DEFAULT '{}';
 -- Create health check log table for audit trail
 CREATE TABLE IF NOT EXISTS bot_health_logs (
     id SERIAL PRIMARY KEY,
-    bot_id INTEGER REFERENCES bots(id) ON DELETE CASCADE,
+    bot_id VARCHAR(255) REFERENCES bots(id) ON DELETE CASCADE,
     checked_at TIMESTAMP DEFAULT NOW(),
     previous_status VARCHAR(20),
     new_status VARCHAR(20),

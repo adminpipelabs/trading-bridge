@@ -471,6 +471,19 @@ async def start_bot(bot_id: str, db: Session = Depends(get_db)):
             db.commit()
             logger.info(f"Bot {bot_id} started")
         
+        # Update reported_status for health monitor (using raw SQL since column may not be in model yet)
+        try:
+            from sqlalchemy import text
+            db.execute(text("""
+                UPDATE bots 
+                SET reported_status = 'running', status_updated_at = NOW()
+                WHERE id = :bot_id
+            """), {"bot_id": bot_id})
+            db.commit()
+        except Exception as e:
+            # Column might not exist yet if migration hasn't run - log but don't fail
+            logger.warning(f"Could not update reported_status (migration may not have run): {e}")
+        
         return {"status": "started", "bot_id": bot_id}
     except Exception as e:
         logger.error(f"Failed to start bot {bot_id}: {e}")
@@ -504,6 +517,20 @@ async def stop_bot(bot_id: str, db: Session = Depends(get_db)):
             bot.status = "stopped"
             db.commit()
             logger.info(f"Bot {bot_id} stopped")
+        
+        # Update reported_status and health_status for health monitor (using raw SQL since column may not be in model yet)
+        try:
+            from sqlalchemy import text
+            db.execute(text("""
+                UPDATE bots 
+                SET reported_status = 'stopped', status = 'stopped',
+                    health_status = 'stopped', status_updated_at = NOW()
+                WHERE id = :bot_id
+            """), {"bot_id": bot_id})
+            db.commit()
+        except Exception as e:
+            # Column might not exist yet if migration hasn't run - log but don't fail
+            logger.warning(f"Could not update reported_status (migration may not have run): {e}")
         
         return {"status": "stopped", "bot_id": bot_id}
     except Exception as e:

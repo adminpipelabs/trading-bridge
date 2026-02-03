@@ -18,12 +18,14 @@ from app.bot_routes import router as bot_router
 from app.clients_routes import router as client_router
 from app.auth_routes import router as auth_router
 from app.exchange_routes import router as exchange_router
+from app.health_routes import router as health_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
 import os
 import logging
 import json
 from datetime import datetime
+import asyncpg
 
 
 class JSONFormatter(logging.Formatter):
@@ -107,6 +109,39 @@ async def lifespan(app: FastAPI):
         # Don't raise - allow app to start so /health endpoint works
         # But database endpoints will return 503 errors
     
+    # Create asyncpg connection pool for health monitor
+    db_pool = None
+    health_monitor = None
+    try:
+        database_url = os.getenv("DATABASE_URL", "")
+        if database_url:
+            # Convert to asyncpg-compatible URL (remove +psycopg2, ensure postgresql://)
+            async_url = database_url.replace("postgresql+psycopg2://", "postgresql://")
+            async_url = async_url.replace("postgres://", "postgresql://")
+            logger.info("Creating asyncpg connection pool for health monitor...")
+            db_pool = await asyncpg.create_pool(
+                async_url,
+                min_size=2,
+                max_size=10,
+                command_timeout=60
+            )
+            app.state.db_pool = db_pool
+            logger.info("✅ Asyncpg connection pool created")
+            
+            # Start bot health monitor
+            from app.bot_health import BotHealthMonitor
+            health_monitor = BotHealthMonitor(db_pool)
+            await health_monitor.start()
+            app.state.health_monitor = health_monitor
+            logger.info("✅ Bot health monitor started")
+        else:
+            logger.warning("DATABASE_URL not set - health monitor will not start")
+    except Exception as e:
+        logger.error(f"Failed to start health monitor: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        # Don't fail app startup if health monitor fails
+    
     # Start bot runner service (in background)
     async def start_bot_runner():
         try:
@@ -151,6 +186,22 @@ async def lifespan(app: FastAPI):
         # Don't fail app startup if bot runner fails
     
     yield
+    
+    # Shutdown health monitor
+    if health_monitor:
+        try:
+            await health_monitor.stop()
+            logger.info("Bot health monitor stopped")
+        except Exception as e:
+            logger.warning(f"Error stopping health monitor: {e}")
+    
+    # Close asyncpg pool
+    if db_pool:
+        try:
+            await db_pool.close()
+            logger.info("Asyncpg connection pool closed")
+        except Exception as e:
+            logger.warning(f"Error closing db pool: {e}")
     
     # Shutdown bot runner
     try:
@@ -252,6 +303,7 @@ app.include_router(solana_router, tags=["Solana"])
 app.include_router(bot_router, tags=["Bots"])
 app.include_router(client_router, tags=["Clients"])
 app.include_router(auth_router)
+app.include_router(health_router)
 
 @app.get("/")
 async def root():
