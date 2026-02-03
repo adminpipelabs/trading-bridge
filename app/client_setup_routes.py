@@ -10,6 +10,13 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import os
 import logging
+
+from app.database import get_db, Client, Bot
+from app.bot_runner import bot_runner
+
+logger = logging.getLogger(__name__)
+
+# Check for Solana dependencies
 try:
     import base58
     BASE58_AVAILABLE = True
@@ -23,11 +30,6 @@ try:
 except ImportError:
     SOLDERS_AVAILABLE = False
     logger.warning("solders not available - Solana address derivation will fail")
-
-from app.database import get_db, Client, Bot
-from app.bot_runner import bot_runner
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/clients", tags=["client-setup"])
 
