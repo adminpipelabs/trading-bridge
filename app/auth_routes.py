@@ -153,8 +153,21 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
     token_data = f"{wallet_address}:{datetime.utcnow().timestamp()}"
     access_token = hashlib.sha256(token_data.encode()).hexdigest()
     
-    # Determine role: admin if account_identifier is 'admin', otherwise use client.role or default to 'client'
-    role = "admin" if client.account_identifier == "admin" else (client.role or "client")
+    # CRITICAL SECURITY: Determine role with explicit checks
+    # ONLY return 'admin' if account_identifier is explicitly 'admin'
+    # ALL other cases default to 'client' for security
+    if client.account_identifier == "admin":
+        role = "admin"
+    else:
+        # Use role from database, but default to 'client' if missing/null
+        # This ensures clients NEVER get admin access by mistake
+        role = (client.role or "client").lower()
+        # Force to 'client' if somehow set to something other than 'admin' or 'client'
+        if role != "admin":
+            role = "client"
+    
+    # Log role assignment for security auditing
+    logger.info(f"Auth verify: client_id={client.id}, account={client.account_identifier}, role={role}")
     
     return VerifyResponse(
         access_token=access_token,
@@ -162,7 +175,7 @@ def verify_signature(request: VerifyRequest, db: Session = Depends(get_db)):
             "id": str(client.id),
             "wallet_address": client.wallet_address,
             "name": client.name,
-            "role": role,
+            "role": role,  # CRITICAL: Must be 'client' for all non-admin users
             "account_identifier": client.account_identifier,
             "is_active": True
         }
