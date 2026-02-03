@@ -16,6 +16,7 @@ from app.security import get_current_client
 from app.wallet_encryption import encrypt_private_key, decrypt_private_key
 from app.bot_runner import bot_runner
 from typing import List
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -154,17 +155,53 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
     db.flush()  # Flush to get bot.id
 
     # For Solana bots, add wallets
+    # Note: Keys are stored in BOTH trading_keys (client-level) and bot_wallets (bot-level)
+    # - trading_keys: For client-level key management (rotation, revocation)
+    # - bot_wallets: For bot-level execution (bot runner reads from here)
     if is_solana_bot and request.wallets:
+        # Determine chain from bot config or default to solana
+        chain = "solana"  # Solana bots are always on Solana chain
+        
         for wallet_info in request.wallets:
             try:
                 encrypted_key = encrypt_private_key(wallet_info['private_key'])
+                wallet_address = wallet_info['address']
+                
+                # Store in bot_wallets table (for bot execution)
                 bot_wallet = BotWallet(
                     id=str(uuid.uuid4()),
                     bot_id=bot_id,
-                    wallet_address=wallet_info['address'],
+                    wallet_address=wallet_address,
                     encrypted_private_key=encrypted_key
                 )
                 db.add(bot_wallet)
+                
+                # Also store in trading_keys table (for client-level key management)
+                # This allows key rotation/revocation to work for admin-created bots too
+                # Use ON CONFLICT to handle case where client already has a key
+                try:
+                    db.execute(text("""
+                        INSERT INTO trading_keys (client_id, encrypted_key, chain, created_at, updated_at)
+                        VALUES (:client_id, :encrypted_key, :chain, NOW(), NOW())
+                        ON CONFLICT (client_id) 
+                        DO UPDATE SET 
+                            encrypted_key = :encrypted_key,
+                            chain = :chain,
+                            updated_at = NOW()
+                    """), {
+                        "client_id": client.id,
+                        "encrypted_key": encrypted_key,
+                        "chain": chain
+                    })
+                    logger.info(f"Stored encrypted key in trading_keys table for client {client.id}")
+                except Exception as trading_keys_error:
+                    # If trading_keys table doesn't exist yet (migration not run), log warning but don't fail
+                    # The bot can still be created and work, just key rotation won't be available
+                    logger.warning(
+                        f"Failed to store key in trading_keys table (migration may not be run): {trading_keys_error}. "
+                        f"Bot will still work, but key rotation/revocation may not be available."
+                    )
+                
             except Exception as e:
                 logger.error(f"Failed to add wallet to bot {bot_id}: {e}")
                 raise HTTPException(
@@ -636,8 +673,16 @@ def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db
             detail="Wallet already exists for this bot"
         )
 
+    # Get client for trading_keys storage
+    client = db.query(Client).filter(Client.id == bot.client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found for this bot")
+    
     try:
         encrypted_key = encrypt_private_key(wallet.private_key)
+        chain = bot.chain or "solana"  # Default to solana for Solana bots
+        
+        # Store in bot_wallets table (for bot execution)
         bot_wallet = BotWallet(
             id=str(uuid.uuid4()),
             bot_id=bot_id,
@@ -645,6 +690,31 @@ def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db
             encrypted_private_key=encrypted_key
         )
         db.add(bot_wallet)
+        
+        # Also store in trading_keys table (for client-level key management)
+        # This allows key rotation/revocation to work for admin-added wallets too
+        try:
+            db.execute(text("""
+                INSERT INTO trading_keys (client_id, encrypted_key, chain, created_at, updated_at)
+                VALUES (:client_id, :encrypted_key, :chain, NOW(), NOW())
+                ON CONFLICT (client_id) 
+                DO UPDATE SET 
+                    encrypted_key = :encrypted_key,
+                    chain = :chain,
+                    updated_at = NOW()
+            """), {
+                "client_id": client.id,
+                "encrypted_key": encrypted_key,
+                "chain": chain
+            })
+            logger.info(f"Stored encrypted key in trading_keys table for client {client.id}")
+        except Exception as trading_keys_error:
+            # If trading_keys table doesn't exist yet (migration not run), log warning but don't fail
+            logger.warning(
+                f"Failed to store key in trading_keys table (migration may not be run): {trading_keys_error}. "
+                f"Wallet will still work, but key rotation/revocation may not be available."
+            )
+        
         db.commit()
         db.refresh(bot_wallet)
 
@@ -655,6 +725,7 @@ def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db
         }
     except Exception as e:
         logger.error(f"Failed to add wallet to bot {bot_id}: {e}")
+        db.rollback()
         raise HTTPException(
             status_code=400,
             detail=f"Failed to add wallet: {e}"
