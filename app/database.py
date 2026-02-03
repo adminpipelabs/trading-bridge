@@ -168,6 +168,38 @@ class Bot(Base):
             chain = "solana"  # Solana bots
         else:
             chain = "evm"  # Default to EVM
+        
+        # Fetch health fields from database (they exist in table but not in SQLAlchemy model yet)
+        health_status = None
+        health_message = None
+        last_trade_time = None
+        last_heartbeat = None
+        reported_status = None
+        status_updated_at = None
+        
+        try:
+            from sqlalchemy import text
+            # Use the same session that loaded this bot
+            if hasattr(self, '_sa_instance_state') and self._sa_instance_state.session:
+                result = self._sa_instance_state.session.execute(
+                    text("""
+                        SELECT health_status, health_message, last_trade_time, 
+                               last_heartbeat, reported_status, status_updated_at
+                        FROM bots WHERE id = :bot_id
+                    """),
+                    {"bot_id": self.id}
+                ).first()
+                if result:
+                    health_status = result[0]
+                    health_message = result[1]
+                    last_trade_time = result[2].isoformat() if result[2] else None
+                    last_heartbeat = result[3].isoformat() if result[3] else None
+                    reported_status = result[4]
+                    status_updated_at = result[5].isoformat() if result[5] else None
+        except Exception as e:
+            # If health columns don't exist yet (migration not run), just continue
+            logger.debug(f"Could not fetch health fields (migration may not be run): {e}")
+        
         return {
             "id": self.id,
             "client_id": self.client_id,
@@ -183,6 +215,12 @@ class Bot(Base):
             "stats": self.stats or {},
             "error": self.error,
             "chain": chain,
+            "health_status": health_status,
+            "health_message": health_message,
+            "last_trade_time": last_trade_time,
+            "last_heartbeat": last_heartbeat,
+            "reported_status": reported_status,
+            "status_updated_at": status_updated_at,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
