@@ -98,7 +98,15 @@ class BotHealthMonitor:
             try:
                 await self._run_health_checks()
             except Exception as e:
-                logger.error(f"Health check cycle failed: {e}", exc_info=True)
+                # Don't crash the app if health checks fail (e.g., missing tables)
+                error_msg = str(e)
+                if "does not exist" in error_msg or "UndefinedTableError" in error_msg:
+                    logger.warning(
+                        f"Health check skipped - database tables not ready: {error_msg}. "
+                        "Run migrations/add_bot_health_tracking.sql to enable health monitoring."
+                    )
+                else:
+                    logger.error(f"Health check cycle failed: {e}", exc_info=True)
             await asyncio.sleep(HEALTH_CHECK_INTERVAL_SECONDS)
 
     async def _run_health_checks(self):
@@ -413,38 +421,52 @@ class BotHealthMonitor:
         """Update bot health in DB and log the check."""
         now = datetime.now(timezone.utc)
 
-        # Update bots table
-        if new_status and new_status != previous_status:
-            await conn.execute("""
-                UPDATE bots 
-                SET health_status = $1,
-                    status = $2,
-                    last_trade_time = COALESCE($3, last_trade_time),
-                    status_updated_at = $4,
-                    health_message = $5
-                WHERE id = $6
-            """, health_status, new_status, last_trade, now, reason, bot_id)
-            logger.warning(
-                f"Bot {bot_id} status changed: {previous_status} → {new_status} "
-                f"(health: {health_status}, reason: {reason})"
-            )
-        else:
-            await conn.execute("""
-                UPDATE bots 
-                SET health_status = $1,
-                    last_trade_time = COALESCE($2, last_trade_time),
-                    health_message = $3
-                WHERE id = $4
-            """, health_status, last_trade, reason, bot_id)
+        try:
+            # Update bots table (health columns may not exist if migration not run)
+            if new_status and new_status != previous_status:
+                await conn.execute("""
+                    UPDATE bots 
+                    SET health_status = $1,
+                        status = $2,
+                        last_trade_time = COALESCE($3, last_trade_time),
+                        status_updated_at = $4,
+                        health_message = $5
+                    WHERE id = $6
+                """, health_status, new_status, last_trade, now, reason, bot_id)
+                logger.warning(
+                    f"Bot {bot_id} status changed: {previous_status} → {new_status} "
+                    f"(health: {health_status}, reason: {reason})"
+                )
+            else:
+                await conn.execute("""
+                    UPDATE bots 
+                    SET health_status = $1,
+                        last_trade_time = COALESCE($2, last_trade_time),
+                        health_message = $3
+                    WHERE id = $4
+                """, health_status, last_trade, reason, bot_id)
+        except Exception as e:
+            # Health columns may not exist - log but don't fail
+            if "does not exist" in str(e) or "column" in str(e).lower():
+                logger.debug(f"Health columns not available (migration not run): {e}")
+                return
+            raise
 
-        # Log the health check
-        await conn.execute("""
-            INSERT INTO bot_health_logs 
-                (bot_id, previous_status, new_status, health_status, reason,
-                 trade_count_since_last, last_trade_found)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, bot_id, previous_status, new_status or previous_status,
-            health_status, reason, trade_count, last_trade)
+        # Log the health check (table may not exist)
+        try:
+            await conn.execute("""
+                INSERT INTO bot_health_logs 
+                    (bot_id, previous_status, new_status, health_status, reason,
+                     trade_count_since_last, last_trade_found)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """, bot_id, previous_status, new_status or previous_status,
+                health_status, reason, trade_count, last_trade)
+        except Exception as e:
+            # bot_health_logs table may not exist - log but don't fail
+            if "does not exist" in str(e) or "UndefinedTableError" in str(e):
+                logger.debug(f"bot_health_logs table not available (migration not run): {e}")
+                return
+            raise
 
     # ──────────────────────────────────────────────────────────
     # Exchange connection management
