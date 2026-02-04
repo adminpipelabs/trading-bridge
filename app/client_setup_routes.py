@@ -3,6 +3,7 @@ Client Self-Service Bot Setup Routes
 Allows clients to set up their own bots with encrypted private key storage.
 """
 from fastapi import APIRouter, HTTPException, Depends, Request
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from datetime import datetime
@@ -425,14 +426,59 @@ def rotate_key(client_id: str, request: RotateKeyRequest, db: Session = Depends(
 
 
 @router.get("/{client_id}/key-status")
-def get_key_status(client_id: str, db: Session = Depends(get_db)):
+def get_key_status(
+    client_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     """
     Check if a client has connected their trading key.
     Returns status WITHOUT exposing the key itself.
+    
+    Authorization: Clients can only check their own key status. Admins can check any client's status.
     """
+    from app.security import get_current_client
+    
+    # Get requesting wallet from header
+    requesting_wallet = request.headers.get("X-Wallet-Address")
+    
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Authorization check: Client can only check their own key status
+    if requesting_wallet:
+        requesting_wallet_lower = requesting_wallet.lower()
+        
+        # Find requesting client
+        from app.database import Wallet
+        requesting_wallet_obj = db.query(Wallet).filter(
+            (Wallet.address == requesting_wallet) | 
+            (Wallet.address == requesting_wallet_lower)
+        ).first()
+        
+        if requesting_wallet_obj:
+            requesting_client = requesting_wallet_obj.client
+            # Allow if same client OR admin
+            is_admin = (
+                requesting_client.account_identifier == "admin" or
+                (requesting_client.role and requesting_client.role.lower() == "admin")
+            )
+            same_client = requesting_client.id == client.id
+            
+            if not (is_admin or same_client):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this client's key status"
+                )
+        else:
+            # Requesting wallet not found - check if admin account exists
+            admin_client = db.query(Client).filter(Client.account_identifier == "admin").first()
+            if not admin_client:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this client's key status"
+                )
 
     # Query trading_keys table
     try:

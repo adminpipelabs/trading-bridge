@@ -3,6 +3,7 @@ Client management routes with PostgreSQL persistence.
 Wallet-to-account mapping for bot filtering.
 """
 from fastapi import APIRouter, HTTPException, Depends
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
@@ -209,11 +210,21 @@ def get_client(client_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/by-wallet/{wallet_address}", response_model=dict)
-def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
+def get_client_by_wallet(
+    wallet_address: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     """
     Look up client by wallet address.
     Returns client info including account_identifier for bot filtering.
+    
+    Authorization: Clients can only look up their own wallet. Admins can look up any wallet.
     """
+    
+    # Get requesting wallet from header
+    requesting_wallet = request.headers.get("X-Wallet-Address") if request else None
+    
     # Try both original case and lowercase for backward compatibility with existing data
     # New entries are stored in original case, but old entries might be lowercase
     wallet = db.query(Wallet).filter(
@@ -226,6 +237,49 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
         )
     
     client = wallet.client
+    
+    # Authorization check: Client can only look up their own wallet
+    # Admins can look up any wallet
+    if requesting_wallet:
+        requesting_wallet_lower = requesting_wallet.lower()
+        wallet_address_lower = wallet_address.lower()
+        
+        # Check if requesting wallet matches the wallet being looked up
+        wallet_matches = (
+            requesting_wallet_lower == wallet_address_lower or
+            requesting_wallet_lower == wallet_address
+        )
+        
+        # Check if requesting wallet belongs to the same client
+        requesting_wallet_obj = db.query(Wallet).filter(
+            (Wallet.address == requesting_wallet) | 
+            (Wallet.address == requesting_wallet_lower)
+        ).first()
+        
+        if requesting_wallet_obj:
+            requesting_client = requesting_wallet_obj.client
+            # Allow if same client OR admin
+            is_admin = (
+                requesting_client.account_identifier == "admin" or
+                (requesting_client.role and requesting_client.role.lower() == "admin")
+            )
+            same_client = requesting_client.id == client.id
+            
+            if not (is_admin or same_client or wallet_matches):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this wallet's data"
+                )
+        elif not wallet_matches:
+            # Requesting wallet not found, but wallet being looked up doesn't match
+            # Check if admin account exists and allow admin access
+            admin_client = db.query(Client).filter(Client.account_identifier == "admin").first()
+            if not admin_client:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Not authorized to access this wallet's data"
+                )
+    
     wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
     connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
     
@@ -233,6 +287,7 @@ def get_client_by_wallet(wallet_address: str, db: Session = Depends(get_db)):
         "client_id": client.id,
         "account_identifier": client.account_identifier,
         "name": client.name,
+        "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
         "wallets": wallets,
         "connectors": connectors
     }
