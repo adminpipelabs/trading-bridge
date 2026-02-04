@@ -313,13 +313,17 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     # Merge config with defaults
     merged_config = {**bot_config["default_config"], **request.config}
     
-    # For Solana bots, add base_mint and quote_mint if not provided
+    # For Solana bots, only set quote_mint to SOL if not provided (native token)
+    # Don't default base_mint - user must specify which token they want to trade
     if chain == "solana" and request.bot_type == "volume":
-        if "base_mint" not in merged_config:
-            # Default to LYNK token if not specified
-            merged_config["base_mint"] = "HZG1RVn4zcRM7zEFEVGYPGoPzPAWAj2AAdvQivfmLYNK"
         if "quote_mint" not in merged_config:
+            # Default quote_mint to SOL (native token for Solana)
             merged_config["quote_mint"] = "So11111111111111111111111111111111111111112"  # SOL
+        # base_mint must be provided by user - don't default to specific tokens
+
+    # Determine pair from config
+    # Pair should be provided by user in config, or derived from base_mint/quote_mint later
+    pair = merged_config.get("pair")  # Use pair from config if provided, otherwise None
 
     # Create bot
     bot = Bot(
@@ -329,7 +333,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         instance_name=f"{client.account_identifier}_{bot_id[:8]}",
         name=f"{bot_config['label']} - {client.name}",
         connector="jupiter" if chain == "solana" else "uniswap",
-        pair="LYNK/SOL" if chain == "solana" else "SHARP/USDT",  # Default pairs
+        pair=pair,  # Use configured pair or None (user will set)
         strategy="volume" if request.bot_type == "volume" else "spread",
         bot_type=request.bot_type,
         status="stopped",  # Will be started after wallet is added
