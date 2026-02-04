@@ -103,3 +103,25 @@ def require_account_access(
         return current_client
     
     return current_client
+
+
+def check_bot_access(bot, current_client: Client):
+    """
+    Verify that the current user can access/modify the bot.
+    - Admin users can access any bot
+    - Client users can only access bots in their account
+    
+    Raises HTTPException if access denied.
+    """
+    # Admin can access all bots
+    if current_client.account_identifier == "admin" or current_client.role == "admin":
+        return True
+    
+    # Client can only access bots in their account
+    if bot.account != current_client.account_identifier:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Access denied. You can only access bots in your own account ({current_client.account_identifier})"
+        )
+    
+    return True
