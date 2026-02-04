@@ -285,6 +285,21 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             "chain": chain,
             "wallet_address": wallet_address
         })
+        
+        # Create admin notification for key connection
+        try:
+            wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if wallet_address else "unknown"
+            db.execute(text("""
+                INSERT INTO admin_notifications (type, client_id, message, created_at)
+                VALUES ('key_connected', :client_id, :message, NOW())
+            """), {
+                "client_id": client_id,
+                "message": f"Client '{client.name}' connected trading wallet {wallet_short}"
+            })
+        except Exception as notif_error:
+            # Notification table might not exist yet - log but don't fail
+            logger.debug(f"Could not create notification (table may not exist): {notif_error}")
+        
         db.commit()
     except Exception as e:
         db.rollback()
@@ -423,6 +438,62 @@ def rotate_key(client_id: str, request: RotateKeyRequest, db: Session = Depends(
         "success": True,
         "message": "Key rotated successfully. All bots will use the new key."
     }
+
+
+@router.put("/{client_id}/management-mode")
+async def set_management_mode(
+    client_id: str,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Set client's management mode preference.
+    'self' = client manages everything
+    'managed' = Pipe Labs manages bot
+    """
+    from fastapi import Request as FastAPIRequest
+    
+    body = await request.json()
+    mode = body.get("mode")  # "self" or "managed"
+    
+    if mode not in ["self", "managed", "unset"]:
+        raise HTTPException(status_code=400, detail="mode must be 'self', 'managed', or 'unset'")
+    
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    try:
+        # Update management mode
+        db.execute(text("""
+            UPDATE clients 
+            SET management_mode = :mode 
+            WHERE id = :client_id
+        """), {
+            "mode": mode,
+            "client_id": client_id
+        })
+        
+        # Create admin notification
+        try:
+            db.execute(text("""
+                INSERT INTO admin_notifications (type, client_id, message, created_at)
+                VALUES ('management_mode', :client_id, :message, NOW())
+            """), {
+                "client_id": client_id,
+                "message": f"Client '{client.name}' selected '{mode}' management mode"
+            })
+        except Exception as notif_error:
+            logger.debug(f"Could not create notification: {notif_error}")
+        
+        db.commit()
+        
+        return {"success": True, "mode": mode}
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error setting management mode: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error setting management mode: {str(e)}")
 
 
 @router.get("/{client_id}/key-status")

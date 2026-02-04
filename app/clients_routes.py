@@ -288,6 +288,7 @@ def get_client_by_wallet(
         "account_identifier": client.account_identifier,
         "name": client.name,
         "role": "admin" if client.account_identifier == "admin" else (client.role or "client"),
+        "management_mode": getattr(client, 'management_mode', None) or 'unset',
         "wallets": wallets,
         "connectors": connectors
     }

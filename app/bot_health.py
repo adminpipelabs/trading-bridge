@@ -161,7 +161,19 @@ class BotHealthMonitor:
         """
         bot_id = bot['id']
         wallet_address = bot.get('wallet_address')
-        config = bot.get('config') or {}
+        config_raw = bot.get('config') or {}
+        
+        # Handle config as string (JSONB from PostgreSQL might be returned as string)
+        if isinstance(config_raw, str):
+            import json
+            try:
+                config = json.loads(config_raw)
+            except (json.JSONDecodeError, TypeError):
+                config = {}
+        elif isinstance(config_raw, dict):
+            config = config_raw
+        else:
+            config = {}
 
         # Config stores base_mint and quote_mint for Jupiter bots
         base_mint = config.get('base_mint')
@@ -226,11 +238,26 @@ class BotHealthMonitor:
         # 'stale' keeps current status
 
         # Safely get transactions data
-        transactions = result.get('transactions', {})
-        if not isinstance(transactions, dict):
+        # Handle case where transactions might be a string (JSON) or dict
+        transactions_raw = result.get('transactions', {})
+        if isinstance(transactions_raw, str):
+            import json
+            try:
+                transactions = json.loads(transactions_raw)
+            except (json.JSONDecodeError, TypeError):
+                transactions = {}
+        elif isinstance(transactions_raw, dict):
+            transactions = transactions_raw
+        else:
             transactions = {}
-        last_trade = transactions.get('last_tx_time')
-        trade_count = transactions.get('count', 0)
+        
+        # Ensure transactions is a dict before calling .get()
+        if not isinstance(transactions, dict):
+            logger.warning(f"Transactions data is not a dict for bot {bot_id}: {type(transactions)}")
+            transactions = {}
+        
+        last_trade = transactions.get('last_tx_time') if isinstance(transactions, dict) else None
+        trade_count = transactions.get('count', 0) if isinstance(transactions, dict) else 0
 
         await self._update_health(
             conn, bot_id, bot['status'],
