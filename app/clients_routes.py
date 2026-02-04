@@ -402,6 +402,147 @@ def delete_connector(client_id: str, connector_id: str, db: Session = Depends(ge
     return {"status": "deleted", "connector_id": connector_id, "client_id": client_id}
 
 
+@router.put("/{client_id}", response_model=ClientResponse)
+def update_client(client_id: str, request: dict, db: Session = Depends(get_db)):
+    """Update client information (name, email, primary wallet_address, etc.)."""
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    # Update fields if provided
+    if "name" in request:
+        client.name = request["name"]
+    if "email" in request:
+        client.email = request["email"]
+    if "wallet_address" in request:
+        # Update primary wallet_address (legacy field)
+        client.wallet_address = request["wallet_address"]
+        # Also update or create primary wallet in wallets table
+        primary_wallet = db.query(Wallet).filter(
+            Wallet.client_id == client_id,
+            Wallet.address == request["wallet_address"].lower()
+        ).first()
+        if not primary_wallet:
+            # Create new primary wallet
+            chain = "evm" if request["wallet_address"].startswith("0x") else "solana"
+            primary_wallet = Wallet(
+                id=str(uuid.uuid4()),
+                client_id=client_id,
+                chain=chain,
+                address=request["wallet_address"].lower(),
+                created_at=datetime.utcnow()
+            )
+            db.add(primary_wallet)
+    if "status" in request:
+        client.status = request["status"]
+    
+    client.updated_at = datetime.utcnow()
+    
+    try:
+        db.commit()
+        db.refresh(client)
+        logger.info(f"Updated client: {client_id}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update client: {str(e)}")
+    
+    wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
+    connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
+    
+    return {
+        "id": client.id,
+        "name": client.name,
+        "account_identifier": client.account_identifier,
+        "wallets": wallets,
+        "connectors": connectors,
+        "created_at": client.created_at.isoformat()
+    }
+
+
+@router.put("/{client_id}/wallet/{wallet_id}", response_model=ClientResponse)
+def update_wallet(client_id: str, wallet_id: str, wallet: WalletInfo, db: Session = Depends(get_db)):
+    """Update an existing wallet address."""
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    existing_wallet = db.query(Wallet).filter(
+        Wallet.id == wallet_id,
+        Wallet.client_id == client_id
+    ).first()
+    
+    if not existing_wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    
+    # Check if new address already exists (different wallet)
+    duplicate = db.query(Wallet).filter(
+        Wallet.client_id == client_id,
+        Wallet.address == wallet.address.lower(),
+        Wallet.id != wallet_id
+    ).first()
+    
+    if duplicate:
+        raise HTTPException(status_code=400, detail="Wallet address already exists for this client")
+    
+    # Update wallet
+    existing_wallet.address = wallet.address.lower()
+    existing_wallet.chain = wallet.chain
+    
+    # If this is the primary wallet, update client.wallet_address too
+    if client.wallet_address and client.wallet_address.lower() == existing_wallet.address:
+        client.wallet_address = wallet.address
+    
+    try:
+        db.commit()
+        db.refresh(client)
+        logger.info(f"Updated wallet {wallet_id} for client {client_id}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update wallet: {str(e)}")
+    
+    wallets = [{"id": w.id, "chain": w.chain, "address": w.address} for w in client.wallets]
+    connectors = [{"id": c.id, "name": c.name} for c in client.connectors]
+    
+    return {
+        "id": client.id,
+        "name": client.name,
+        "account_identifier": client.account_identifier,
+        "wallets": wallets,
+        "connectors": connectors,
+        "created_at": client.created_at.isoformat()
+    }
+
+
+@router.delete("/{client_id}/wallet/{wallet_id}")
+def delete_wallet(client_id: str, wallet_id: str, db: Session = Depends(get_db)):
+    """Delete a wallet from a client."""
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    wallet = db.query(Wallet).filter(
+        Wallet.id == wallet_id,
+        Wallet.client_id == client_id
+    ).first()
+    
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    
+    # If this is the primary wallet, clear client.wallet_address
+    if client.wallet_address and client.wallet_address.lower() == wallet.address.lower():
+        client.wallet_address = None
+    
+    try:
+        db.delete(wallet)
+        db.commit()
+        logger.info(f"Deleted wallet {wallet_id} from client {client_id}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete wallet: {str(e)}")
+    
+    return {"status": "deleted", "wallet_id": wallet_id, "client_id": client_id}
+
+
 @router.delete("/{client_id}")
 def delete_client(client_id: str, db: Session = Depends(get_db)):
     """Delete a client and all associated data (cascade delete)."""
