@@ -1,79 +1,103 @@
 #!/bin/bash
-# Run Database Migrations via Railway CLI
-# This script executes the complete setup SQL
+# Railway Migration Script
+# Run PostgreSQL migrations using DATABASE_URL from Railway environment
+# Execute with: railway run bash run_migrations.sh
 
-set -e
+set -e  # Exit on error
 
-echo "=========================================="
-echo "Running Database Migrations"
-echo "=========================================="
+echo "============================================================"
+echo "Railway PostgreSQL Migration Script"
+echo "============================================================"
 echo ""
 
-# Check if Railway CLI is available
-if ! command -v railway &> /dev/null; then
-    echo "❌ Railway CLI not found. Please install it first:"
-    echo "   npm i -g @railway/cli"
+# Check if DATABASE_URL is set
+if [ -z "$DATABASE_URL" ]; then
+    echo "❌ ERROR: DATABASE_URL not found in environment"
+    echo "   Make sure you're running this in Railway environment"
     exit 1
 fi
 
-# Check if linked to Railway project
-if ! railway status &> /dev/null; then
-    echo "⚠️  Not linked to Railway project. Linking now..."
-    railway link
-fi
-
-echo "📋 Reading migration SQL..."
-SQL_FILE="migrations/COMPLETE_SETUP.sql"
-
-if [ ! -f "$SQL_FILE" ]; then
-    echo "❌ Migration file not found: $SQL_FILE"
-    exit 1
-fi
-
-echo "🔗 Connecting to Railway PostgreSQL..."
+echo "✅ DATABASE_URL found"
 echo ""
 
-# Try to run SQL via Railway CLI
-# Railway CLI can execute SQL commands
-railway run psql < "$SQL_FILE" 2>&1 || {
-    echo ""
-    echo "⚠️  Direct execution failed. Trying alternative method..."
-    echo ""
-    echo "Alternative: Get DATABASE_URL and run with psql"
-    echo ""
-    DATABASE_URL=$(railway variables get DATABASE_URL 2>/dev/null | grep -v "^$" | tail -1)
-    
-    if [ -z "$DATABASE_URL" ]; then
-        echo "❌ Could not get DATABASE_URL from Railway"
-        echo ""
-        echo "Please run migrations manually:"
-        echo "1. Railway Dashboard → PostgreSQL → Query tab"
-        echo "2. Copy contents of: $SQL_FILE"
-        echo "3. Paste and execute"
-        exit 1
-    fi
-    
-    echo "✅ Got DATABASE_URL"
-    echo "🔧 Running migrations with psql..."
-    echo "$DATABASE_URL" | sed 's|postgresql://|postgres://|' | xargs psql < "$SQL_FILE" 2>&1 || {
-        echo ""
-        echo "❌ Failed to run migrations"
-        echo ""
-        echo "Please run migrations manually:"
-        echo "1. Railway Dashboard → PostgreSQL → Query tab"
-        echo "2. Copy contents of: $SQL_FILE"
-        echo "3. Paste and execute"
-        exit 1
+# Extract database connection details
+DB_HOST=$(echo $DATABASE_URL | sed -n 's/.*@\([^:]*\):.*/\1/p')
+DB_PORT=$(echo $DATABASE_URL | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
+DB_NAME=$(echo $DATABASE_URL | sed -n 's/.*\/\([^?]*\).*/\1/p')
+DB_USER=$(echo $DATABASE_URL | sed -n 's/.*:\/\/\([^:]*\):.*/\1/p')
+DB_PASS=$(echo $DATABASE_URL | sed -n 's/.*:\/\/[^:]*:\([^@]*\)@.*/\1/p')
+
+echo "📋 Database: $DB_HOST:$DB_PORT/$DB_NAME"
+echo "👤 User: $DB_USER"
+echo ""
+
+# Check if psql is available
+if ! command -v psql &> /dev/null; then
+    echo "📦 Installing PostgreSQL client..."
+    apt-get update -qq && apt-get install -y -qq postgresql-client > /dev/null 2>&1 || {
+        echo "⚠️  Could not install postgresql-client, trying with python..."
+        python3 railway_migrate.py
+        exit $?
     }
-}
+fi
 
-echo ""
-echo "✅ Migrations completed successfully!"
-echo ""
-echo "Verifying..."
-railway run psql -c "SELECT id, name, account_identifier, role FROM clients LIMIT 5;" 2>/dev/null || echo "⚠️  Could not verify (this is OK if migrations succeeded)"
+# Read SQL file
+SQL_FILE="migrations/COMPLETE_SETUP.sql"
+if [ ! -f "$SQL_FILE" ]; then
+    echo "❌ ERROR: Migration file not found: $SQL_FILE"
+    exit 1
+fi
 
+echo "📄 SQL File: $SQL_FILE"
 echo ""
-echo "=========================================="
-echo "✅ Database migrations complete!"
-echo "=========================================="
+echo "🔧 Executing migrations..."
+echo ""
+
+# Run migrations using psql
+export PGPASSWORD="$DB_PASS"
+
+# Execute SQL file
+psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" -f "$SQL_FILE" -v ON_ERROR_STOP=1
+
+MIGRATION_EXIT=$?
+
+if [ $MIGRATION_EXIT -eq 0 ]; then
+    echo ""
+    echo "============================================================"
+    echo "✅ Migrations completed successfully!"
+    echo "============================================================"
+    
+    # Verify migrations
+    echo ""
+    echo "🔍 Verifying migrations..."
+    echo ""
+    
+    psql -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" -c "
+        SELECT 
+            CASE WHEN EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'bots' AND column_name = 'health_status'
+            ) THEN '✅ health_status column exists' 
+            ELSE '❌ health_status column missing' END as health_status_check;
+        
+        SELECT 
+            CASE WHEN EXISTS (
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_name = 'trading_keys'
+            ) THEN '✅ trading_keys table exists' 
+            ELSE '❌ trading_keys table missing' END as trading_keys_check;
+        
+        SELECT 
+            CASE WHEN COUNT(*) = 0 THEN '✅ All clients have roles assigned' 
+            ELSE '⚠️  ' || COUNT(*) || ' clients with NULL roles' END as roles_check
+        FROM clients WHERE role IS NULL;
+    "
+    
+    exit 0
+else
+    echo ""
+    echo "============================================================"
+    echo "❌ Migrations failed with exit code: $MIGRATION_EXIT"
+    echo "============================================================"
+    exit $MIGRATION_EXIT
+fi
