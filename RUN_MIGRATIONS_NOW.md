@@ -1,33 +1,26 @@
 # Run PostgreSQL Migrations on Railway
 
-**Quick Start:** Run this command in Railway CLI or use Railway Dashboard.
+**Recommended Method:** Python script (handles dependencies automatically)
 
 ---
 
-## 🚀 **Option 1: Railway CLI (Recommended)**
+## 🚀 **Run Migrations (Recommended)**
 
-```bash
-railway run bash run_migrations.sh
-```
-
-Or use Python script:
+### **Via Railway CLI:**
 ```bash
 railway run python railway_migrate.py
 ```
 
----
-
-## 🚀 **Option 2: Railway Dashboard**
-
+### **Via Railway Dashboard:**
 1. Go to Railway Dashboard → **trading-bridge** service
 2. Click **"Deployments"** tab
 3. Click **"..."** (three dots) on latest deployment → **"Run Command"**
-4. Enter: `bash run_migrations.sh`
+4. Enter: `python railway_migrate.py`
 5. Click **"Run"**
 
 ---
 
-## 🚀 **Option 3: PostgreSQL Query Tab**
+## 🚀 **Alternative: PostgreSQL Query Tab**
 
 1. Go to Railway Dashboard → **PostgreSQL** service
 2. Click **"Query"** tab
