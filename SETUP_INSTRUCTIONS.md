@@ -1,228 +1,169 @@
-# Setup Instructions — Private Key Handling
+# Setup Instructions — Final Steps Before Client Testing
 
-## Step 1: Run Database Migration ⚠️ CRITICAL
-
-### Option A: Railway Dashboard (Recommended)
-
-1. **Open Railway Dashboard**
-   - Go to https://railway.app
-   - Select your `trading-bridge` project
-   - Click on **PostgreSQL** service
-
-2. **Open Query Tab**
-   - Click on **"Query"** tab in the PostgreSQL service
-   - This opens a SQL editor
-
-3. **Copy & Paste Migration**
-   - Open `migrations/COPY_THIS_TO_RAILWAY.sql` in this repo
-   - Copy the **entire contents**
-   - Paste into the Railway Query editor
-   - Click **"Run"** or press `Cmd+Enter` (Mac) / `Ctrl+Enter` (Windows)
-
-4. **Verify Success**
-   - You should see "Success" message
-   - Run this verification query:
-   ```sql
-   SELECT table_name FROM information_schema.tables 
-   WHERE table_name IN ('bot_health_logs', 'trading_keys');
-   ```
-   - Should return: `bot_health_logs` and `trading_keys`
-
-### Option B: Railway CLI (Alternative)
-
-```bash
-# Get DATABASE_URL
-railway variables get DATABASE_URL
-
-# Run migration (if you have psql installed locally)
-psql $DATABASE_URL -f migrations/COPY_THIS_TO_RAILWAY.sql
-```
+**Time Required:** ~17 minutes  
+**Status:** Code is deployed, setup steps remaining
 
 ---
 
-## Step 2: Set ENCRYPTION_KEY ⚠️ CRITICAL
+## Step 1: Run Database Migrations (5 minutes)
 
-### Option A: Generate & Set via Script
+### **Action:**
+1. Open Railway Dashboard
+2. Go to your **PostgreSQL** service
+3. Click **"Query"** tab
+4. Copy **entire contents** of `migrations/COMPLETE_SETUP.sql`
+5. Paste into Query tab
+6. Click **"Run"** or **"Execute"**
 
+### **Verify:**
+After running, you should see:
+- ✅ All clients have correct roles (admin = 'admin', others = 'client')
+- ✅ `health_status` column exists on bots table
+- ✅ `trading_keys` table exists
+- ✅ `bot_health_logs` table exists
+
+**If errors:** Check Railway logs. Most errors are harmless (IF NOT EXISTS clauses).
+
+---
+
+## Step 2: Set ENCRYPTION_KEY (2 minutes)
+
+### **Generate Key:**
+Run this command locally:
 ```bash
-# Generate key
-./scripts/setup_encryption_key.sh
-
-# Copy the generated key, then set in Railway:
-railway variables set ENCRYPTION_KEY='<paste-generated-key-here>'
-```
-
-### Option B: Manual Generation
-
-```bash
-# Generate key
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-# Copy the output, then:
-railway variables set ENCRYPTION_KEY='<paste-key-here>'
 ```
 
-### Option C: Railway Dashboard
+Or use the generated key below (if provided).
 
-1. **Generate Key**
-   ```bash
-   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-   ```
+### **Action:**
+1. Open Railway Dashboard
+2. Go to **trading-bridge** service
+3. Click **"Variables"** tab
+4. Click **"New Variable"**
+5. **Key:** `ENCRYPTION_KEY`
+6. **Value:** (paste generated key)
+7. Click **"Add"**
 
-2. **Add to Railway**
-   - Go to Railway Dashboard → `trading-bridge` project
-   - Click **"Variables"** tab
-   - Click **"New Variable"**
-   - Name: `ENCRYPTION_KEY`
-   - Value: (paste the generated key)
-   - Click **"Add"**
-
-3. **Redeploy** (if needed)
-   - Railway will auto-redeploy when you add variables
-   - Or manually trigger: Railway Dashboard → Deployments → Redeploy
+### **Important:**
+- ⚠️ **Back up this key** in a password manager
+- ⚠️ If lost, all encrypted keys become unrecoverable
+- Service will auto-redeploy after adding variable (~2-3 minutes)
 
 ---
 
-## Step 3: Verify Setup ✅
+## Step 3: Wait for Redeploy (2-3 minutes)
 
-### Check Migration
+After adding ENCRYPTION_KEY:
+- Railway will automatically redeploy the service
+- Check Railway Dashboard → trading-bridge → Deployments
+- Wait for latest deployment to show "Active"
 
-Run this in Railway PostgreSQL Query tab:
-```sql
--- Check tables exist
-SELECT table_name FROM information_schema.tables 
-WHERE table_name IN ('bot_health_logs', 'trading_keys');
+---
 
--- Check columns exist
-SELECT column_name FROM information_schema.columns 
-WHERE table_name = 'bots' 
-AND column_name IN ('health_status', 'reported_status', 'last_trade_time');
-```
+## Step 4: Verify Everything (10 minutes)
 
-### Check ENCRYPTION_KEY
-
+### **Automated Tests:**
+Run the verification script:
 ```bash
-# Check if variable is set (won't show value for security)
-railway variables | grep ENCRYPTION_KEY
-
-# Or check Railway Dashboard → Variables
+chmod +x VERIFICATION_COMMANDS.sh
+./VERIFICATION_COMMANDS.sh
 ```
 
-### Test Backend
+### **Manual Tests:**
 
+#### **Test 1: Admin Login**
+1. Login with admin wallet
+2. ✅ Should see **Admin Dashboard**
+3. ✅ Go to Clients → Should see all clients with correct roles
+4. ✅ Go to Bots → Should see health statuses (not all "Error")
+
+#### **Test 2: Client Login (Lynk)**
+1. Login with Lynk wallet (`2REe...yKMq`)
+2. ✅ Should see **Client Dashboard** (NOT Admin Dashboard)
+3. ✅ Should see welcome modal (first time only)
+4. ✅ Should see overview cards (Bot Status, Wallet Balance, Volume)
+5. ✅ Should see "Connect Wallet Key" banner (if key not connected)
+6. ✅ Should see Start/Stop/Edit buttons
+7. ✅ Should **NOT** see Delete button
+8. ✅ Should **NOT** see other clients' bots
+9. ✅ Should **NOT** see admin controls
+
+#### **Test 3: Authorization**
+1. As client, try to start another client's bot (if you know another bot ID)
+2. ✅ Should get 403 Forbidden error
+3. ✅ Should only be able to manage own bots
+
+#### **Test 4: Health Monitor**
 ```bash
-# Health check (should work)
-curl https://trading-bridge-production.up.railway.app/health
-
-# Should return: {"status":"healthy",...}
+curl https://trading-bridge-production.up.railway.app/bots/health/summary
 ```
+**Expected:** JSON response with bot health statuses (not errors)
 
----
-
-## Step 4: Test Both Options 🧪
-
-### Option 1: Admin Inputs Key
-
+#### **Test 5: Key Status**
 ```bash
-# Admin creates bot with wallet
-curl -X POST https://trading-bridge-production.up.railway.app/bots/create \
-  -H "Content-Type: application/json" \
-  -H "X-Wallet-Address: <admin-wallet>" \
-  -d '{
-    "name": "Test Bot",
-    "account": "client_test",
-    "bot_type": "volume",
-    "config": {"daily_volume_usd": 1000},
-    "wallets": [{
-      "address": "YourWalletAddress",
-      "private_key": "YourPrivateKey"
-    }]
-  }'
+curl https://trading-bridge-production.up.railway.app/clients/{client_id}/key-status
 ```
-
-### Option 2: Client Self-Service
-
-```bash
-# Client sets up bot with their own key
-curl -X POST https://trading-bridge-production.up.railway.app/clients/{client_id}/setup-bot \
-  -H "Content-Type: application/json" \
-  -H "X-Wallet-Address: <client-wallet>" \
-  -d '{
-    "bot_type": "volume",
-    "private_key": "ClientPrivateKey",
-    "config": {"daily_volume_usd": 5000}
-  }'
-```
+**Expected:** JSON response with key status
 
 ---
 
-## Troubleshooting
+## ✅ **Success Criteria**
 
-### Migration Fails
-
-**Error:** `relation "bots" does not exist`
-- **Fix:** Make sure you're running against the correct database
-- Check DATABASE_URL points to the right PostgreSQL instance
-
-**Error:** `column already exists`
-- **Fix:** Migration is idempotent - safe to ignore
-- Columns already exist, which is fine
-
-### ENCRYPTION_KEY Not Working
-
-**Error:** `Encryption not configured. Set ENCRYPTION_KEY.`
-- **Fix:** Make sure ENCRYPTION_KEY is set in Railway
-- Redeploy after setting the variable
-- Check Railway logs for errors
-
-### Keys Not Storing
-
-**Error:** `relation "trading_keys" does not exist`
-- **Fix:** Run the migration (Step 1)
-- Verify table exists with verification query
+All tests pass:
+- ✅ Database migrations successful
+- ✅ ENCRYPTION_KEY set
+- ✅ Admin sees Admin Dashboard
+- ✅ Client sees Client Dashboard (not admin)
+- ✅ Clients can only manage own bots
+- ✅ Health monitor working
+- ✅ No errors in Railway logs
 
 ---
 
-## What Gets Created
+## 🎯 **Ready for Client Testing**
 
-### Database Tables
+Once all steps complete and verification passes:
+- ✅ Client Dashboard fully functional
+- ✅ Permissions enforced
+- ✅ Help content available
+- ✅ Health monitoring working
+- ✅ Key management working
 
-1. **`bot_health_logs`**
-   - Stores health check history
-   - Used by health monitor
-
-2. **`trading_keys`**
-   - Stores encrypted private keys (one per client)
-   - Used for key rotation/revocation
-
-### Database Columns (added to `bots` table)
-
-- `health_status` - Current health status
-- `health_message` - Health status message
-- `last_trade_time` - Last trade timestamp
-- `last_heartbeat` - Last heartbeat timestamp
-- `reported_status` - User-reported status
-- `status_updated_at` - Status update timestamp
+**MO can now test with a real client!**
 
 ---
 
-## Next Steps
+## 🆘 **Troubleshooting**
 
-After setup is complete:
+### **Migration Errors:**
+- Most errors are harmless (IF NOT EXISTS clauses)
+- Check Railway logs for specific errors
+- Re-run individual migration sections if needed
 
-1. ✅ Test admin flow (create bot with key)
-2. ✅ Test client flow (client sets up bot)
-3. ✅ Test key rotation
-4. ✅ Test key revocation
-5. ✅ Verify frontend components work
+### **ENCRYPTION_KEY Issues:**
+- Service won't start if key is missing
+- Check Railway Variables tab
+- Verify key is correct format (Fernet key)
+
+### **Authorization Errors:**
+- Check Railway logs for 403 errors
+- Verify client roles in database
+- Verify X-Wallet-Address header is sent
+
+### **Health Monitor Errors:**
+- Check Railway logs
+- Verify health columns exist
+- Check bot_health_logs table exists
 
 ---
 
-## Support
+## 📝 **Files Reference**
 
-If you encounter issues:
+- `migrations/COMPLETE_SETUP.sql` - Complete migration SQL
+- `VERIFICATION_COMMANDS.sh` - Automated test script
+- `FINAL_CHECKLIST_STATUS.md` - Full status document
 
-1. Check Railway logs: `railway logs`
-2. Check database connection: Railway Dashboard → PostgreSQL → Query
-3. Verify environment variables: Railway Dashboard → Variables
-4. Check backend health: `curl https://trading-bridge-production.up.railway.app/health`
+---
+
+**Next:** Run Step 1 (migrations) → Step 2 (ENCRYPTION_KEY) → Verify → Ready!
