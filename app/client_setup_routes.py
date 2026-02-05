@@ -94,12 +94,98 @@ def derive_solana_address(private_key: str) -> str:
             detail="Solana dependencies not available. Install base58 and solders packages."
         )
     
-    # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
-    if isinstance(private_key, str):
-        private_key = re.sub(r'\s', '', private_key)
+    # Check if input is a seed phrase (mnemonic) - typically 12 or 24 words
+    words = private_key.strip().split()
+    is_seed_phrase = len(words) >= 12 and len(words) <= 24
     
-    if not private_key:
-        raise HTTPException(status_code=400, detail="Private key is required")
+    if is_seed_phrase:
+        # Convert seed phrase to private key using BIP39
+        try:
+            try:
+                from mnemonic import Mnemonic
+                # Validate mnemonic
+                mnemo = Mnemonic("english")
+                seed_phrase = ' '.join(words)
+                if not mnemo.check(seed_phrase):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid seed phrase. Please check your words and ensure they are in the correct order."
+                    )
+                # Convert mnemonic to seed (64 bytes)
+                seed = mnemo.to_seed(seed_phrase)
+                # Use first 32 bytes as private key seed
+                seed_bytes = seed[:32]
+                # Create keypair from seed
+                keypair = Keypair.from_seed(seed_bytes)
+                return str(keypair.pubkey())
+            except ImportError:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Seed phrase support requires 'mnemonic' package. Please use a private key instead, or contact support."
+                )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to convert seed phrase: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to process seed phrase: {str(e)}. Please ensure you entered all words correctly in the right order."
+            )
+    
+    # Not a seed phrase - process as private key
+    if not is_seed_phrase:
+        # Not a seed phrase - clean up copy-pasted text to extract base58 private key
+        if isinstance(private_key, str):
+            # Remove ALL whitespace first
+            private_key = re.sub(r'\s', '', private_key)
+            
+            # Remove common prefixes/suffixes that users might copy-paste
+            # Examples: "Private key:", "Your key is:", "Key:", etc.
+            common_prefixes = [
+                r'^privatekey[:=]?',
+                r'^yourkey[:=]?',
+                r'^key[:=]?',
+                r'^solana[:=]?',
+                r'^wallet[:=]?',
+                r'^secret[:=]?',
+            ]
+            for prefix in common_prefixes:
+                private_key = re.sub(prefix, '', private_key, flags=re.IGNORECASE)
+            
+            # Extract only base58 characters (remove everything else)
+            # Base58 alphabet: 123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
+            base58_pattern = re.compile(r'[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+')
+            base58_matches = base58_pattern.findall(private_key)
+            
+            if base58_matches:
+                # Use the longest base58 string found (most likely the actual key)
+                private_key = max(base58_matches, key=len)
+            else:
+                # No valid base58 found - check what invalid characters are present
+                base58_chars = set('123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz')
+                invalid_chars = [c for c in private_key if c not in base58_chars]
+                if invalid_chars:
+                    invalid_str = ', '.join(set(invalid_chars[:5]))  # Show first 5 unique invalid chars
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"Invalid Solana private key: Found invalid characters '{invalid_str}'. Please paste only the private key (base58 string), without any labels or extra text."
+                    )
+                # If somehow we got here with only base58 chars but no match, use original
+                private_key = private_key.strip()
+        
+        if not private_key:
+            raise HTTPException(status_code=400, detail="Private key is required")
+        
+        # Final validation - ensure we have a reasonable length base58 string
+        # Solana keys are typically 32-88 characters in base58
+        if len(private_key) < 32:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Private key appears too short ({len(private_key)} chars). Solana private keys are typically 32-88 characters. Please check you copied the complete key."
+            )
+    else:
+        # It's a seed phrase - keep it as-is for processing in derive_solana_address
+        private_key = ' '.join(words)
     
     try:
         # Handle base58 encoded private key
@@ -261,11 +347,22 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         bot_config = BOT_TYPE_CONFIGS[request.bot_type]
         chain = bot_config["chain"]
 
-        # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
-        # This prevents copy-paste errors where users accidentally include spaces
-        sanitized_private_key = re.sub(r'\s', '', request.private_key) if request.private_key else ""
-        if not sanitized_private_key:
+        # Check if input is a seed phrase BEFORE sanitizing (seed phrases need spaces!)
+        original_key = request.private_key.strip() if request.private_key else ""
+        if not original_key:
             raise HTTPException(status_code=400, detail="Private key is required")
+        
+        # Check if it's a seed phrase (12-24 words separated by spaces)
+        words = original_key.split()
+        is_seed_phrase = len(words) >= 12 and len(words) <= 24
+        
+        # Only sanitize if it's NOT a seed phrase (seed phrases need their spaces preserved)
+        if is_seed_phrase:
+            sanitized_private_key = original_key  # Keep seed phrase as-is
+        else:
+            # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
+            # This prevents copy-paste errors where users accidentally include spaces
+            sanitized_private_key = re.sub(r'\s', '', original_key)
 
         # Derive wallet address from private key
         wallet_address = None
@@ -408,17 +505,22 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             stats={}
         )
         
-        # Store chain in config if needed (it's already there from merged_config)
-        # Also update chain column in database using raw SQL (column exists but not in SQLAlchemy model)
+        # Add bot to database first
+        db.add(bot)
+        db.flush()  # Flush to get bot_id available for UPDATE
+        
+        # Store chain in database using raw SQL (column exists but not in SQLAlchemy model)
+        # This must happen AFTER bot is added/flushed so bot_id exists
         try:
             db.execute(text("""
                 UPDATE bots SET chain = :chain WHERE id = :bot_id
             """), {"chain": chain, "bot_id": bot_id})
+            db.commit()  # Commit the chain update
+            logger.info(f"Updated chain column for bot {bot_id}: {chain}")
         except Exception as chain_error:
-            logger.debug(f"Could not update chain column (may not exist): {chain_error}")
-        
-        db.add(bot)
-        db.flush()
+            logger.warning(f"Could not update chain column (may not exist): {chain_error}")
+            # Don't fail - chain can be derived from connector if needed
+            db.rollback()
 
         # Add wallet to bot_wallets table
         if wallet_address:
