@@ -249,9 +249,10 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     Key is encrypted and stored in trading_keys table.
     Bot is created and started automatically.
     """
-    client = db.query(Client).filter(Client.id == client_id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    try:
+        client = db.query(Client).filter(Client.id == client_id).first()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
 
     # Validate bot type
     if request.bot_type not in BOT_TYPE_CONFIGS:
