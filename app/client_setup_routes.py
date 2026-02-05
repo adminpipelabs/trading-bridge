@@ -255,197 +255,208 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             raise HTTPException(status_code=404, detail="Client not found")
 
     # Validate bot type
-    if request.bot_type not in BOT_TYPE_CONFIGS:
-        raise HTTPException(status_code=400, detail=f"Invalid bot_type. Must be one of: {list(BOT_TYPE_CONFIGS.keys())}")
+        if request.bot_type not in BOT_TYPE_CONFIGS:
+            raise HTTPException(status_code=400, detail=f"Invalid bot_type. Must be one of: {list(BOT_TYPE_CONFIGS.keys())}")
 
-    bot_config = BOT_TYPE_CONFIGS[request.bot_type]
-    chain = bot_config["chain"]
+        bot_config = BOT_TYPE_CONFIGS[request.bot_type]
+        chain = bot_config["chain"]
 
-    # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
-    # This prevents copy-paste errors where users accidentally include spaces
-    sanitized_private_key = re.sub(r'\s', '', request.private_key) if request.private_key else ""
-    if not sanitized_private_key:
-        raise HTTPException(status_code=400, detail="Private key is required")
+        # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
+        # This prevents copy-paste errors where users accidentally include spaces
+        sanitized_private_key = re.sub(r'\s', '', request.private_key) if request.private_key else ""
+        if not sanitized_private_key:
+            raise HTTPException(status_code=400, detail="Private key is required")
 
-    # Derive wallet address from private key
-    wallet_address = None
-    if chain == "solana":
+        # Derive wallet address from private key
+        wallet_address = None
+        if chain == "solana":
+            try:
+                wallet_address = derive_solana_address(sanitized_private_key)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+        elif chain == "evm":
+            try:
+                wallet_address = derive_evm_address(sanitized_private_key)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+
+        # Encrypt private key (use sanitized key)
         try:
-            wallet_address = derive_solana_address(sanitized_private_key)
-        except HTTPException:
-            raise
+            encrypted_key = encrypt_key(sanitized_private_key)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
-    elif chain == "evm":
-        try:
-            wallet_address = derive_evm_address(sanitized_private_key)
-        except HTTPException:
-            raise
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+            logger.error(f"Encryption failed: {e}")
+            raise HTTPException(status_code=500, detail="Failed to encrypt private key")
 
-    # Encrypt private key (use sanitized key)
-    try:
-        encrypted_key = encrypt_key(sanitized_private_key)
-    except Exception as e:
-        logger.error(f"Encryption failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to encrypt private key")
-
-    # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
-    # Mark as added by client since this is the client self-service endpoint
-    try:
-        # First, ensure the table exists (create if it doesn't)
+        # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
+        # Mark as added by client since this is the client self-service endpoint
         try:
+            # First, ensure the table exists (create if it doesn't)
+            try:
+                db.execute(text("""
+                    CREATE TABLE IF NOT EXISTS trading_keys (
+                        id SERIAL PRIMARY KEY,
+                        client_id VARCHAR(255) UNIQUE NOT NULL,
+                        encrypted_key TEXT NOT NULL,
+                        chain VARCHAR(20) DEFAULT 'solana',
+                        wallet_address VARCHAR(255),
+                        added_by VARCHAR(20) DEFAULT 'client',
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """))
+                db.execute(text("""
+                    CREATE INDEX IF NOT EXISTS idx_trading_keys_client_id ON trading_keys(client_id)
+                """))
+                db.commit()
+                logger.info("trading_keys table created/verified successfully")
+            except Exception as create_error:
+                # Table might already exist - that's fine
+                logger.debug(f"trading_keys table check (may already exist): {create_error}")
+                db.rollback()
+            
+            # Ensure the table has the required columns (for existing deployments)
+            try:
+                db.execute(text("""
+                    ALTER TABLE trading_keys 
+                    ADD COLUMN IF NOT EXISTS wallet_address VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS added_by VARCHAR(20) DEFAULT 'client'
+                """))
+                db.commit()
+            except Exception as alter_error:
+                # Columns might already exist - that's fine
+                logger.debug(f"Could not alter trading_keys table (columns may already exist): {alter_error}")
+                db.rollback()
+            
             db.execute(text("""
-                CREATE TABLE IF NOT EXISTS trading_keys (
-                    id SERIAL PRIMARY KEY,
-                    client_id VARCHAR(255) UNIQUE NOT NULL,
-                    encrypted_key TEXT NOT NULL,
-                    chain VARCHAR(20) DEFAULT 'solana',
-                    wallet_address VARCHAR(255),
-                    added_by VARCHAR(20) DEFAULT 'client',
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
-                )
-            """))
-            db.execute(text("""
-                CREATE INDEX IF NOT EXISTS idx_trading_keys_client_id ON trading_keys(client_id)
-            """))
-            db.commit()
-            logger.info("trading_keys table created/verified successfully")
-        except Exception as create_error:
-            # Table might already exist - that's fine
-            logger.debug(f"trading_keys table check (may already exist): {create_error}")
-            db.rollback()
-        
-        # Ensure the table has the required columns (for existing deployments)
-        try:
-            db.execute(text("""
-                ALTER TABLE trading_keys 
-                ADD COLUMN IF NOT EXISTS wallet_address VARCHAR(255),
-                ADD COLUMN IF NOT EXISTS added_by VARCHAR(20) DEFAULT 'client'
-            """))
-            db.commit()
-        except Exception as alter_error:
-            # Columns might already exist - that's fine
-            logger.debug(f"Could not alter trading_keys table (columns may already exist): {alter_error}")
-            db.rollback()
-        
-        db.execute(text("""
-            INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
-            VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'client', NOW(), NOW())
-            ON CONFLICT (client_id) 
-            DO UPDATE SET 
-                encrypted_key = :encrypted_key,
-                chain = :chain,
-                wallet_address = :wallet_address,
-                added_by = 'client',
-                updated_at = NOW()
-        """), {
-            "client_id": client_id,
-            "encrypted_key": encrypted_key,
-            "chain": chain,
-            "wallet_address": wallet_address
-        })
-        
-        # Create admin notification for key connection
-        try:
-            wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if wallet_address else "unknown"
-            db.execute(text("""
-                INSERT INTO admin_notifications (type, client_id, message, created_at)
-                VALUES ('key_connected', :client_id, :message, NOW())
+                INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
+                VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'client', NOW(), NOW())
+                ON CONFLICT (client_id) 
+                DO UPDATE SET 
+                    encrypted_key = :encrypted_key,
+                    chain = :chain,
+                    wallet_address = :wallet_address,
+                    added_by = 'client',
+                    updated_at = NOW()
             """), {
                 "client_id": client_id,
-                "message": f"Client '{client.name}' connected trading wallet {wallet_short}"
+                "encrypted_key": encrypted_key,
+                "chain": chain,
+                "wallet_address": wallet_address
             })
-        except Exception as notif_error:
-            # Notification table might not exist yet - log but don't fail
-            logger.debug(f"Could not create notification (table may not exist): {notif_error}")
-        
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Failed to store encrypted key: {e}", exc_info=True)
-        # Provide more detailed error message
-        error_detail = str(e)
-        if "column" in error_detail.lower() and "does not exist" in error_detail.lower():
-            error_detail = f"Database schema issue: {error_detail}. Please run migrations to add wallet_address and added_by columns to trading_keys table."
-        raise HTTPException(status_code=500, detail=f"Failed to store encrypted key: {error_detail}")
-
-    # Create bot record
-    import uuid
-    bot_id = str(uuid.uuid4())
-    
-    # Merge config with defaults
-    merged_config = {**bot_config["default_config"], **request.config}
-    
-    # For Solana bots, only set quote_mint to SOL if not provided (native token)
-    # Don't default base_mint - user must specify which token they want to trade
-    if chain == "solana" and request.bot_type == "volume":
-        if "quote_mint" not in merged_config:
-            # Default quote_mint to SOL (native token for Solana)
-            merged_config["quote_mint"] = "So11111111111111111111111111111111111111112"  # SOL
-        # base_mint must be provided by user - don't default to specific tokens
-
-    # Determine pair from config
-    # Pair should be provided by user in config, or derived from base_mint/quote_mint later
-    pair = merged_config.get("pair")  # Use pair from config if provided, otherwise None
-
-    # Create bot
-    bot = Bot(
-        id=bot_id,
-        client_id=client_id,
-        account=client.account_identifier,
-        instance_name=f"{client.account_identifier}_{bot_id[:8]}",
-        name=f"{bot_config['label']} - {client.name}",
-        connector="jupiter" if chain == "solana" else "uniswap",
-        pair=pair,  # Use configured pair or None (user will set)
-        strategy="volume" if request.bot_type == "volume" else "spread",
-        bot_type=request.bot_type,
-        status="stopped",  # Will be started after wallet is added
-        config=merged_config,
-        chain=chain,
-        stats={}
-    )
-    
-    db.add(bot)
-    db.flush()
-
-    # Add wallet to bot_wallets table
-    if wallet_address:
-        try:
-            db.execute(text("""
-                INSERT INTO bot_wallets (id, bot_id, wallet_address, encrypted_private_key, created_at)
-                VALUES (:id, :bot_id, :wallet_address, :encrypted_key, NOW())
-            """), {
-                "id": str(uuid.uuid4()),
-                "bot_id": bot_id,
-                "wallet_address": wallet_address,
-                "encrypted_key": encrypted_key
-            })
+            
+            # Create admin notification for key connection
+            try:
+                wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if wallet_address else "unknown"
+                db.execute(text("""
+                    INSERT INTO admin_notifications (type, client_id, message, created_at)
+                    VALUES ('key_connected', :client_id, :message, NOW())
+                """), {
+                    "client_id": client_id,
+                    "message": f"Client '{client.name}' connected trading wallet {wallet_short}"
+                })
+            except Exception as notif_error:
+                # Notification table might not exist yet - log but don't fail
+                logger.debug(f"Could not create notification (table may not exist): {notif_error}")
+            
             db.commit()
         except Exception as e:
             db.rollback()
-            logger.error(f"Failed to add wallet to bot: {e}")
-            # Don't fail - bot can be created without wallet initially
+            logger.error(f"Failed to store encrypted key: {e}", exc_info=True)
+            # Provide more detailed error message
+            error_detail = str(e)
+            if "column" in error_detail.lower() and "does not exist" in error_detail.lower():
+                error_detail = f"Database schema issue: {error_detail}. Please run migrations to add wallet_address and added_by columns to trading_keys table."
+            raise HTTPException(status_code=500, detail=f"Failed to store encrypted key: {error_detail}")
 
-    # Start the bot
-    try:
-        bot.status = "running"
-        db.commit()
-        await bot_runner.start_bot(bot_id, db)
-        logger.info(f"Bot {bot_id} created and started for client {client_id}")
+        # Create bot record
+        import uuid
+        bot_id = str(uuid.uuid4())
+        
+        # Merge config with defaults
+        merged_config = {**bot_config["default_config"], **request.config}
+        
+        # For Solana bots, only set quote_mint to SOL if not provided (native token)
+        # Don't default base_mint - user must specify which token they want to trade
+        if chain == "solana" and request.bot_type == "volume":
+            if "quote_mint" not in merged_config:
+                # Default quote_mint to SOL (native token for Solana)
+                merged_config["quote_mint"] = "So11111111111111111111111111111111111111112"  # SOL
+            # base_mint must be provided by user - don't default to specific tokens
+
+        # Determine pair from config
+        # Pair should be provided by user in config, or derived from base_mint/quote_mint later
+        pair = merged_config.get("pair")  # Use pair from config if provided, otherwise None
+
+        # Create bot
+        bot = Bot(
+            id=bot_id,
+            client_id=client_id,
+            account=client.account_identifier,
+            instance_name=f"{client.account_identifier}_{bot_id[:8]}",
+            name=f"{bot_config['label']} - {client.name}",
+            connector="jupiter" if chain == "solana" else "uniswap",
+            pair=pair,  # Use configured pair or None (user will set)
+            strategy="volume" if request.bot_type == "volume" else "spread",
+            bot_type=request.bot_type,
+            status="stopped",  # Will be started after wallet is added
+            config=merged_config,
+            chain=chain,
+            stats={}
+        )
+        
+        db.add(bot)
+        db.flush()
+
+        # Add wallet to bot_wallets table
+        if wallet_address:
+            try:
+                db.execute(text("""
+                    INSERT INTO bot_wallets (id, bot_id, wallet_address, encrypted_private_key, created_at)
+                    VALUES (:id, :bot_id, :wallet_address, :encrypted_key, NOW())
+                """), {
+                    "id": str(uuid.uuid4()),
+                    "bot_id": bot_id,
+                    "wallet_address": wallet_address,
+                    "encrypted_key": encrypted_key
+                })
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Failed to add wallet to bot: {e}")
+                # Don't fail - bot can be created without wallet initially
+
+        # Start the bot
+        try:
+            bot.status = "running"
+            db.commit()
+            await bot_runner.start_bot(bot_id, db)
+            logger.info(f"Bot {bot_id} created and started for client {client_id}")
+        except Exception as e:
+            logger.error(f"Failed to start bot {bot_id}: {e}")
+            # Bot is created but not started - client can start it manually
+            bot.status = "stopped"
+            db.commit()
+
+        return SetupBotResponse(
+            success=True,
+            bot_id=bot_id,
+            message="Bot created successfully. Your private key has been encrypted and stored securely."
+        )
+    except HTTPException:
+        # Re-raise HTTP exceptions (they're already properly formatted)
+        raise
     except Exception as e:
-        logger.error(f"Failed to start bot {bot_id}: {e}")
-        # Bot is created but not started - client can start it manually
-        bot.status = "stopped"
-        db.commit()
-
-    return SetupBotResponse(
-        success=True,
-        bot_id=bot_id,
-        message="Bot created successfully. Your private key has been encrypted and stored securely."
-    )
+        # Catch any unexpected errors and log them properly
+        logger.error(f"Unexpected error in setup_bot for client {client_id}: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to set up bot: {str(e)}"
+        )
 
 
 @router.put("/{client_id}/rotate-key")
