@@ -392,6 +392,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         pair = merged_config.get("pair")  # Use pair from config if provided, otherwise None
 
         # Create bot
+        # Note: chain is stored in config and derived from connector, not a direct model field
         bot = Bot(
             id=bot_id,
             client_id=client_id,
@@ -399,14 +400,22 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             instance_name=f"{client.account_identifier}_{bot_id[:8]}",
             name=f"{bot_config['label']} - {client.name}",
             connector="jupiter" if chain == "solana" else "uniswap",
-            pair=pair,  # Use configured pair or None (user will set)
+            pair=pair or "",  # Use configured pair or empty string (Bot model requires non-null)
             strategy="volume" if request.bot_type == "volume" else "spread",
             bot_type=request.bot_type,
             status="stopped",  # Will be started after wallet is added
             config=merged_config,
-            chain=chain,
             stats={}
         )
+        
+        # Store chain in config if needed (it's already there from merged_config)
+        # Also update chain column in database using raw SQL (column exists but not in SQLAlchemy model)
+        try:
+            db.execute(text("""
+                UPDATE bots SET chain = :chain WHERE id = :bot_id
+            """), {"chain": chain, "bot_id": bot_id})
+        except Exception as chain_error:
+            logger.debug(f"Could not update chain column (may not exist): {chain_error}")
         
         db.add(bot)
         db.flush()
