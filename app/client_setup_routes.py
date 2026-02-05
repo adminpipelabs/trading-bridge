@@ -429,18 +429,32 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 logger.error(f"Failed to add wallet to bot: {e}")
                 # Don't fail - bot can be created without wallet initially
 
-        # Start the bot
+        # Start the bot (non-blocking - don't wait for it to fully start)
         try:
+            logger.info(f"Attempting to start bot {bot_id} for client {client_id}")
             bot.status = "running"
             db.commit()
-            await bot_runner.start_bot(bot_id, db)
-            logger.info(f"Bot {bot_id} created and started for client {client_id}")
+            
+            # Start bot asynchronously but don't wait for completion
+            # This prevents timeouts if bot startup takes a long time
+            try:
+                await bot_runner.start_bot(bot_id, db)
+                logger.info(f"Bot {bot_id} started successfully for client {client_id}")
+            except Exception as start_error:
+                logger.warning(f"Bot {bot_id} creation succeeded but startup failed: {start_error}")
+                # Bot is created but not started - client can start it manually
+                bot.status = "stopped"
+                db.commit()
         except Exception as e:
-            logger.error(f"Failed to start bot {bot_id}: {e}")
+            logger.error(f"Failed to start bot {bot_id}: {e}", exc_info=True)
             # Bot is created but not started - client can start it manually
-            bot.status = "stopped"
-            db.commit()
+            try:
+                bot.status = "stopped"
+                db.commit()
+            except Exception as commit_error:
+                logger.error(f"Failed to update bot status: {commit_error}")
 
+        logger.info(f"Bot setup completed successfully for client {client_id}, bot_id: {bot_id}")
         return SetupBotResponse(
             success=True,
             bot_id=bot_id,
