@@ -67,8 +67,16 @@ except ImportError:
 def encrypt_key(private_key: str) -> str:
     """Encrypt a private key using Fernet."""
     if not fernet:
-        raise HTTPException(status_code=500, detail="Encryption not configured. Set ENCRYPTION_KEY.")
-    return fernet.encrypt(private_key.encode()).decode()
+        logger.error("ENCRYPTION_KEY not set in environment variables - encryption cannot proceed")
+        raise HTTPException(
+            status_code=500, 
+            detail="Encryption not configured. ENCRYPTION_KEY environment variable must be set in Railway."
+        )
+    try:
+        return fernet.encrypt(private_key.encode()).decode()
+    except Exception as e:
+        logger.error(f"Fernet encryption failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to encrypt private key: {str(e)}")
 
 
 def decrypt_key(encrypted_key: str) -> str:
