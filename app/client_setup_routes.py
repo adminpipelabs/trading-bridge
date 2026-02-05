@@ -96,15 +96,15 @@ def derive_solana_address(private_key: str) -> str:
         # Handle base58 encoded private key
         # Try to decode as base58
         key_bytes = base58.b58decode(private_key)
-            # Solana keypairs are 64 bytes (32 byte seed + 32 byte public key)
-            # But private keys can be 32 bytes (seed) or 64 bytes (seed + public)
-            if len(key_bytes) == 64:
-                keypair = Keypair.from_bytes(key_bytes)
-            elif len(key_bytes) == 32:
-                keypair = Keypair.from_seed(key_bytes)
-            else:
-                raise ValueError(f"Invalid key length: {len(key_bytes)}")
-            return str(keypair.pubkey())
+        # Solana keypairs are 64 bytes (32 byte seed + 32 byte public key)
+        # But private keys can be 32 bytes (seed) or 64 bytes (seed + public)
+        if len(key_bytes) == 64:
+            keypair = Keypair.from_bytes(key_bytes)
+        elif len(key_bytes) == 32:
+            keypair = Keypair.from_seed(key_bytes)
+        else:
+            raise ValueError(f"Invalid key length: {len(key_bytes)}")
+        return str(keypair.pubkey())
     except Exception as e:
         logger.error(f"Failed to derive Solana address: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid Solana private key: {str(e)}")
