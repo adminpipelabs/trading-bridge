@@ -285,7 +285,31 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
     # Mark as added by client since this is the client self-service endpoint
     try:
-        # First, ensure the table has the required columns (for existing deployments)
+        # First, ensure the table exists (create if it doesn't)
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS trading_keys (
+                    id SERIAL PRIMARY KEY,
+                    client_id VARCHAR(255) UNIQUE NOT NULL,
+                    encrypted_key TEXT NOT NULL,
+                    chain VARCHAR(20) DEFAULT 'solana',
+                    wallet_address VARCHAR(255),
+                    added_by VARCHAR(20) DEFAULT 'client',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """))
+            db.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_trading_keys_client_id ON trading_keys(client_id)
+            """))
+            db.commit()
+            logger.info("trading_keys table created/verified successfully")
+        except Exception as create_error:
+            # Table might already exist - that's fine
+            logger.debug(f"trading_keys table check (may already exist): {create_error}")
+            db.rollback()
+        
+        # Ensure the table has the required columns (for existing deployments)
         try:
             db.execute(text("""
                 ALTER TABLE trading_keys 
@@ -294,8 +318,8 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             """))
             db.commit()
         except Exception as alter_error:
-            # Table might not exist or columns already exist - that's fine
-            logger.debug(f"Could not alter trading_keys table (may already have columns): {alter_error}")
+            # Columns might already exist - that's fine
+            logger.debug(f"Could not alter trading_keys table (columns may already exist): {alter_error}")
             db.rollback()
         
         db.execute(text("""
