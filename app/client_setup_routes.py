@@ -285,6 +285,19 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
     # Mark as added by client since this is the client self-service endpoint
     try:
+        # First, ensure the table has the required columns (for existing deployments)
+        try:
+            db.execute(text("""
+                ALTER TABLE trading_keys 
+                ADD COLUMN IF NOT EXISTS wallet_address VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS added_by VARCHAR(20) DEFAULT 'client'
+            """))
+            db.commit()
+        except Exception as alter_error:
+            # Table might not exist or columns already exist - that's fine
+            logger.debug(f"Could not alter trading_keys table (may already have columns): {alter_error}")
+            db.rollback()
+        
         db.execute(text("""
             INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
             VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'client', NOW(), NOW())
@@ -319,8 +332,12 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         db.commit()
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to store encrypted key: {e}")
-        raise HTTPException(status_code=500, detail="Failed to store encrypted key")
+        logger.error(f"Failed to store encrypted key: {e}", exc_info=True)
+        # Provide more detailed error message
+        error_detail = str(e)
+        if "column" in error_detail.lower() and "does not exist" in error_detail.lower():
+            error_detail = f"Database schema issue: {error_detail}. Please run migrations to add wallet_address and added_by columns to trading_keys table."
+        raise HTTPException(status_code=500, detail=f"Failed to store encrypted key: {error_detail}")
 
     # Create bot record
     import uuid
