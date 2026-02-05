@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 import os
 import logging
+import re
 
 from app.database import get_db, Client, Bot
 from app.bot_runner import bot_runner
