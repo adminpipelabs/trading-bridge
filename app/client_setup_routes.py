@@ -108,6 +108,9 @@ def derive_evm_address(private_key: str) -> str:
     """Derive EVM wallet address from private key."""
     try:
         from eth_account import Account
+        # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
+        private_key = re.sub(r'\s', '', private_key)
+        
         # Handle hex string (with or without 0x prefix)
         if private_key.startswith('0x'):
             private_key_hex = private_key[2:]
@@ -242,18 +245,23 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     bot_config = BOT_TYPE_CONFIGS[request.bot_type]
     chain = bot_config["chain"]
 
+    # Auto-trim private key to remove any leading/trailing whitespace
+    trimmed_private_key = request.private_key.strip() if request.private_key else ""
+    if not trimmed_private_key:
+        raise HTTPException(status_code=400, detail="Private key is required")
+
     # Derive wallet address from private key
     wallet_address = None
     if chain == "solana":
         try:
-            wallet_address = derive_solana_address(request.private_key)
+            wallet_address = derive_solana_address(trimmed_private_key)
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
     elif chain == "evm":
         try:
-            wallet_address = derive_evm_address(request.private_key)
+            wallet_address = derive_evm_address(trimmed_private_key)
         except HTTPException:
             raise
         except Exception as e:
