@@ -492,6 +492,13 @@ class BotHealthMonitor:
     ):
         """Update bot health in DB and log the check."""
         now = datetime.now(timezone.utc)
+        
+        # Convert timezone-aware datetime to naive for PostgreSQL compatibility
+        # PostgreSQL TIMESTAMP columns don't store timezone info
+        now_naive = now.replace(tzinfo=None) if now.tzinfo else now
+        last_trade_naive = None
+        if last_trade:
+            last_trade_naive = last_trade.replace(tzinfo=None) if last_trade.tzinfo else last_trade
 
         try:
             # Update bots table (health columns may not exist if migration not run)
@@ -504,7 +511,7 @@ class BotHealthMonitor:
                         status_updated_at = $4,
                         health_message = $5
                     WHERE id = $6
-                """, health_status, new_status, last_trade, now, reason, bot_id)
+                """, health_status, new_status, last_trade_naive, now_naive, reason, bot_id)
                 logger.warning(
                     f"Bot {bot_id} status changed: {previous_status} → {new_status} "
                     f"(health: {health_status}, reason: {reason})"
@@ -516,7 +523,7 @@ class BotHealthMonitor:
                         last_trade_time = COALESCE($2, last_trade_time),
                         health_message = $3
                     WHERE id = $4
-                """, health_status, last_trade, reason, bot_id)
+                """, health_status, last_trade_naive, reason, bot_id)
         except Exception as e:
             # Health columns may not exist - log but don't fail
             if "does not exist" in str(e) or "column" in str(e).lower():
@@ -532,7 +539,7 @@ class BotHealthMonitor:
                      trade_count_since_last, last_trade_found)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
             """, bot_id, previous_status, new_status or previous_status,
-                health_status, reason, trade_count, last_trade)
+                health_status, reason, trade_count, last_trade_naive)
         except Exception as e:
             # bot_health_logs table may not exist - log but don't fail
             if "does not exist" in str(e) or "UndefinedTableError" in str(e):
@@ -592,13 +599,16 @@ class BotHealthMonitor:
         Can be triggered via webhook endpoint.
         """
         async with self.db_pool.acquire() as conn:
+            heartbeat_time = datetime.now(timezone.utc)
+            # Convert to naive datetime for PostgreSQL compatibility
+            heartbeat_naive = heartbeat_time.replace(tzinfo=None) if heartbeat_time.tzinfo else heartbeat_time
             await conn.execute("""
                 UPDATE bots 
                 SET last_heartbeat = $1,
                     health_status = 'healthy',
                     health_message = 'Heartbeat received'
                 WHERE id = $2
-            """, datetime.now(timezone.utc), bot_id)
+            """, heartbeat_naive, bot_id)
             logger.debug(f"Heartbeat received for bot {bot_id}")
 
     # ──────────────────────────────────────────────────────────
