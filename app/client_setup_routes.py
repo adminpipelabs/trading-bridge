@@ -85,11 +85,17 @@ def derive_solana_address(private_key: str) -> str:
             detail="Solana dependencies not available. Install base58 and solders packages."
         )
     
+    # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
+    if isinstance(private_key, str):
+        private_key = re.sub(r'\s', '', private_key)
+    
+    if not private_key:
+        raise HTTPException(status_code=400, detail="Private key is required")
+    
     try:
         # Handle base58 encoded private key
-        if isinstance(private_key, str):
-            # Try to decode as base58
-            key_bytes = base58.b58decode(private_key)
+        # Try to decode as base58
+        key_bytes = base58.b58decode(private_key)
             # Solana keypairs are 64 bytes (32 byte seed + 32 byte public key)
             # But private keys can be 32 bytes (seed) or 64 bytes (seed + public)
             if len(key_bytes) == 64:
@@ -245,31 +251,32 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     bot_config = BOT_TYPE_CONFIGS[request.bot_type]
     chain = bot_config["chain"]
 
-    # Auto-trim private key to remove any leading/trailing whitespace
-    trimmed_private_key = request.private_key.strip() if request.private_key else ""
-    if not trimmed_private_key:
+    # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
+    # This prevents copy-paste errors where users accidentally include spaces
+    sanitized_private_key = re.sub(r'\s', '', request.private_key) if request.private_key else ""
+    if not sanitized_private_key:
         raise HTTPException(status_code=400, detail="Private key is required")
 
     # Derive wallet address from private key
     wallet_address = None
     if chain == "solana":
         try:
-            wallet_address = derive_solana_address(trimmed_private_key)
+            wallet_address = derive_solana_address(sanitized_private_key)
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
     elif chain == "evm":
         try:
-            wallet_address = derive_evm_address(trimmed_private_key)
+            wallet_address = derive_evm_address(sanitized_private_key)
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
 
-    # Encrypt private key
+    # Encrypt private key (use sanitized key)
     try:
-        encrypted_key = encrypt_key(request.private_key)
+        encrypted_key = encrypt_key(sanitized_private_key)
     except Exception as e:
         logger.error(f"Encryption failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to encrypt private key")
