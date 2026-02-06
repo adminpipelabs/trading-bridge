@@ -20,6 +20,9 @@ from tenacity import (
     RetryError
 )
 
+# Get proxy from environment variables (for QuotaGuard static IP)
+PROXY_URL = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+
 
 class OrderStatus(str, Enum):
     OPEN = "open"
@@ -74,8 +77,20 @@ class JupiterClient:
         self.rpc_url = rpc_url
         self.api_key = os.getenv("JUPITER_API_KEY", "")
         headers = {"x-api-key": self.api_key} if self.api_key else {}
-        self.client = httpx.AsyncClient(timeout=30.0, headers=headers)
-        self.logger = logging.getLogger(__name__)
+        
+        # Configure proxy if available (for QuotaGuard static IP)
+        proxies = None
+        if PROXY_URL:
+            proxies = {
+                "http://": PROXY_URL,
+                "https://": PROXY_URL,
+            }
+            self.logger = logging.getLogger(__name__)
+            self.logger.info(f"Using proxy for Jupiter API: {PROXY_URL.split('@')[0]}@...")
+        else:
+            self.logger = logging.getLogger(__name__)
+        
+        self.client = httpx.AsyncClient(timeout=30.0, headers=headers, proxies=proxies)
     
     async def close(self):
         await self.client.aclose()

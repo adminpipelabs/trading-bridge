@@ -7,8 +7,12 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 import logging
 import asyncio
+import os
 
 logger = logging.getLogger(__name__)
+
+# Get proxy from environment variables (for QuotaGuard static IP)
+PROXY_URL = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
 
 
 # Supported exchanges and their ccxt class names
@@ -60,6 +64,14 @@ class Account:
             "enableRateLimit": True,
             "timeout": 30000,
         }
+        
+        # Add proxy if configured (for QuotaGuard static IP)
+        if PROXY_URL:
+            config["proxies"] = {
+                "http": PROXY_URL,
+                "https": PROXY_URL,
+            }
+            logger.info(f"Using proxy for {connector_name}: {PROXY_URL.split('@')[0]}@...")
         
         # Some exchanges need password/passphrase
         if password:
@@ -325,7 +337,14 @@ class ExchangeManager:
         # If no authenticated connection, create a public one temporarily
         if connector_lower in EXCHANGE_MAP:
             try:
-                exchange = EXCHANGE_MAP[connector_lower]({"enableRateLimit": True})
+                public_config = {"enableRateLimit": True}
+                # Add proxy if configured
+                if PROXY_URL:
+                    public_config["proxies"] = {
+                        "http": PROXY_URL,
+                        "https": PROXY_URL,
+                    }
+                exchange = EXCHANGE_MAP[connector_lower](public_config)
                 ticker = await exchange.fetch_ticker(symbol)
                 price = ticker.get("last") or ticker.get("close")
                 await exchange.close()

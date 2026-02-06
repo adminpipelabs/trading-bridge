@@ -529,14 +529,37 @@ async def start_bot(
         return {"status": "already_running", "bot_id": bot_id}
 
     try:
-        # For Solana bots, start via bot runner
-        if bot.bot_type in ['volume', 'spread']:
+        # Check if this is a CEX bot (has exchange field and not Solana)
+        # Use raw SQL since exchange column may not be in SQLAlchemy model yet
+        bot_check = db.execute(text("""
+            SELECT exchange, chain FROM bots WHERE id = :bot_id
+        """), {"bot_id": bot_id}).first()
+        
+        exchange = bot_check[0] if bot_check else None
+        chain = bot_check[1] if bot_check else None
+        
+        is_cex_bot = (
+            bot.bot_type == 'volume' and 
+            exchange and 
+            exchange.lower() != 'jupiter' and
+            chain != 'solana'
+        )
+        
+        # For Solana/EVM bots, start via bot runner
+        if bot.bot_type in ['volume', 'spread'] and not is_cex_bot:
             bot.status = "running"
             bot.error = None
             db.commit()
             # Start bot in background
             await bot_runner.start_bot(bot_id, db)
-            logger.info(f"Solana bot {bot_id} started")
+            logger.info(f"Solana/EVM bot {bot_id} started")
+        elif is_cex_bot:
+            # CEX bots are handled by CEX bot runner automatically
+            # Just set status to running and CEX runner will pick it up
+            bot.status = "running"
+            bot.error = None
+            db.commit()
+            logger.info(f"CEX bot {bot_id} started (will be picked up by CEX runner)")
         else:
             # Hummingbot bots (future)
             # TODO: Integrate with hummingbot_client when ready

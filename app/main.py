@@ -21,6 +21,7 @@ from app.exchange_routes import router as exchange_router
 from app.health_routes import router as health_router
 from app.client_setup_routes import router as client_setup_router
 from app.admin_routes import router as admin_router
+from app.cex_credential_routes import router as cex_credential_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
 import os
@@ -144,8 +145,27 @@ async def lifespan(app: FastAPI):
         logger.error(traceback.format_exc())
         # Don't fail app startup if health monitor fails
     
+    # Start CEX bot runner (in background)
+    cex_runner = None
+    cex_runner_task = None
+    if db_pool:
+        try:
+            from app.cex_bot_runner import CEXBotRunner
+            logger.info("Starting CEX bot runner...")
+            cex_runner = CEXBotRunner(db_pool)
+            cex_runner_task = asyncio.create_task(cex_runner.start())
+            logger.info("✅ CEX bot runner started")
+        except Exception as e:
+            logger.error(f"Failed to start CEX bot runner: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+    
     # Start bot runner service (in background)
+    bot_runner_startup_error = None
+    bot_runner_task = None
+    
     async def start_bot_runner():
+        nonlocal bot_runner_startup_error
         try:
             logger.info("=" * 80)
             logger.info("ATTEMPTING TO START BOT RUNNER")
@@ -154,37 +174,44 @@ async def lifespan(app: FastAPI):
             logger.info("✅ Bot runner module imported successfully")
             await bot_runner.start()
             logger.info("✅ Bot runner started successfully")
+            bot_runner_startup_error = None
         except ImportError as e:
+            error_msg = f"BOT RUNNER IMPORT FAILED: {e}"
             logger.error("=" * 80)
-            logger.error("❌ BOT RUNNER IMPORT FAILED")
-            logger.error(f"Error: {e}")
+            logger.error(f"❌ {error_msg}")
             logger.error("Check if app/bot_runner.py exists")
             logger.error("=" * 80)
+            bot_runner_startup_error = error_msg
         except Exception as e:
+            error_msg = f"BOT RUNNER STARTUP FAILED: {e}"
             logger.error("=" * 80)
-            logger.error("❌ BOT RUNNER STARTUP FAILED")
-            logger.error(f"Error: {e}")
+            logger.error(f"❌ {error_msg}")
             logger.error(f"Error type: {type(e).__name__}")
             import traceback
             logger.error(traceback.format_exc())
             logger.error("=" * 80)
+            bot_runner_startup_error = error_msg
     
     # Start bot runner in background - use create_task to run concurrently
     logger.info("Creating bot runner task...")
     try:
         # Create task and let it run in background
-        task = asyncio.create_task(start_bot_runner())
+        bot_runner_task = asyncio.create_task(start_bot_runner())
+        app.state.bot_runner_task = bot_runner_task
+        app.state.bot_runner_startup_error = bot_runner_startup_error
         logger.info("✅ Bot runner task created")
         logger.info("Bot runner service starting...")
         # Give it a moment to start
         await asyncio.sleep(0.1)
     except Exception as e:
+        error_msg = f"FAILED TO CREATE BOT RUNNER TASK: {e}"
         logger.error("=" * 80)
-        logger.error("❌ FAILED TO CREATE BOT RUNNER TASK")
-        logger.error(f"Error: {e}")
+        logger.error(f"❌ {error_msg}")
         import traceback
         logger.error(traceback.format_exc())
         logger.error("=" * 80)
+        bot_runner_startup_error = error_msg
+        app.state.bot_runner_startup_error = bot_runner_startup_error
         # Don't fail app startup if bot runner fails
     
     yield
@@ -204,6 +231,14 @@ async def lifespan(app: FastAPI):
             logger.info("Asyncpg connection pool closed")
         except Exception as e:
             logger.warning(f"Error closing db pool: {e}")
+    
+    # Shutdown CEX bot runner
+    if cex_runner:
+        try:
+            await cex_runner.stop()
+            logger.info("CEX bot runner stopped")
+        except Exception as e:
+            logger.warning(f"Error stopping CEX bot runner: {e}")
     
     # Shutdown bot runner
     try:
@@ -308,6 +343,7 @@ app.include_router(auth_router)
 app.include_router(health_router)
 app.include_router(client_setup_router)
 app.include_router(admin_router)
+app.include_router(cex_credential_router)
 
 @app.get("/")
 async def root():
