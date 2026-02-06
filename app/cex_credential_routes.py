@@ -10,8 +10,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.cex_volume_bot import encrypt_credential
-from app.database import get_db
-from app.auth_routes import get_current_user
+from app.database import get_db, Client
+from app.security import get_current_client
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("cex_credentials")
@@ -37,7 +37,7 @@ async def add_exchange_credentials(
     payload: AddCredentialsRequest, 
     request: Request,
     db: Session = Depends(get_db),
-    user = Depends(get_current_user)
+    current_client: Client = Depends(get_current_client)
 ):
     """
     Add or update exchange API credentials for a client.
@@ -62,7 +62,7 @@ async def add_exchange_credentials(
         # Use raw SQL since exchange_credentials table may not be in SQLAlchemy model yet
         from sqlalchemy import text
         
-        await db.execute(text("""
+        db.execute(text("""
             INSERT INTO exchange_credentials 
                 (client_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, updated_at)
             VALUES (:client_id, :exchange, :api_key, :api_secret, :passphrase, :updated_at)
@@ -73,7 +73,7 @@ async def add_exchange_credentials(
                 passphrase_encrypted = :passphrase,
                 updated_at = :updated_at
         """), {
-            "client_id": user.client_id,
+            "client_id": current_client.id,
             "exchange": payload.exchange.lower(),
             "api_key": api_key_enc,
             "api_secret": api_secret_enc,
@@ -82,7 +82,7 @@ async def add_exchange_credentials(
         })
         db.commit()
         
-        logger.info(f"Client {user.client_id} added credentials for {payload.exchange}")
+        logger.info(f"Client {current_client.id} added credentials for {payload.exchange}")
         return {"success": True, "message": f"{payload.exchange} credentials saved"}
         
     except Exception as e:
@@ -95,7 +95,7 @@ async def add_exchange_credentials(
 async def list_exchange_credentials(
     request: Request,
     db: Session = Depends(get_db),
-    user = Depends(get_current_user)
+    current_client: Client = Depends(get_current_client)
 ):
     """
     List connected exchanges for the client (without revealing keys).
@@ -105,7 +105,7 @@ async def list_exchange_credentials(
     rows = db.execute(text("""
         SELECT exchange, created_at FROM exchange_credentials
         WHERE client_id = :client_id
-    """), {"client_id": user.client_id}).fetchall()
+    """), {"client_id": current_client.id}).fetchall()
     
     return {
         "exchanges": [
@@ -124,7 +124,7 @@ async def remove_exchange_credentials(
     exchange: str, 
     request: Request,
     db: Session = Depends(get_db),
-    user = Depends(get_current_user)
+    current_client: Client = Depends(get_current_client)
 ):
     """
     Remove exchange credentials. Will stop any bots using this exchange.
@@ -138,7 +138,7 @@ async def remove_exchange_credentials(
           AND exchange = :exchange
           AND status = 'running'
     """), {
-        "client_id": user.client_id,
+        "client_id": current_client.id,
         "exchange": exchange.lower()
     }).fetchall()
     
@@ -150,7 +150,7 @@ async def remove_exchange_credentials(
             WHERE account = (SELECT account_identifier FROM clients WHERE id = :client_id)
               AND exchange = :exchange
         """), {
-            "client_id": user.client_id,
+            "client_id": current_client.id,
             "exchange": exchange.lower()
         })
     
@@ -159,7 +159,7 @@ async def remove_exchange_credentials(
         DELETE FROM exchange_credentials
         WHERE client_id = :client_id AND exchange = :exchange
     """), {
-        "client_id": user.client_id,
+        "client_id": current_client.id,
         "exchange": exchange.lower()
     })
     db.commit()
@@ -181,12 +181,12 @@ async def admin_add_credentials(
     payload: AddCredentialsRequest, 
     request: Request,
     db: Session = Depends(get_db),
-    user = Depends(get_current_user)
+    current_client: Client = Depends(get_current_client)
 ):
     """
     Admin: Add exchange credentials on behalf of a client.
     """
-    if user.role != "admin":
+    if current_client.role != "admin" and current_client.account_identifier != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
     
     try:
