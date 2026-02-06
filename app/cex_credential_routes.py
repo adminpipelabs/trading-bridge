@@ -10,8 +10,9 @@ from pydantic import BaseModel
 from typing import Optional
 
 from app.cex_volume_bot import encrypt_credential
-from app.database import get_db, Session
+from app.database import get_db
 from app.auth_routes import get_current_user
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger("cex_credentials")
 
