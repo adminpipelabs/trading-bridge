@@ -901,7 +901,7 @@ def get_key_status(
             "key_added_by": None,
             "key_connected_at": None,
             "wallet_address": None,
-            "chain": client.chain or "solana",
+            "chain": getattr(client, 'chain', None) or "solana",  # chain may not exist on Client model
         }
 
 
