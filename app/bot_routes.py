@@ -570,7 +570,6 @@ async def start_bot(
         
         # Update reported_status for health monitor (using raw SQL since column may not be in model yet)
         try:
-            from sqlalchemy import text
             db.execute(text("""
                 UPDATE bots 
                 SET reported_status = 'running', status_updated_at = NOW()
