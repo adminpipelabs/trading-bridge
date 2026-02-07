@@ -522,8 +522,33 @@ def debug_check_bots(
     try:
         from sqlalchemy import text
         
-        # Build query
-        query = "SELECT id, name, bot_type, account, client_id, exchange, status, created_at FROM bots WHERE 1=1"
+        # First check what columns exist in bots table
+        check_cols = db.execute(text("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'bots' 
+            ORDER BY ordinal_position
+        """))
+        available_columns = [row[0] for row in check_cols.fetchall()]
+        
+        # Build SELECT clause with only existing columns
+        select_cols = []
+        col_map = {
+            "id": "id",
+            "name": "name", 
+            "bot_type": "bot_type",
+            "account": "account",
+            "client_id": "client_id",
+            "exchange": "exchange" if "exchange" in available_columns else None,
+            "status": "status",
+            "created_at": "created_at"
+        }
+        
+        for key, col in col_map.items():
+            if col and col in available_columns:
+                select_cols.append(col)
+        
+        query = f"SELECT {', '.join(select_cols)} FROM bots WHERE 1=1"
         params = {}
         
         if account:
@@ -545,16 +570,17 @@ def debug_check_bots(
         
         bots = []
         for row in rows:
-            bots.append({
-                "id": row[0],
-                "name": row[1],
-                "bot_type": row[2],
-                "account": row[3],
-                "client_id": row[4],
-                "exchange": row[5],
-                "status": row[6],
-                "created_at": row[7].isoformat() if row[7] else None,
-            })
+            bot_dict = {}
+            idx = 0
+            for key, col in col_map.items():
+                if col and col in available_columns:
+                    value = row[idx] if idx < len(row) else None
+                    if key == "created_at" and value:
+                        bot_dict[key] = value.isoformat() if hasattr(value, 'isoformat') else str(value)
+                    else:
+                        bot_dict[key] = value
+                    idx += 1
+            bots.append(bot_dict)
         
         # Also get bot type counts
         count_query = "SELECT bot_type, COUNT(*) as count FROM bots"
@@ -576,6 +602,7 @@ def debug_check_bots(
             "count": len(bots),
             "bots": bots,
             "bot_type_counts": type_counts,
+            "available_columns": available_columns,
             "query_used": query,
             "params": params
         }
