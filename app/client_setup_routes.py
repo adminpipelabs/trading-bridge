@@ -246,7 +246,15 @@ class BotOptionsResponse(BaseModel):
 
 class SetupBotRequest(BaseModel):
     bot_type: str = Field(..., description="Bot type: 'volume' or 'spread'")
-    private_key: str = Field(..., description="Private key (will be encrypted)")
+    private_key: Optional[str] = Field(None, description="Private key (required for DEX, not needed for CEX)")
+    exchange: Optional[str] = Field(None, description="Exchange name (e.g., 'bitmart', 'jupiter')")
+    connector: Optional[str] = Field(None, description="Connector name (same as exchange)")
+    chain: Optional[str] = Field(None, description="Chain (e.g., 'solana', 'evm')")
+    pair: Optional[str] = Field(None, description="Trading pair (e.g., 'SHARP/USDT')")
+    base_asset: Optional[str] = Field(None, description="Base asset symbol")
+    quote_asset: Optional[str] = Field(None, description="Quote asset symbol")
+    base_mint: Optional[str] = Field(None, description="Token mint address (for DEX)")
+    name: Optional[str] = Field(None, description="Bot name")
     config: Dict[str, Any] = Field(..., description="Bot configuration")
 
 
@@ -331,8 +339,9 @@ def get_bot_options(client_id: str, db: Session = Depends(get_db)):
 @router.post("/{client_id}/setup-bot", response_model=SetupBotResponse)
 async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depends(get_db)):
     """
-    Client sets up a bot with their private key.
-    Key is encrypted and stored in trading_keys table.
+    Client sets up a bot.
+    For DEX: Requires private key (encrypted and stored in trading_keys table).
+    For CEX: Requires exchange API credentials (should be saved separately via /exchanges/credentials).
     Bot is created and started automatically.
     """
     try:
@@ -340,167 +349,199 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")
 
-    # Validate bot type
+        # Validate bot type
         if request.bot_type not in BOT_TYPE_CONFIGS:
             raise HTTPException(status_code=400, detail=f"Invalid bot_type. Must be one of: {list(BOT_TYPE_CONFIGS.keys())}")
 
-        bot_config = BOT_TYPE_CONFIGS[request.bot_type]
-        chain = bot_config["chain"]
-
-        # Check if input is a seed phrase BEFORE sanitizing (seed phrases need spaces!)
-        original_key = request.private_key.strip() if request.private_key else ""
-        if not original_key:
-            raise HTTPException(status_code=400, detail="Private key is required")
+        # Determine if this is a CEX bot
+        is_cex = request.exchange and request.exchange.lower() in ['bitmart', 'coinstore', 'kucoin', 'binance']
         
-        # Check if it's a seed phrase (12-24 words separated by spaces)
-        words = original_key.split()
-        is_seed_phrase = len(words) >= 12 and len(words) <= 24
-        
-        # Only sanitize if it's NOT a seed phrase (seed phrases need their spaces preserved)
-        if is_seed_phrase:
-            sanitized_private_key = original_key  # Keep seed phrase as-is
-        else:
-            # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
-            # This prevents copy-paste errors where users accidentally include spaces
-            sanitized_private_key = re.sub(r'\s', '', original_key)
-
-        # Derive wallet address from private key
         wallet_address = None
-        if chain == "solana":
-            try:
-                wallet_address = derive_solana_address(sanitized_private_key)
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
-        elif chain == "evm":
-            try:
-                wallet_address = derive_evm_address(sanitized_private_key)
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+        chain = None
+        
+        # For CEX bots, skip private key handling (credentials should already be saved)
+        if not is_cex:
+            # DEX bot - requires private key
+            bot_config = BOT_TYPE_CONFIGS[request.bot_type]
+            chain = request.chain or bot_config["chain"]
 
-        # Encrypt private key (use sanitized key)
-        try:
-            encrypted_key = encrypt_key(sanitized_private_key)
-        except Exception as e:
-            logger.error(f"Encryption failed: {e}")
-            raise HTTPException(status_code=500, detail="Failed to encrypt private key")
+            # Check if input is a seed phrase BEFORE sanitizing (seed phrases need spaces!)
+            original_key = request.private_key.strip() if request.private_key else ""
+            if not original_key:
+                raise HTTPException(status_code=400, detail="Private key is required for DEX bots")
+            
+            # Check if it's a seed phrase (12-24 words separated by spaces)
+            words = original_key.split()
+            is_seed_phrase = len(words) >= 12 and len(words) <= 24
+            
+            # Only sanitize if it's NOT a seed phrase (seed phrases need their spaces preserved)
+            if is_seed_phrase:
+                sanitized_private_key = original_key  # Keep seed phrase as-is
+            else:
+                # Remove ALL whitespace (spaces, newlines, tabs) from anywhere in the key
+                # This prevents copy-paste errors where users accidentally include spaces
+                sanitized_private_key = re.sub(r'\s', '', original_key)
 
-        # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
-        # Mark as added by client since this is the client self-service endpoint
-        try:
-            # First, ensure the table exists (create if it doesn't)
+            # Derive wallet address from private key
+            if chain == "solana":
+                try:
+                    wallet_address = derive_solana_address(sanitized_private_key)
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+            elif chain == "evm":
+                try:
+                    wallet_address = derive_evm_address(sanitized_private_key)
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    raise HTTPException(status_code=400, detail=f"Failed to derive wallet address: {str(e)}")
+
+            # Encrypt private key (use sanitized key)
             try:
-                db.execute(text("""
-                    CREATE TABLE IF NOT EXISTS trading_keys (
-                        id SERIAL PRIMARY KEY,
-                        client_id VARCHAR(255) UNIQUE NOT NULL,
-                        encrypted_key TEXT NOT NULL,
-                        chain VARCHAR(20) DEFAULT 'solana',
-                        wallet_address VARCHAR(255),
-                        added_by VARCHAR(20) DEFAULT 'client',
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    )
-                """))
-                db.execute(text("""
-                    CREATE INDEX IF NOT EXISTS idx_trading_keys_client_id ON trading_keys(client_id)
-                """))
-                db.commit()
-                logger.info("trading_keys table created/verified successfully")
-            except Exception as create_error:
-                # Table might already exist - that's fine
-                logger.debug(f"trading_keys table check (may already exist): {create_error}")
-                db.rollback()
-            
-            # Ensure the table has the required columns (for existing deployments)
+                encrypted_key = encrypt_key(sanitized_private_key)
+            except Exception as e:
+                logger.error(f"Encryption failed: {e}")
+                raise HTTPException(status_code=500, detail="Failed to encrypt private key")
+
+            # Store encrypted key in trading_keys table (using raw SQL since it's not in SQLAlchemy model)
+            # Mark as added by client since this is the client self-service endpoint
             try:
+                # First, ensure the table exists (create if it doesn't)
+                try:
+                    db.execute(text("""
+                        CREATE TABLE IF NOT EXISTS trading_keys (
+                            id SERIAL PRIMARY KEY,
+                            client_id VARCHAR(255) UNIQUE NOT NULL,
+                            encrypted_key TEXT NOT NULL,
+                            chain VARCHAR(20) DEFAULT 'solana',
+                            wallet_address VARCHAR(255),
+                            added_by VARCHAR(20) DEFAULT 'client',
+                            created_at TIMESTAMP DEFAULT NOW(),
+                            updated_at TIMESTAMP DEFAULT NOW()
+                        )
+                    """))
+                    db.execute(text("""
+                        CREATE INDEX IF NOT EXISTS idx_trading_keys_client_id ON trading_keys(client_id)
+                    """))
+                    db.commit()
+                    logger.info("trading_keys table created/verified successfully")
+                except Exception as create_error:
+                    # Table might already exist - that's fine
+                    logger.debug(f"trading_keys table check (may already exist): {create_error}")
+                    db.rollback()
+                
+                # Ensure the table has the required columns (for existing deployments)
+                try:
+                    db.execute(text("""
+                        ALTER TABLE trading_keys 
+                        ADD COLUMN IF NOT EXISTS wallet_address VARCHAR(255),
+                        ADD COLUMN IF NOT EXISTS added_by VARCHAR(20) DEFAULT 'client'
+                    """))
+                    db.commit()
+                except Exception as alter_error:
+                    # Columns might already exist - that's fine
+                    logger.debug(f"Could not alter trading_keys table (columns may already exist): {alter_error}")
+                    db.rollback()
+                
                 db.execute(text("""
-                    ALTER TABLE trading_keys 
-                    ADD COLUMN IF NOT EXISTS wallet_address VARCHAR(255),
-                    ADD COLUMN IF NOT EXISTS added_by VARCHAR(20) DEFAULT 'client'
-                """))
-                db.commit()
-            except Exception as alter_error:
-                # Columns might already exist - that's fine
-                logger.debug(f"Could not alter trading_keys table (columns may already exist): {alter_error}")
-                db.rollback()
-            
-            db.execute(text("""
-                INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
-                VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'client', NOW(), NOW())
-                ON CONFLICT (client_id) 
-                DO UPDATE SET 
-                    encrypted_key = :encrypted_key,
-                    chain = :chain,
-                    wallet_address = :wallet_address,
-                    added_by = 'client',
-                    updated_at = NOW()
-            """), {
-                "client_id": client_id,
-                "encrypted_key": encrypted_key,
-                "chain": chain,
-                "wallet_address": wallet_address
-            })
-            
-            # Create admin notification for key connection
-            try:
-                wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if wallet_address else "unknown"
-                db.execute(text("""
-                    INSERT INTO admin_notifications (type, client_id, message, created_at)
-                    VALUES ('key_connected', :client_id, :message, NOW())
+                    INSERT INTO trading_keys (client_id, encrypted_key, chain, wallet_address, added_by, created_at, updated_at)
+                    VALUES (:client_id, :encrypted_key, :chain, :wallet_address, 'client', NOW(), NOW())
+                    ON CONFLICT (client_id) 
+                    DO UPDATE SET 
+                        encrypted_key = :encrypted_key,
+                        chain = :chain,
+                        wallet_address = :wallet_address,
+                        added_by = 'client',
+                        updated_at = NOW()
                 """), {
                     "client_id": client_id,
-                    "message": f"Client '{client.name}' connected trading wallet {wallet_short}"
+                    "encrypted_key": encrypted_key,
+                    "chain": chain,
+                    "wallet_address": wallet_address
                 })
-            except Exception as notif_error:
-                # Notification table might not exist yet - log but don't fail
-                logger.debug(f"Could not create notification (table may not exist): {notif_error}")
-            
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.error(f"Failed to store encrypted key: {e}", exc_info=True)
-            # Provide more detailed error message
-            error_detail = str(e)
-            if "column" in error_detail.lower() and "does not exist" in error_detail.lower():
-                error_detail = f"Database schema issue: {error_detail}. Please run migrations to add wallet_address and added_by columns to trading_keys table."
-            raise HTTPException(status_code=500, detail=f"Failed to store encrypted key: {error_detail}")
+                
+                # Create admin notification for key connection
+                try:
+                    wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if wallet_address else "unknown"
+                    db.execute(text("""
+                        INSERT INTO admin_notifications (type, client_id, message, created_at)
+                        VALUES ('key_connected', :client_id, :message, NOW())
+                    """), {
+                        "client_id": client_id,
+                        "message": f"Client '{client.name}' connected trading wallet {wallet_short}"
+                    })
+                except Exception as notif_error:
+                    # Notification table might not exist yet - log but don't fail
+                    logger.debug(f"Could not create notification (table may not exist): {notif_error}")
+                
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Failed to store encrypted key: {e}", exc_info=True)
+                # Provide more detailed error message
+                error_detail = str(e)
+                if "column" in error_detail.lower() and "does not exist" in error_detail.lower():
+                    error_detail = f"Database schema issue: {error_detail}. Please run migrations to add wallet_address and added_by columns to trading_keys table."
+                raise HTTPException(status_code=500, detail=f"Failed to store encrypted key: {error_detail}")
 
         # Create bot record
         import uuid
+        import json
         bot_id = str(uuid.uuid4())
         
-        # Merge config with defaults
-        merged_config = {**bot_config["default_config"], **request.config}
+        # Parse config if it's a JSON string (from frontend)
+        if isinstance(request.config, str):
+            try:
+                config_dict = json.loads(request.config)
+            except:
+                config_dict = request.config
+        else:
+            config_dict = request.config
         
-        # For Solana bots, only set quote_mint to SOL if not provided (native token)
-        # Don't default base_mint - user must specify which token they want to trade
-        if chain == "solana" and request.bot_type == "volume":
-            if "quote_mint" not in merged_config:
-                # Default quote_mint to SOL (native token for Solana)
-                merged_config["quote_mint"] = "So11111111111111111111111111111111111111112"  # SOL
-            # base_mint must be provided by user - don't default to specific tokens
+        # Merge config with defaults (only for DEX bots)
+        if not is_cex:
+            bot_config = BOT_TYPE_CONFIGS[request.bot_type]
+            merged_config = {**bot_config["default_config"], **config_dict}
+            
+            # For Solana bots, only set quote_mint to SOL if not provided (native token)
+            if chain == "solana" and request.bot_type == "volume":
+                if "quote_mint" not in merged_config:
+                    merged_config["quote_mint"] = "So11111111111111111111111111111111111111112"  # SOL
+        else:
+            # CEX bots - use config as-is
+            merged_config = config_dict
 
-        # Determine pair from config
-        # Pair should be provided by user in config, or derived from base_mint/quote_mint later
-        pair = merged_config.get("pair")  # Use pair from config if provided, otherwise None
+        # Determine pair, connector, exchange
+        if is_cex:
+            pair = request.pair or ""
+            connector = request.connector or request.exchange or ""
+            exchange = request.exchange or ""
+            bot_name = request.name or f"{request.base_asset or 'CEX'} {BOT_TYPE_CONFIGS[request.bot_type]['label']}"
+        else:
+            pair = merged_config.get("pair") or request.base_mint or ""
+            connector = request.connector or ("jupiter" if chain == "solana" else "uniswap")
+            exchange = None
+            bot_config = BOT_TYPE_CONFIGS[request.bot_type]
+            bot_name = request.name or f"{bot_config['label']} - {client.name}"
 
         # Create bot
-        # Note: chain is stored in config and derived from connector, not a direct model field
         bot = Bot(
             id=bot_id,
             client_id=client_id,
             account=client.account_identifier,
             instance_name=f"{client.account_identifier}_{bot_id[:8]}",
-            name=f"{bot_config['label']} - {client.name}",
-            connector="jupiter" if chain == "solana" else "uniswap",
-            pair=pair or "",  # Use configured pair or empty string (Bot model requires non-null)
+            name=bot_name,
+            connector=connector,
+            exchange=exchange,
+            chain=chain,
+            pair=pair or "",
+            base_asset=request.base_asset,
+            quote_asset=request.quote_asset,
             strategy="volume" if request.bot_type == "volume" else "spread",
             bot_type=request.bot_type,
-            status="stopped",  # Will be started after wallet is added
+            status="stopped",  # Will be started after credentials are verified
             config=merged_config,
             stats={}
         )
@@ -509,21 +550,30 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         db.add(bot)
         db.flush()  # Flush to get bot_id available for UPDATE
         
-        # Store chain in database using raw SQL (column exists but not in SQLAlchemy model)
+        # Store chain/exchange in database using raw SQL (columns exist but not in SQLAlchemy model)
         # This must happen AFTER bot is added/flushed so bot_id exists
         try:
-            db.execute(text("""
-                UPDATE bots SET chain = :chain WHERE id = :bot_id
-            """), {"chain": chain, "bot_id": bot_id})
-            db.commit()  # Commit the chain update
-            logger.info(f"Updated chain column for bot {bot_id}: {chain}")
-        except Exception as chain_error:
-            logger.warning(f"Could not update chain column (may not exist): {chain_error}")
-            # Don't fail - chain can be derived from connector if needed
+            update_fields = {}
+            if chain:
+                update_fields["chain"] = chain
+            if is_cex and exchange:
+                update_fields["exchange"] = exchange
+            
+            if update_fields:
+                set_clause = ", ".join([f"{k} = :{k}" for k in update_fields.keys()])
+                update_fields["bot_id"] = bot_id
+                db.execute(text(f"""
+                    UPDATE bots SET {set_clause} WHERE id = :bot_id
+                """), update_fields)
+                db.commit()
+                logger.info(f"Updated bot {bot_id} fields: {update_fields}")
+        except Exception as update_error:
+            logger.warning(f"Could not update bot fields (may not exist): {update_error}")
+            # Don't fail - fields can be derived if needed
             db.rollback()
 
-        # Add wallet to bot_wallets table
-        if wallet_address:
+        # Add wallet to bot_wallets table (only for DEX bots)
+        if wallet_address and not is_cex:
             try:
                 db.execute(text("""
                     INSERT INTO bot_wallets (id, bot_id, wallet_address, encrypted_private_key, created_at)
@@ -542,7 +592,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
 
         # Start the bot in background (truly non-blocking)
         # Don't wait for startup to complete - return response immediately
-        logger.info(f"Scheduling bot {bot_id} to start for client {client_id}")
+        logger.info(f"Scheduling bot {bot_id} to start for client {client_id} (CEX: {is_cex})")
         bot.status = "running"
         db.commit()
         
