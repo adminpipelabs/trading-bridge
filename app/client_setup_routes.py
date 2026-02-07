@@ -345,9 +345,13 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
     Bot is created and started automatically.
     """
     try:
+        # Log for debugging
+        logger.info(f"Setup bot request for client_id: {client_id}, bot_type: {request.bot_type}")
+        
         client = db.query(Client).filter(Client.id == client_id).first()
         if not client:
-            raise HTTPException(status_code=404, detail="Client not found")
+            logger.error(f"Client not found: {client_id}")
+            raise HTTPException(status_code=404, detail=f"Client not found: {client_id}")
 
         # Validate bot type
         if request.bot_type not in BOT_TYPE_CONFIGS:

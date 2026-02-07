@@ -115,7 +115,8 @@ class BotHealthMonitor:
             # Get all bots marked as running (by user action)
             # Include chain and wallet info for Solana routing
             bots = await conn.fetch("""
-                SELECT b.id, b.account, b.name, b.pair, b.connector, b.exchange, b.status,
+                SELECT b.id, b.account, b.name, b.pair, b.base_asset, b.quote_asset, b.base_mint,
+                       b.connector, b.exchange, b.status,
                        b.health_status, b.last_trade_time, b.last_heartbeat,
                        b.bot_type, b.chain, b.config,
                        c.api_key, c.api_secret, c.memo,
@@ -193,8 +194,9 @@ class BotHealthMonitor:
             config = {}
 
         # Config stores base_mint and quote_mint for Jupiter bots
-        base_mint = config.get('base_mint')
-        quote_mint = config.get('quote_mint')
+        # Also check column directly (for newer bots that have base_mint column)
+        base_mint = bot.get('base_mint') or config.get('base_mint')
+        quote_mint = bot.get('quote_mint') or config.get('quote_mint')
 
         if not wallet_address:
             await self._update_health(
@@ -210,7 +212,7 @@ class BotHealthMonitor:
                 conn, bot_id, bot['status'],
                 health_status='error',
                 new_status=None,
-                reason="No base_mint in bot config"
+                reason="Bot missing pair configuration (no base_mint found in column or config)"
             )
             return
 
@@ -301,7 +303,31 @@ class BotHealthMonitor:
         """
         now = datetime.now(timezone.utc)
         bot_id = bot['id']
-        pair = bot.get('pair')        # e.g. "SHARP/USDT" (may be None)
+        
+        # Get pair from column OR config JSON (for backward compatibility)
+        pair = bot.get('pair')
+        config_raw = bot.get('config') or {}
+        
+        # Parse config if it's a string (JSONB from PostgreSQL)
+        if isinstance(config_raw, str):
+            import json
+            try:
+                config = json.loads(config_raw)
+            except (json.JSONDecodeError, TypeError):
+                config = {}
+        elif isinstance(config_raw, dict):
+            config = config_raw
+        else:
+            config = {}
+        
+        # Check config JSON for pair/token_mint if column is empty
+        if not pair:
+            # Try to get pair from config
+            pair = config.get('pair') or config.get('token_mint')
+            # Or build from base_asset/quote_asset
+            if not pair and config.get('base_asset') and config.get('quote_asset'):
+                pair = f"{config['base_asset']}/{config['quote_asset']}"
+        
         connector = bot.get('connector') # e.g. "BitMart"
 
         # Validate required fields
