@@ -538,6 +538,15 @@ def test_volume_bot_insert(
         instance_name = f"{account}_{bot_id[:8]}"
         
         # Insert volume bot via raw SQL
+        config_json = json.dumps({
+            "daily_volume_usd": 5000,
+            "min_trade_usd": 10,
+            "max_trade_usd": 25,
+            "interval_min_seconds": 900,
+            "interval_max_seconds": 2700,
+            "slippage_bps": 50
+        })
+        
         result = db.execute(text("""
             INSERT INTO bots (
                 id, 
@@ -573,8 +582,8 @@ def test_volume_bot_insert(
                 :quote_asset,
                 :strategy,
                 :status,
-                :config::jsonb,
-                '{}'::jsonb,
+                CAST(:config AS jsonb),
+                CAST('{}' AS jsonb),
                 :health_status,
                 NOW(),
                 NOW()
@@ -594,14 +603,7 @@ def test_volume_bot_insert(
             "quote_asset": "USDT",
             "strategy": "volume",
             "status": "created",
-            "config": json.dumps({
-                "daily_volume_usd": 5000,
-                "min_trade_usd": 10,
-                "max_trade_usd": 25,
-                "interval_min_seconds": 900,
-                "interval_max_seconds": 2700,
-                "slippage_bps": 50
-            }),
+            "config": config_json,
             "health_status": "unknown"
         })
         
