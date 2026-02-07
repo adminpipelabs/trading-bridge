@@ -466,12 +466,14 @@ def list_bots(
             query = query.filter(Bot.account == account)
             logger.info(f"🔍 Admin query: account={account}, found {query.count()} bots before bot_type filter")
         if bot_type:
-            query = query.filter(Bot.bot_type == bot_type)
+            # Filter by bot_type, but also include NULL bot_type if explicitly requested
+            # This allows finding bots that need bot_type fixed
+            query = query.filter((Bot.bot_type == bot_type) | (Bot.bot_type.is_(None) if bot_type == "null" else False))
             logger.info(f"🔍 Admin query: bot_type={bot_type}, found {query.count()} bots after bot_type filter")
         bots = query.all()
         logger.info(f"✅ Admin returning {len(bots)} bots for account={account}, bot_type={bot_type}")
         for bot in bots:
-            logger.info(f"  - Bot: id={bot.id}, name={bot.name}, bot_type={bot.bot_type}, account={bot.account}")
+            logger.info(f"  - Bot: id={bot.id}, name={bot.name}, bot_type={bot.bot_type or 'NULL'}, account={bot.account}")
         return {"bots": [bot.to_dict() for bot in bots]}
     
     # Non-admin must have wallet, only sees their bots
@@ -505,6 +507,10 @@ def list_bots(
         query = query.filter(Bot.bot_type == bot_type)
     
     bots = query.all()
+    
+    logger.info(f"✅ Client returning {len(bots)} bots for account={current_client.account_identifier}, bot_type={bot_type}")
+    for bot in bots:
+        logger.info(f"  - Bot: id={bot.id}, name={bot.name}, bot_type={bot.bot_type or 'NULL'}, account={bot.account}")
     
     return {"bots": [bot.to_dict() for bot in bots]}
 
