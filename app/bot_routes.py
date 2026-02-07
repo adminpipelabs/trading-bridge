@@ -509,7 +509,7 @@ def list_bots(
     return {"bots": [bot.to_dict() for bot in bots]}
 
 
-@router.get("/debug/check-bots")
+@router.get("/debug/check-bots", name="debug_check_bots")
 def debug_check_bots(
     account: Optional[str] = Query(None, description="Filter by account identifier"),
     client_id: Optional[str] = Query(None, description="Filter by client_id"),
