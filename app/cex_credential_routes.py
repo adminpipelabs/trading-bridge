@@ -133,18 +133,47 @@ async def add_exchange_credentials(
 @router.get("/credentials")
 async def list_exchange_credentials(
     request: Request,
-    db: Session = Depends(get_db),
-    current_client: Client = Depends(get_current_client)
+    db: Session = Depends(get_db)
 ):
     """
     List connected exchanges for the client (without revealing keys).
+    For CEX bots, wallet registration is NOT required - accepts client_id from header.
     """
     from sqlalchemy import text
+    
+    # Get client_id - try from header first, then wallet-based auth
+    client_id = None
+    
+    # Method 1: Try to get from X-Client-ID header (for CEX bots)
+    client_id = request.headers.get("X-Client-ID")
+    
+    # Method 2: Try wallet-based authentication (for DEX bots or backward compatibility)
+    if not client_id:
+        try:
+            wallet_address = request.headers.get("X-Wallet-Address")
+            if wallet_address:
+                from app.database import Wallet
+                wallet = db.query(Wallet).filter(Wallet.address == wallet_address.lower()).first()
+                if wallet:
+                    client_id = wallet.client_id
+        except Exception as e:
+            logger.debug(f"Could not get client from wallet: {e}")
+    
+    if not client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Client ID required. Provide X-Client-ID header or X-Wallet-Address header."
+        )
+    
+    # Verify client exists
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail=f"Client not found: {client_id}")
     
     rows = db.execute(text("""
         SELECT exchange, created_at FROM exchange_credentials
         WHERE client_id = :client_id
-    """), {"client_id": current_client.id}).fetchall()
+    """), {"client_id": client_id}).fetchall()
     
     return {
         "exchanges": [
