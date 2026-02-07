@@ -946,10 +946,15 @@ async def stop_bot(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class UpdateBotRequest(BaseModel):
+    name: Optional[str] = None
+    config: Optional[dict] = None
+    status: Optional[str] = None
+
 @router.put("/{bot_id}")
 def update_bot(
     bot_id: str, 
-    request_data: dict, 
+    request_data: UpdateBotRequest, 
     db: Session = Depends(get_db),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
     http_request: Request = None
@@ -975,16 +980,18 @@ def update_bot(
         # Admin access allowed
 
     # Update fields if provided
-    if "name" in request_data:
-        bot.name = request_data["name"]
-    if "config" in request_data:
-        bot.config = request_data["config"]
-    if "status" in request_data:
-        bot.status = request_data["status"]
+    if request_data.name is not None:
+        bot.name = request_data.name
+    if request_data.config is not None:
+        bot.config = request_data.config
+    if request_data.status is not None:
+        bot.status = request_data.status
     
     bot.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(bot)
+    
+    logger.info(f"✅ Bot {bot_id} updated: name={bot.name}, status={bot.status}")
 
     return bot.to_dict()
 
