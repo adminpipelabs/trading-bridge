@@ -13,7 +13,6 @@ from app.cex_volume_bot import encrypt_credential
 from app.database import get_db, Client
 from app.security import get_current_client
 from sqlalchemy.orm import Session
-from fastapi import Depends
 
 logger = logging.getLogger("cex_credentials")
 
@@ -25,6 +24,7 @@ class AddCredentialsRequest(BaseModel):
     api_key: str
     api_secret: str
     passphrase: Optional[str] = None
+    client_id: Optional[str] = None  # For CEX bots - optional, can come from header instead
 
 
 class CredentialStatus(BaseModel):
@@ -37,15 +37,14 @@ class CredentialStatus(BaseModel):
 async def add_exchange_credentials(
     payload: AddCredentialsRequest, 
     request: Request,
-    db: Session = Depends(get_db),
-    current_client: Optional[Client] = Depends(get_current_client)
+    db: Session = Depends(get_db)
 ):
     """
     Add or update exchange API credentials for a client.
     Credentials are encrypted before storage.
     
     For CEX bots, wallet registration is NOT required - API keys are sufficient.
-    This endpoint accepts client_id from request body if wallet header is not available.
+    This endpoint accepts client_id from request body or header.
     """
     # Validate exchange
     supported = ["bitmart", "coinstore", "binance", "kucoin", "gate", "gateio", "mexc", "bybit", 
@@ -57,31 +56,33 @@ async def add_exchange_credentials(
             detail=f"Unsupported exchange. Supported: {supported}"
         )
     
-    # Get client_id - try from current_client first, then from request body/header
+    # Get client_id - try from request body first, then header, then try wallet-based auth
     client_id = None
-    if current_client:
-        client_id = current_client.id
-    else:
-        # Try to get client_id from request body or query params
-        # For CEX bots, we don't require wallet registration
+    
+    # Method 1: Try to get client_id from request body (for CEX bots)
+    if hasattr(payload, 'client_id') and payload.client_id:
+        client_id = payload.client_id
+    
+    # Method 2: Try to get from X-Client-ID header
+    if not client_id:
+        client_id = request.headers.get("X-Client-ID")
+    
+    # Method 3: Try wallet-based authentication (for DEX bots or backward compatibility)
+    if not client_id:
         try:
-            body = await request.json()
-            client_id = body.get("client_id")
-        except:
-            pass
-        
-        if not client_id:
-            # Try to get from query params
-            client_id = request.query_params.get("client_id")
-        
-        if not client_id:
-            # Last resort: try to get from X-Client-ID header
-            client_id = request.headers.get("X-Client-ID")
+            wallet_address = request.headers.get("X-Wallet-Address")
+            if wallet_address:
+                from app.database import Wallet
+                wallet = db.query(Wallet).filter(Wallet.address == wallet_address.lower()).first()
+                if wallet:
+                    client_id = wallet.client_id
+        except Exception as e:
+            logger.debug(f"Could not get client from wallet: {e}")
     
     if not client_id:
         raise HTTPException(
             status_code=400,
-            detail="Client ID required. Provide X-Wallet-Address header (for DEX) or client_id in request body (for CEX)."
+            detail="Client ID required. Provide client_id in request body, X-Client-ID header, or X-Wallet-Address header."
         )
     
     # Verify client exists
