@@ -60,8 +60,12 @@ async def add_exchange_credentials(
     client_id = None
     
     # Method 1: Try to get client_id from request body (for CEX bots)
-    if hasattr(payload, 'client_id') and payload.client_id:
-        client_id = payload.client_id
+    # Pydantic models use getattr or direct attribute access
+    try:
+        if payload.client_id:
+            client_id = payload.client_id
+    except AttributeError:
+        pass  # client_id is optional, so AttributeError is fine
     
     # Method 2: Try to get from X-Client-ID header
     if not client_id:
@@ -80,6 +84,7 @@ async def add_exchange_credentials(
             logger.debug(f"Could not get client from wallet: {e}")
     
     if not client_id:
+        logger.error(f"Failed to get client_id. Payload: {payload.dict() if hasattr(payload, 'dict') else payload}, Headers: X-Client-ID={request.headers.get('X-Client-ID')}, X-Wallet-Address={request.headers.get('X-Wallet-Address')}")
         raise HTTPException(
             status_code=400,
             detail="Client ID required. Provide client_id in request body, X-Client-ID header, or X-Wallet-Address header."
@@ -124,10 +129,16 @@ async def add_exchange_credentials(
         logger.info(f"Client {client_id} added credentials for {payload.exchange}")
         return {"success": True, "message": f"{payload.exchange} credentials saved"}
         
+    except HTTPException:
+        # Re-raise HTTP exceptions (like 400, 404) as-is
+        raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to save credentials: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to save credentials")
+        logger.error(f"Failed to save credentials for client {client_id}, exchange {payload.exchange}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to save credentials: {str(e)}"
+        )
 
 
 @router.get("/credentials")
