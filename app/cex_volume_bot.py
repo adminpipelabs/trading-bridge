@@ -39,6 +39,7 @@ class CEXVolumeBot:
         api_key: str,
         api_secret: str,
         passphrase: Optional[str] = None,
+        memo: Optional[str] = None,  # BitMart uses memo/uid
         config: dict = None,
         proxy_url: Optional[str] = None,
     ):
@@ -48,6 +49,7 @@ class CEXVolumeBot:
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
+        self.memo = memo  # BitMart memo/uid
         self.proxy_url = proxy_url or os.getenv("QUOTAGUARD_PROXY_URL")
         
         # Default config
@@ -83,6 +85,10 @@ class CEXVolumeBot:
             
             if self.passphrase and exchange_config.get("requires_passphrase"):
                 exchange_params["password"] = self.passphrase
+            
+            # BitMart uses memo/uid (not passphrase)
+            if self.memo and self.exchange_name == "bitmart":
+                exchange_params["uid"] = self.memo
             
             # Add proxy if configured (for QuotaGuard static IP)
             if self.proxy_url:
