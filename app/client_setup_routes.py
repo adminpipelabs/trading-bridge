@@ -556,6 +556,8 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             bot_name = request.name or f"{bot_config['label']} - {client.name}"
 
         # Create bot
+        # Note: exchange, chain, base_asset, quote_asset are not in SQLAlchemy model yet
+        # They will be set via raw SQL UPDATE after bot creation
         bot = Bot(
             id=bot_id,
             client_id=client_id,
@@ -563,11 +565,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             instance_name=f"{client.account_identifier}_{bot_id[:8]}",
             name=bot_name,
             connector=connector,
-            exchange=exchange,
-            chain=chain,
             pair=pair or "",
-            base_asset=request.base_asset,
-            quote_asset=request.quote_asset,
             strategy="volume" if request.bot_type == "volume" else "spread",
             bot_type=request.bot_type,
             status="stopped",  # Will be started after credentials are verified
@@ -579,7 +577,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         db.add(bot)
         db.flush()  # Flush to get bot_id available for UPDATE
         
-        # Store chain/exchange in database using raw SQL (columns exist but not in SQLAlchemy model)
+        # Store chain/exchange/base_asset/quote_asset in database using raw SQL (columns exist but not in SQLAlchemy model)
         # This must happen AFTER bot is added/flushed so bot_id exists
         try:
             update_fields = {}
@@ -587,6 +585,10 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 update_fields["chain"] = chain
             if is_cex and exchange:
                 update_fields["exchange"] = exchange
+            if request.base_asset:
+                update_fields["base_asset"] = request.base_asset
+            if request.quote_asset:
+                update_fields["quote_asset"] = request.quote_asset
             
             if update_fields:
                 set_clause = ", ".join([f"{k} = :{k}" for k in update_fields.keys()])
