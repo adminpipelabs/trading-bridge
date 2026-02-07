@@ -797,7 +797,7 @@ async def start_bot(
     bot_id: str, 
     db: Session = Depends(get_db),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
-    http_request: Request = None
+    request: Request
 ):
     """Start a stopped bot."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -807,14 +807,14 @@ async def start_bot(
     
     # Authorization check
     try:
-        wallet_address = wallet_address or (http_request.headers.get("X-Wallet-Address") if http_request else None)
+        wallet_address = wallet_address or request.headers.get("X-Wallet-Address", None)
         if wallet_address:
             current_client = get_current_client(wallet_address=wallet_address, db=db)
             check_bot_access(bot, current_client)
         # If no wallet_address, allow (for admin with token)
     except HTTPException:
         # If get_current_client fails, check if admin token
-        auth_header = http_request.headers.get("Authorization", "") if http_request else ""
+        auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Authentication required")
         # Admin access allowed
@@ -888,7 +888,7 @@ async def stop_bot(
     bot_id: str, 
     db: Session = Depends(get_db),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
-    http_request: Request = None
+    request: Request
 ):
     """Stop a running bot."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -898,14 +898,14 @@ async def stop_bot(
     
     # Authorization check
     try:
-        wallet_address = wallet_address or (http_request.headers.get("X-Wallet-Address") if http_request else None)
+        wallet_address = wallet_address or request.headers.get("X-Wallet-Address", None)
         if wallet_address:
             current_client = get_current_client(wallet_address=wallet_address, db=db)
             check_bot_access(bot, current_client)
         # If no wallet_address, allow (for admin with token)
     except HTTPException:
         # If get_current_client fails, check if admin token
-        auth_header = http_request.headers.get("Authorization", "") if http_request else ""
+        auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Authentication required")
         # Admin access allowed
@@ -957,7 +957,7 @@ def update_bot(
     request_data: UpdateBotRequest, 
     db: Session = Depends(get_db),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
-    http_request: Request = None
+    request: Request
 ):
     """Update bot configuration."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -967,14 +967,14 @@ def update_bot(
     
     # Authorization check
     try:
-        wallet_address = wallet_address or (http_request.headers.get("X-Wallet-Address") if http_request else None)
+        wallet_address = wallet_address or request.headers.get("X-Wallet-Address", None)
         if wallet_address:
             current_client = get_current_client(wallet_address=wallet_address, db=db)
             check_bot_access(bot, current_client)
         # If no wallet_address, allow (for admin with token)
     except HTTPException:
         # If get_current_client fails, check if admin token
-        auth_header = http_request.headers.get("Authorization", "") if http_request else ""
+        auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Authentication required")
         # Admin access allowed
