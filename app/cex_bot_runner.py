@@ -64,31 +64,17 @@ class CEXBotRunner:
         4. Clean up stopped bots
         """
         async with self.db_pool.acquire() as conn:
-            # Check if exchange_credentials table exists
-            try:
-                table_exists = await conn.fetchval("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_name = 'exchange_credentials'
-                    )
-                """)
-                
-                if not table_exists:
-                    # Table doesn't exist yet - migration not run
-                    # Silently skip this cycle (don't spam errors)
-                    return
-            except Exception as e:
-                # If check fails, assume table doesn't exist
-                logger.debug(f"Could not check for exchange_credentials table: {e}")
-                return
-            
             # Get all running CEX volume bots
+            # Use connectors table (where BitMart API keys are stored)
             try:
                 bots = await conn.fetch("""
-                    SELECT b.*, ec.api_key_encrypted, ec.api_secret_encrypted, ec.passphrase_encrypted
+                    SELECT b.*, 
+                           c.api_key,
+                           c.api_secret,
+                           c.memo
                     FROM bots b
-                    JOIN clients c ON c.account_identifier = b.account
-                    JOIN exchange_credentials ec ON ec.client_id = c.id AND ec.exchange = b.exchange
+                    JOIN clients cl ON cl.account_identifier = b.account
+                    JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(b.exchange)
                     WHERE b.status = 'running'
                       AND b.bot_type = 'volume'
                       AND b.exchange IS NOT NULL
@@ -96,13 +82,9 @@ class CEXBotRunner:
                       AND (b.chain IS NULL OR b.chain != 'solana')
                 """)
             except Exception as e:
-                # If query fails (table doesn't exist), skip silently
-                if "exchange_credentials" in str(e).lower() or "does not exist" in str(e).lower():
-                    logger.debug(f"exchange_credentials table not found - migration may not have run")
-                    return
-                else:
-                    # Other error - re-raise
-                    raise
+                # If query fails, log and skip
+                logger.debug(f"Could not fetch CEX bots: {e}")
+                return
             
             active_bot_ids = set()
             
@@ -112,15 +94,50 @@ class CEXBotRunner:
                 
                 # Initialize new bots
                 if bot_id not in self.active_bots:
-                    bot = await create_bot_from_db(
-                        dict(bot_record),
-                        {
-                            "api_key_encrypted": bot_record["api_key_encrypted"],
-                            "api_secret_encrypted": bot_record["api_secret_encrypted"],
-                            "passphrase_encrypted": bot_record.get("passphrase_encrypted"),
-                        }
+                    # Use connectors table (API keys are plaintext in connectors, not encrypted)
+                    from app.cex_volume_bot import CEXVolumeBot
+                    import json
+                    
+                    # Check if API keys exist
+                    if not bot_record.get("api_key") or not bot_record.get("api_secret"):
+                        logger.warning(f"Bot {bot_id} missing API keys in connectors table")
+                        await conn.execute("""
+                            UPDATE bots SET health_status = 'error', 
+                                health_message = 'Missing API keys - add BitMart connector'
+                            WHERE id = $1
+                        """, bot_id)
+                        continue
+                    
+                    # Build symbol from base/quote or pair
+                    if bot_record.get("base_asset") and bot_record.get("quote_asset"):
+                        symbol = f"{bot_record['base_asset']}/{bot_record['quote_asset']}"
+                    else:
+                        symbol = bot_record.get("pair", "").replace("_", "/").replace("-", "/")
+                    
+                    if not symbol:
+                        logger.warning(f"Bot {bot_id} missing symbol (need base_asset/quote_asset or pair)")
+                        await conn.execute("""
+                            UPDATE bots SET health_status = 'error', 
+                                health_message = 'Missing trading pair - set base_asset and quote_asset'
+                            WHERE id = $1
+                        """, bot_id)
+                        continue
+                    
+                    config = bot_record.get("config", {})
+                    if isinstance(config, str):
+                        config = json.loads(config)
+                    
+                    bot = CEXVolumeBot(
+                        bot_id=bot_record["id"],
+                        exchange_name=bot_record.get("exchange") or bot_record.get("connector", "bitmart"),
+                        symbol=symbol,
+                        api_key=bot_record["api_key"],  # Plaintext from connectors table
+                        api_secret=bot_record["api_secret"],  # Plaintext from connectors table
+                        passphrase=None,  # BitMart doesn't use passphrase, memo goes in uid
+                        config=config,
                     )
-                    if bot:
+                    
+                    if await bot.initialize():
                         self.active_bots[bot_id] = bot
                         logger.info(f"Initialized CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
                     else:
