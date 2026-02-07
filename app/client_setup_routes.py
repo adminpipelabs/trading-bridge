@@ -726,17 +726,19 @@ def get_key_status(
     Returns status WITHOUT exposing the key itself.
     
     Authorization: Clients can only check their own key status. Admins can check any client's status.
+    For admin dashboard, allows access without strict wallet header requirement.
     """
-    from app.security import get_current_client
-    
-    # Get requesting wallet from header
+    # Get requesting wallet from header (optional for admin)
     requesting_wallet = request.headers.get("X-Wallet-Address")
     
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     
-    # Authorization check: Client can only check their own key status
+    # Authorization check: Try to verify admin access, but don't block if wallet header missing
+    # This allows admin dashboard to work without requiring wallet headers
+    is_authorized = False
+    
     if requesting_wallet:
         requesting_wallet_lower = requesting_wallet.lower()
         
@@ -756,19 +758,23 @@ def get_key_status(
             )
             same_client = requesting_client.id == client.id
             
-            if not (is_admin or same_client):
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not authorized to access this client's key status"
-                )
-        else:
-            # Requesting wallet not found - check if admin account exists
-            admin_client = db.query(Client).filter(Client.account_identifier == "admin").first()
-            if not admin_client:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Not authorized to access this client's key status"
-                )
+            if is_admin or same_client:
+                is_authorized = True
+    
+    # If no wallet header, allow access (admin dashboard will handle auth via other means)
+    # This prevents CORS errors from blocking the request
+    if not requesting_wallet:
+        # Check if there's an admin account - if so, allow (admin dashboard access)
+        admin_client = db.query(Client).filter(Client.account_identifier == "admin").first()
+        if admin_client:
+            is_authorized = True
+    
+    # If still not authorized and wallet was provided, deny access
+    if requesting_wallet and not is_authorized:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to access this client's key status"
+        )
 
     # Query trading_keys table
     try:
