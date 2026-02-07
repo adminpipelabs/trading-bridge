@@ -13,6 +13,7 @@ from app.cex_volume_bot import encrypt_credential
 from app.database import get_db, Client
 from app.security import get_current_client
 from sqlalchemy.orm import Session
+from fastapi import Depends
 
 logger = logging.getLogger("cex_credentials")
 
@@ -37,19 +38,56 @@ async def add_exchange_credentials(
     payload: AddCredentialsRequest, 
     request: Request,
     db: Session = Depends(get_db),
-    current_client: Client = Depends(get_current_client)
+    current_client: Optional[Client] = Depends(get_current_client)
 ):
     """
     Add or update exchange API credentials for a client.
     Credentials are encrypted before storage.
+    
+    For CEX bots, wallet registration is NOT required - API keys are sufficient.
+    This endpoint accepts client_id from request body if wallet header is not available.
     """
     # Validate exchange
-    supported = ["bitmart", "coinstore", "binance", "kucoin"]
+    supported = ["bitmart", "coinstore", "binance", "kucoin", "gate", "gateio", "mexc", "bybit", 
+                 "okx", "kraken", "coinbase", "dydx", "hyperliquid", "htx", "huobi", 
+                 "bitget", "bitstamp", "bitrue", "bingx", "btcmarkets", "ndax", "vertex", "ascendex"]
     if payload.exchange.lower() not in supported:
         raise HTTPException(
             status_code=400, 
             detail=f"Unsupported exchange. Supported: {supported}"
         )
+    
+    # Get client_id - try from current_client first, then from request body/header
+    client_id = None
+    if current_client:
+        client_id = current_client.id
+    else:
+        # Try to get client_id from request body or query params
+        # For CEX bots, we don't require wallet registration
+        try:
+            body = await request.json()
+            client_id = body.get("client_id")
+        except:
+            pass
+        
+        if not client_id:
+            # Try to get from query params
+            client_id = request.query_params.get("client_id")
+        
+        if not client_id:
+            # Last resort: try to get from X-Client-ID header
+            client_id = request.headers.get("X-Client-ID")
+    
+    if not client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Client ID required. Provide X-Wallet-Address header (for DEX) or client_id in request body (for CEX)."
+        )
+    
+    # Verify client exists
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail=f"Client not found: {client_id}")
     
     try:
         # Encrypt credentials
@@ -73,7 +111,7 @@ async def add_exchange_credentials(
                 passphrase_encrypted = :passphrase,
                 updated_at = :updated_at
         """), {
-            "client_id": current_client.id,
+            "client_id": client_id,
             "exchange": payload.exchange.lower(),
             "api_key": api_key_enc,
             "api_secret": api_secret_enc,
@@ -82,7 +120,7 @@ async def add_exchange_credentials(
         })
         db.commit()
         
-        logger.info(f"Client {current_client.id} added credentials for {payload.exchange}")
+        logger.info(f"Client {client_id} added credentials for {payload.exchange}")
         return {"success": True, "message": f"{payload.exchange} credentials saved"}
         
     except Exception as e:
