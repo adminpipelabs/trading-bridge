@@ -133,7 +133,8 @@ class CEXBotRunner:
                         symbol=symbol,
                         api_key=bot_record["api_key"],  # Plaintext from connectors table
                         api_secret=bot_record["api_secret"],  # Plaintext from connectors table
-                        passphrase=None,  # BitMart doesn't use passphrase, memo goes in uid
+                        passphrase=None,  # BitMart doesn't use passphrase
+                        memo=bot_record.get("memo"),  # BitMart memo/uid from connectors table
                         config=config,
                     )
                     
