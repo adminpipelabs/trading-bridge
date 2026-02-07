@@ -10,6 +10,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 import uuid
 import logging
+import json
 
 from app.database import get_db, Bot, Client, Wallet, BotWallet, BotTrade
 from app.security import get_current_client, check_bot_access
@@ -513,6 +514,120 @@ def list_bots(
         logger.info(f"  - Bot: id={bot.id}, name={bot.name}, bot_type={bot.bot_type or 'NULL'}, account={bot.account}")
     
     return {"bots": [bot.to_dict() for bot in bots]}
+
+
+@router.post("/debug/test-volume-bot-insert")
+def test_volume_bot_insert(
+    account: str = Query(..., description="Account identifier (e.g., client_new_sharp_foundation)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Test endpoint: Manually insert a volume bot via SQL to test if database/UI can handle it.
+    This helps isolate whether the issue is in backend creation logic or UI/database.
+    """
+    try:
+        from sqlalchemy import text
+        import uuid
+        
+        # Get client_id from account
+        client = db.query(Client).filter(Client.account_identifier == account).first()
+        if not client:
+            raise HTTPException(status_code=404, detail=f"Client not found for account: {account}")
+        
+        bot_id = str(uuid.uuid4())
+        instance_name = f"{account}_{bot_id[:8]}"
+        
+        # Insert volume bot via raw SQL
+        result = db.execute(text("""
+            INSERT INTO bots (
+                id, 
+                client_id,
+                account, 
+                instance_name,
+                name, 
+                bot_type, 
+                connector,
+                exchange,
+                pair,
+                base_asset,
+                quote_asset,
+                strategy,
+                status, 
+                config, 
+                stats,
+                health_status,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                :bot_id,
+                :client_id,
+                :account,
+                :instance_name,
+                :name,
+                :bot_type,
+                :connector,
+                :exchange,
+                :pair,
+                :base_asset,
+                :quote_asset,
+                :strategy,
+                :status,
+                :config::jsonb,
+                '{}'::jsonb,
+                :health_status,
+                NOW(),
+                NOW()
+            )
+            RETURNING id, name, bot_type, account, client_id, status, created_at
+        """), {
+            "bot_id": bot_id,
+            "client_id": client.id,
+            "account": account,
+            "instance_name": instance_name,
+            "name": "Sharp-VB-BitMart-Test",
+            "bot_type": "volume",
+            "connector": "bitmart",
+            "exchange": "bitmart",
+            "pair": "SHARP/USDT",
+            "base_asset": "SHARP",
+            "quote_asset": "USDT",
+            "strategy": "volume",
+            "status": "created",
+            "config": json.dumps({
+                "daily_volume_usd": 5000,
+                "min_trade_usd": 10,
+                "max_trade_usd": 25,
+                "interval_min_seconds": 900,
+                "interval_max_seconds": 2700,
+                "slippage_bps": 50
+            }),
+            "health_status": "unknown"
+        })
+        
+        db.commit()
+        
+        row = result.fetchone()
+        
+        logger.info(f"✅ Test volume bot inserted: {bot_id}")
+        
+        return {
+            "success": True,
+            "message": "Test volume bot inserted successfully. Check UI to see if it appears.",
+            "bot": {
+                "id": row[0],
+                "name": row[1],
+                "bot_type": row[2],
+                "account": row[3],
+                "client_id": row[4],
+                "status": row[5],
+                "created_at": row[6].isoformat() if row[6] else None
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error inserting test volume bot: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
 @router.post("/debug/fix-bot-type/{bot_id}")
