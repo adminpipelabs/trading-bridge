@@ -509,6 +509,55 @@ def list_bots(
     return {"bots": [bot.to_dict() for bot in bots]}
 
 
+@router.get("/debug/check-bots")
+def debug_check_bots(
+    account: Optional[str] = Query(None, description="Filter by account identifier"),
+    client_id: Optional[str] = Query(None, description="Filter by client_id"),
+    db: Session = Depends(get_db)
+):
+    """
+    Debug endpoint to check if bots exist in database.
+    Returns raw database data for troubleshooting.
+    """
+    from sqlalchemy import text
+    
+    query = "SELECT id, name, bot_type, account, client_id, exchange, status, created_at FROM bots WHERE 1=1"
+    params = {}
+    
+    if account:
+        query += " AND account LIKE :account"
+        params["account"] = f"%{account}%"
+    
+    if client_id:
+        query += " AND client_id LIKE :client_id"
+        params["client_id"] = f"%{client_id}%"
+    
+    query += " ORDER BY created_at DESC LIMIT 10"
+    
+    result = db.execute(text(query), params)
+    rows = result.fetchall()
+    
+    bots = []
+    for row in rows:
+        bots.append({
+            "id": row[0],
+            "name": row[1],
+            "bot_type": row[2],
+            "account": row[3],
+            "client_id": row[4],
+            "exchange": row[5],
+            "status": row[6],
+            "created_at": row[7].isoformat() if row[7] else None,
+        })
+    
+    return {
+        "count": len(bots),
+        "bots": bots,
+        "query_used": query,
+        "params": params
+    }
+
+
 @router.get("/{bot_id}")
 def get_bot(bot_id: str, db: Session = Depends(get_db)):
     """Get a specific bot by ID."""
