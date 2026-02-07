@@ -136,6 +136,8 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
             )
 
     # Create bot record
+    logger.info(f"🔵 Creating bot via /bots/create: id={bot_id}, name={request.name}, bot_type={request.bot_type}, account={request.account}")
+    
     bot = Bot(
         id=bot_id,
         client_id=client.id,
@@ -153,6 +155,21 @@ def create_bot(request: CreateBotRequest, db: Session = Depends(get_db)):
 
     db.add(bot)
     db.flush()  # Flush to get bot.id
+    
+    # Verify bot_type was saved correctly
+    db.refresh(bot)
+    if bot.bot_type != request.bot_type:
+        logger.error(f"⚠️ WARNING: Bot bot_type mismatch in /bots/create! Expected: {request.bot_type}, Got: {bot.bot_type}")
+        # Fix it via raw SQL if needed
+        from sqlalchemy import text
+        db.execute(text("UPDATE bots SET bot_type = :bot_type WHERE id = :bot_id"), {
+            "bot_type": request.bot_type,
+            "bot_id": bot_id
+        })
+        db.commit()
+        logger.info(f"✅ Fixed bot_type for bot {bot_id}: {request.bot_type}")
+    else:
+        logger.info(f"✅ Bot {bot_id} created successfully with bot_type={bot.bot_type}")
 
     # For Solana bots, add wallets
     # Note: Keys are stored in BOTH trading_keys (client-level) and bot_wallets (bot-level)
