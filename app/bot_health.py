@@ -115,14 +115,16 @@ class BotHealthMonitor:
             # Get all bots marked as running (by user action)
             # Include chain and wallet info for Solana routing
             bots = await conn.fetch("""
-                SELECT b.id, b.account, b.name, b.pair, b.connector, b.status,
+                SELECT b.id, b.account, b.name, b.pair, b.connector, b.exchange, b.status,
                        b.health_status, b.last_trade_time, b.last_heartbeat,
                        b.bot_type, b.chain, b.config,
                        c.api_key, c.api_secret, c.memo,
                        w.address as wallet_address
                 FROM bots b
                 LEFT JOIN clients cl ON cl.account_identifier = b.account
-                LEFT JOIN connectors c ON c.client_id = cl.id
+                LEFT JOIN connectors c ON c.client_id = cl.id 
+                    AND (LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector)) 
+                         OR (b.exchange IS NULL AND b.connector IS NULL))
                 LEFT JOIN wallets w ON w.client_id = cl.id
                 WHERE b.reported_status = 'running' OR b.status = 'running'
             """)
@@ -134,11 +136,26 @@ class BotHealthMonitor:
                     # Route to appropriate checker based on chain
                     chain = (bot.get('chain') or '').lower()
                     connector = (bot.get('connector') or '').lower()
+                    exchange = (bot.get('exchange') or '').lower()
 
-                    if chain == 'solana' or connector == 'jupiter':
+                    # CEX bots (BitMart, etc.) go to regular health check
+                    # Solana/Jupiter bots go to Solana-specific check
+                    if chain == 'solana' or connector == 'jupiter' or exchange == 'jupiter':
                         await self._check_solana_bot_health(conn, bot)
-                    else:
+                    elif exchange and exchange not in ['', 'jupiter']:
+                        # CEX bot - check health via exchange API
                         await self._check_bot_health(conn, bot)
+                    elif connector and connector not in ['', 'jupiter']:
+                        # Legacy connector-based bot
+                        await self._check_bot_health(conn, bot)
+                    else:
+                        # Unknown bot type - mark as error
+                        await self._update_health(
+                            conn, bot['id'], bot['status'],
+                            health_status='error',
+                            new_status=None,
+                            reason="Unknown bot type - missing exchange/connector"
+                        )
                 except Exception as e:
                     logger.error(
                         f"Health check failed for bot {bot['id']} "
@@ -561,7 +578,8 @@ class BotHealthMonitor:
         if not bot['api_key'] or not bot['api_secret']:
             return None
 
-        connector_name = (bot['connector'] or '').lower()
+        # Use exchange field if available (for CEX bots), otherwise fall back to connector
+        connector_name = (bot.get('exchange') or bot.get('connector') or '').lower()
 
         # Map connector names to ccxt exchange classes
         exchange_map = {
@@ -582,6 +600,16 @@ class BotHealthMonitor:
             'secret': bot['api_secret'],
             'enableRateLimit': True,
         }
+        
+        # Add proxy if configured (for QuotaGuard static IP)
+        import os
+        proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+        if proxy_url:
+            config['proxies'] = {
+                'http': proxy_url,
+                'https': proxy_url,
+            }
+        
         if bot['memo']:
             config['uid'] = bot['memo']  # BitMart uses memo/uid
 
