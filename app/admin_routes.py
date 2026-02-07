@@ -11,6 +11,8 @@ import logging
 
 from app.database import get_db, Client, Wallet
 from app.security import get_current_client
+from app.api.client_data import sync_connectors_to_exchange_manager
+from app.services.exchange import exchange_manager
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,85 @@ async def admin_clients_overview(
         raise HTTPException(status_code=500, detail=f"Error fetching client overview: {str(e)}")
 
 
+@router.get("/clients/{client_id}/balances")
+async def get_client_balances_admin(
+    client_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_client: Client = Depends(get_current_client)
+):
+    """
+    Admin: Get detailed balances for a client from all exchanges.
+    Shows individual token balances (USDT, SHARP, etc.)
+    """
+    # Check admin access
+    if current_client.role != "admin" and current_client.account_identifier != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    client = db.query(Client).filter(Client.id == client_id).first()
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    
+    account_identifier = client.account_identifier
+    
+    # Sync connectors to exchange_manager
+    synced = await sync_connectors_to_exchange_manager(account_identifier, db)
+    if not synced:
+        return {
+            "account": account_identifier,
+            "balances": [],
+            "total_usdt": 0.0,
+            "message": "No connectors configured. Add BitMart API keys via admin UI."
+        }
+    
+    # Get account from exchange_manager
+    account = exchange_manager.get_account(account_identifier)
+    if not account:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to create account in exchange_manager"
+        )
+    
+    try:
+        balances_raw = await account.get_balances()
+        
+        # Transform to array format with all tokens
+        balances_array = []
+        total_usdt = 0.0
+        
+        for exchange_name, exchange_balances in balances_raw.items():
+            if isinstance(exchange_balances, dict) and "error" not in exchange_balances:
+                for asset, balance_data in exchange_balances.items():
+                    if isinstance(balance_data, dict):
+                        total = float(balance_data.get("total", 0))
+                        free = float(balance_data.get("free", 0))
+                        used = float(balance_data.get("used", 0))
+                        
+                        balances_array.append({
+                            "exchange": exchange_name,
+                            "asset": asset,
+                            "total": total,
+                            "free": free,
+                            "used": used,
+                            "usd_value": 0  # TODO: Calculate from prices
+                        })
+                        
+                        # Sum USDT
+                        if asset == "USDT":
+                            total_usdt += total
+        
+        return {
+            "account": account_identifier,
+            "client_name": client.name,
+            "balances": balances_array,
+            "total_usdt": total_usdt,
+            "token_count": len(balances_array)
+        }
+    except Exception as e:
+        logger.error(f"Failed to get balances for client {client_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch balances: {str(e)}")
+
+
 @router.get("/notifications")
 async def get_admin_notifications(
     request: Request,
@@ -118,32 +199,3 @@ async def get_admin_notifications(
             return {"notifications": []}
         logger.error(f"Error fetching notifications: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error fetching notifications: {str(e)}")
-
-
-@router.put("/notifications/{notification_id}/read")
-async def mark_notification_read(
-    notification_id: int,
-    db: Session = Depends(get_db),
-    current_client: Client = Depends(get_current_client)
-):
-    """
-    Mark a notification as read.
-    Admin only.
-    """
-    if current_client.role != "admin" and current_client.account_identifier != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    try:
-        db.execute(text("""
-            UPDATE admin_notifications 
-            SET read = true 
-            WHERE id = :id
-        """), {"id": notification_id})
-        db.commit()
-        
-        return {"success": True}
-    
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error marking notification as read: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error updating notification: {str(e)}")
