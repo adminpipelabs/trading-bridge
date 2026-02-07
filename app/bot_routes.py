@@ -509,6 +509,53 @@ def list_bots(
     return {"bots": [bot.to_dict() for bot in bots]}
 
 
+@router.post("/debug/fix-bot-type/{bot_id}")
+def fix_bot_type(
+    bot_id: str,
+    bot_type: str = Query(..., description="Bot type to set: 'volume' or 'spread'"),
+    db: Session = Depends(get_db)
+):
+    """
+    Fix bot_type for a bot that has NULL bot_type.
+    Admin only.
+    """
+    try:
+        from sqlalchemy import text
+        
+        # Check if bot exists
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
+        
+        if bot_type not in ["volume", "spread"]:
+            raise HTTPException(status_code=400, detail="bot_type must be 'volume' or 'spread'")
+        
+        # Update bot_type
+        db.execute(text("UPDATE bots SET bot_type = :bot_type WHERE id = :bot_id"), {
+            "bot_type": bot_type,
+            "bot_id": bot_id
+        })
+        db.commit()
+        
+        # Refresh and verify
+        db.refresh(bot)
+        
+        logger.info(f"Fixed bot_type for {bot_id}: {bot_type}")
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "bot_type": bot.bot_type,
+            "message": f"Bot type updated to {bot_type}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fixing bot_type: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
 @router.get("/debug/check-bots", name="debug_check_bots")
 def debug_check_bots(
     account: Optional[str] = Query(None, description="Filter by account identifier"),
