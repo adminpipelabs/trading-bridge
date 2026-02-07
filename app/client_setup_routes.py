@@ -567,15 +567,30 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             connector=connector,
             pair=pair or "",
             strategy="volume" if request.bot_type == "volume" else "spread",
-            bot_type=request.bot_type,
+            bot_type=request.bot_type,  # Ensure bot_type is set correctly
             status="stopped",  # Will be started after credentials are verified
             config=merged_config,
             stats={}
         )
         
+        # Log bot creation details for debugging
+        logger.info(f"Creating bot: id={bot_id}, name={bot_name}, bot_type={request.bot_type}, exchange={exchange}, is_cex={is_cex}")
+        
         # Add bot to database first
         db.add(bot)
         db.flush()  # Flush to get bot_id available for UPDATE
+        
+        # Verify bot_type was saved correctly
+        db.refresh(bot)
+        if bot.bot_type != request.bot_type:
+            logger.error(f"WARNING: Bot bot_type mismatch! Expected: {request.bot_type}, Got: {bot.bot_type}")
+            # Fix it via raw SQL if needed
+            db.execute(text("UPDATE bots SET bot_type = :bot_type WHERE id = :bot_id"), {
+                "bot_type": request.bot_type,
+                "bot_id": bot_id
+            })
+            db.commit()
+            logger.info(f"Fixed bot_type for bot {bot_id}: {request.bot_type}")
         
         # Store chain/exchange/base_asset/quote_asset in database using raw SQL (columns exist but not in SQLAlchemy model)
         # This must happen AFTER bot is added/flushed so bot_id exists
