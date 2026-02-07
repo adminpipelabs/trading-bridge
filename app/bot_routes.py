@@ -548,6 +548,7 @@ def test_volume_bot_insert(
         })
         
         # Use SQLAlchemy Bot model to create bot (simpler and safer)
+        # Only use columns that exist in the Bot model
         test_bot = Bot(
             id=bot_id,
             client_id=client.id,
@@ -573,24 +574,33 @@ def test_volume_bot_insert(
         db.add(test_bot)
         db.flush()
         
-        # Update exchange/chain/base_asset/quote_asset via raw SQL (columns may not be in model)
+        # Try to update exchange/chain/base_asset/quote_asset via raw SQL if columns exist
+        # These columns may not exist in all database schemas
         try:
-            db.execute(text("""
-                UPDATE bots 
-                SET exchange = :exchange,
-                    chain = :chain,
-                    base_asset = :base_asset,
-                    quote_asset = :quote_asset
-                WHERE id = :bot_id
-            """), {
-                "exchange": "bitmart",
-                "chain": "evm",
-                "base_asset": "SHARP",
-                "quote_asset": "USDT",
-                "bot_id": bot_id
-            })
+            # Check if columns exist first
+            from sqlalchemy import inspect
+            inspector = inspect(db.bind)
+            columns = [col['name'] for col in inspector.get_columns('bots')]
+            
+            update_fields = {}
+            if 'exchange' in columns:
+                update_fields['exchange'] = 'bitmart'
+            if 'chain' in columns:
+                update_fields['chain'] = 'evm'
+            if 'base_asset' in columns:
+                update_fields['base_asset'] = 'SHARP'
+            if 'quote_asset' in columns:
+                update_fields['quote_asset'] = 'USDT'
+            
+            if update_fields:
+                set_clause = ", ".join([f"{k} = :{k}" for k in update_fields.keys()])
+                update_fields['bot_id'] = bot_id
+                db.execute(text(f"""
+                    UPDATE bots SET {set_clause} WHERE id = :bot_id
+                """), update_fields)
         except Exception as update_error:
-            logger.warning(f"Could not update bot fields: {update_error}")
+            logger.warning(f"Could not update bot fields (columns may not exist): {update_error}")
+            # Don't fail - these are optional fields
         
         db.commit()
         db.refresh(test_bot)
