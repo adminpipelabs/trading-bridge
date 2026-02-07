@@ -794,10 +794,10 @@ def get_bot(bot_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{bot_id}/start")
 async def start_bot(
-    bot_id: str, 
+    bot_id: str,
+    request: Request,
     db: Session = Depends(get_db),
-    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
-    request: Request
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address")
 ):
     """Start a stopped bot."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -885,10 +885,10 @@ async def start_bot(
 
 @router.post("/{bot_id}/stop")
 async def stop_bot(
-    bot_id: str, 
+    bot_id: str,
+    request: Request,
     db: Session = Depends(get_db),
-    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
-    request: Request
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address")
 ):
     """Stop a running bot."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -953,11 +953,11 @@ class UpdateBotRequest(BaseModel):
 
 @router.put("/{bot_id}")
 def update_bot(
-    bot_id: str, 
-    request_data: UpdateBotRequest, 
+    bot_id: str,
+    request_data: UpdateBotRequest,
+    request: Request,
     db: Session = Depends(get_db),
-    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
-    request: Request
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address")
 ):
     """Update bot configuration."""
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
