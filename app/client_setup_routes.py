@@ -558,10 +558,14 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         # Create bot
         # Note: exchange, chain, base_asset, quote_asset are not in SQLAlchemy model yet
         # They will be set via raw SQL UPDATE after bot creation
+        logger.info(f"🟢 CLIENT SETUP: Creating bot via /clients/{client_id}/setup-bot")
+        logger.info(f"   Client: {client.name} (id={client_id}, account={client.account_identifier})")
+        logger.info(f"   Bot: name={bot_name}, bot_type={request.bot_type}, exchange={exchange}, is_cex={is_cex}")
+        
         bot = Bot(
             id=bot_id,
             client_id=client_id,
-            account=client.account_identifier,
+            account=client.account_identifier,  # CRITICAL: Use client's account_identifier
             instance_name=f"{client.account_identifier}_{bot_id[:8]}",
             name=bot_name,
             connector=connector,
@@ -573,24 +577,34 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             stats={}
         )
         
-        # Log bot creation details for debugging
-        logger.info(f"Creating bot: id={bot_id}, name={bot_name}, bot_type={request.bot_type}, exchange={exchange}, is_cex={is_cex}")
+        logger.info(f"   Bot object created: account={bot.account}, bot_type={bot.bot_type}")
         
         # Add bot to database first
         db.add(bot)
         db.flush()  # Flush to get bot_id available for UPDATE
         
-        # Verify bot_type was saved correctly
+        # Verify bot_type and account were saved correctly
         db.refresh(bot)
+        logger.info(f"   After save: bot.account={bot.account}, bot.bot_type={bot.bot_type}, bot.client_id={bot.client_id}")
+        
         if bot.bot_type != request.bot_type:
-            logger.error(f"WARNING: Bot bot_type mismatch! Expected: {request.bot_type}, Got: {bot.bot_type}")
+            logger.error(f"⚠️ WARNING: Bot bot_type mismatch! Expected: {request.bot_type}, Got: {bot.bot_type}")
             # Fix it via raw SQL if needed
             db.execute(text("UPDATE bots SET bot_type = :bot_type WHERE id = :bot_id"), {
                 "bot_type": request.bot_type,
                 "bot_id": bot_id
             })
             db.commit()
-            logger.info(f"Fixed bot_type for bot {bot_id}: {request.bot_type}")
+            logger.info(f"✅ Fixed bot_type for bot {bot_id}: {request.bot_type}")
+        
+        if bot.account != client.account_identifier:
+            logger.error(f"⚠️ CRITICAL: Bot account mismatch! Expected: {client.account_identifier}, Got: {bot.account}")
+            db.execute(text("UPDATE bots SET account = :account WHERE id = :bot_id"), {
+                "account": client.account_identifier,
+                "bot_id": bot_id
+            })
+            db.commit()
+            logger.info(f"✅ Fixed account for bot {bot_id}: {client.account_identifier}")
         
         # Store chain/exchange/base_asset/quote_asset in database using raw SQL (columns exist but not in SQLAlchemy model)
         # This must happen AFTER bot is added/flushed so bot_id exists
@@ -674,7 +688,8 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         asyncio.create_task(start_bot_background())
         logger.info(f"Bot startup task scheduled for {bot_id} - returning response immediately")
 
-        logger.info(f"Bot setup completed successfully for client {client_id}, bot_id: {bot_id}")
+        logger.info(f"✅ Bot setup completed successfully for client {client_id}, bot_id: {bot_id}")
+        logger.info(f"   Final bot state: account={bot.account}, bot_type={bot.bot_type}, name={bot.name}")
         return SetupBotResponse(
             success=True,
             bot_id=bot_id,
