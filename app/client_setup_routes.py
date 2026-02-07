@@ -630,7 +630,8 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         except Exception as update_error:
             logger.warning(f"Could not update bot fields (may not exist): {update_error}")
             # Don't fail - fields can be derived if needed
-            db.rollback()
+            # CRITICAL: Don't rollback here - bot creation already committed!
+            # db.rollback()  # ← This was rolling back bot creation!
 
         # Add wallet to bot_wallets table (only for DEX bots)
         if wallet_address and not is_cex:
