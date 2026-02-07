@@ -358,12 +358,37 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             raise HTTPException(status_code=400, detail=f"Invalid bot_type. Must be one of: {list(BOT_TYPE_CONFIGS.keys())}")
 
         # Determine if this is a CEX bot
-        is_cex = request.exchange and request.exchange.lower() in ['bitmart', 'coinstore', 'kucoin', 'binance']
+        # Expanded list of CEX exchanges
+        cex_exchanges = ['bitmart', 'coinstore', 'kucoin', 'binance', 'gate', 'gateio', 'mexc', 'bybit', 
+                        'okx', 'kraken', 'coinbase', 'dydx', 'hyperliquid', 'htx', 'huobi', 
+                        'bitget', 'bitstamp', 'bitrue', 'bingx', 'btcmarkets', 'ndax', 'vertex', 'ascendex']
+        is_cex = request.exchange and request.exchange.lower() in cex_exchanges
         
         wallet_address = None
         chain = None
         
-        # For CEX bots, skip private key handling (credentials should already be saved)
+        # For CEX bots, verify exchange credentials exist (skip private key handling)
+        if is_cex:
+            # Check if exchange credentials exist for this client
+            from sqlalchemy import text
+            exchange_lower = request.exchange.lower()
+            creds_check = db.execute(text("""
+                SELECT id FROM exchange_credentials 
+                WHERE client_id = :client_id AND exchange = :exchange
+            """), {
+                "client_id": client_id,
+                "exchange": exchange_lower
+            }).first()
+            
+            if not creds_check:
+                logger.error(f"Client {client_id} attempted to create {exchange_lower} bot but no credentials found")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{request.exchange} API keys not connected. Please add your API credentials first."
+                )
+            logger.info(f"Verified exchange credentials exist for {exchange_lower} bot")
+        
+        # For DEX bots, require private key
         if not is_cex:
             # DEX bot - requires private key
             bot_config = BOT_TYPE_CONFIGS[request.bot_type]
