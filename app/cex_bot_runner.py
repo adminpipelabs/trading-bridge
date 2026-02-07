@@ -64,18 +64,45 @@ class CEXBotRunner:
         4. Clean up stopped bots
         """
         async with self.db_pool.acquire() as conn:
+            # Check if exchange_credentials table exists
+            try:
+                table_exists = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_name = 'exchange_credentials'
+                    )
+                """)
+                
+                if not table_exists:
+                    # Table doesn't exist yet - migration not run
+                    # Silently skip this cycle (don't spam errors)
+                    return
+            except Exception as e:
+                # If check fails, assume table doesn't exist
+                logger.debug(f"Could not check for exchange_credentials table: {e}")
+                return
+            
             # Get all running CEX volume bots
-            bots = await conn.fetch("""
-                SELECT b.*, ec.api_key_encrypted, ec.api_secret_encrypted, ec.passphrase_encrypted
-                FROM bots b
-                JOIN clients c ON c.account_identifier = b.account
-                JOIN exchange_credentials ec ON ec.client_id = c.id AND ec.exchange = b.exchange
-                WHERE b.status = 'running'
-                  AND b.bot_type = 'volume'
-                  AND b.exchange IS NOT NULL
-                  AND b.exchange != 'jupiter'
-                  AND (b.chain IS NULL OR b.chain != 'solana')
-            """)
+            try:
+                bots = await conn.fetch("""
+                    SELECT b.*, ec.api_key_encrypted, ec.api_secret_encrypted, ec.passphrase_encrypted
+                    FROM bots b
+                    JOIN clients c ON c.account_identifier = b.account
+                    JOIN exchange_credentials ec ON ec.client_id = c.id AND ec.exchange = b.exchange
+                    WHERE b.status = 'running'
+                      AND b.bot_type = 'volume'
+                      AND b.exchange IS NOT NULL
+                      AND b.exchange != 'jupiter'
+                      AND (b.chain IS NULL OR b.chain != 'solana')
+                """)
+            except Exception as e:
+                # If query fails (table doesn't exist), skip silently
+                if "exchange_credentials" in str(e).lower() or "does not exist" in str(e).lower():
+                    logger.debug(f"exchange_credentials table not found - migration may not have run")
+                    return
+                else:
+                    # Other error - re-raise
+                    raise
             
             active_bot_ids = set()
             
