@@ -105,7 +105,32 @@ async def add_exchange_credentials(
         
         # Use raw SQL since exchange_credentials table may not be in SQLAlchemy model yet
         from sqlalchemy import text
+        from sqlalchemy.exc import ProgrammingError
         
+        # Try to create table if it doesn't exist (auto-migration)
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS exchange_credentials (
+                    id SERIAL PRIMARY KEY,
+                    client_id VARCHAR(255) NOT NULL,
+                    exchange VARCHAR(50) NOT NULL,
+                    api_key_encrypted TEXT NOT NULL,
+                    api_secret_encrypted TEXT NOT NULL,
+                    passphrase_encrypted TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(client_id, exchange)
+                )
+            """))
+            db.execute(text("CREATE INDEX IF NOT EXISTS idx_exchange_creds_client ON exchange_credentials(client_id)"))
+            db.commit()
+            logger.info("Created exchange_credentials table (auto-migration)")
+        except Exception as create_error:
+            # Table might already exist, or we don't have CREATE permissions - that's OK
+            db.rollback()
+            logger.debug(f"Could not create exchange_credentials table (may already exist): {create_error}")
+        
+        # Now insert/update credentials
         db.execute(text("""
             INSERT INTO exchange_credentials 
                 (client_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, updated_at)
@@ -132,6 +157,17 @@ async def add_exchange_credentials(
     except HTTPException:
         # Re-raise HTTP exceptions (like 400, 404) as-is
         raise
+    except ProgrammingError as e:
+        # Database error - likely table doesn't exist
+        db.rollback()
+        error_msg = str(e)
+        if "does not exist" in error_msg or "relation" in error_msg.lower():
+            logger.error(f"Database table missing: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database table 'exchange_credentials' does not exist. Please run the migration: migrations/add_cex_volume_bot.sql"
+            )
+        raise HTTPException(status_code=500, detail=f"Database error: {error_msg}")
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to save credentials for client {client_id}, exchange {payload.exchange}: {e}", exc_info=True)
