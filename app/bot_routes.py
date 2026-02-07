@@ -547,65 +547,55 @@ def test_volume_bot_insert(
             "slippage_bps": 50
         })
         
-        result = db.execute(text("""
-            INSERT INTO bots (
-                id, 
-                client_id,
-                account, 
-                instance_name,
-                name, 
-                bot_type, 
-                connector,
-                exchange,
-                pair,
-                base_asset,
-                quote_asset,
-                strategy,
-                status, 
-                config, 
-                stats,
-                health_status,
-                created_at,
-                updated_at
-            )
-            VALUES (
-                :bot_id,
-                :client_id,
-                :account,
-                :instance_name,
-                :name,
-                :bot_type,
-                :connector,
-                :exchange,
-                :pair,
-                :base_asset,
-                :quote_asset,
-                :strategy,
-                :status,
-                CAST(:config AS jsonb),
-                CAST('{}' AS jsonb),
-                :health_status,
-                NOW(),
-                NOW()
-            )
-            RETURNING id, name, bot_type, account, client_id, status, created_at
-        """), {
-            "bot_id": bot_id,
-            "client_id": client.id,
-            "account": account,
-            "instance_name": instance_name,
-            "name": "Sharp-VB-BitMart-Test",
-            "bot_type": "volume",
-            "connector": "bitmart",
-            "exchange": "bitmart",
-            "pair": "SHARP/USDT",
-            "base_asset": "SHARP",
-            "quote_asset": "USDT",
-            "strategy": "volume",
-            "status": "created",
-            "config": config_json,
-            "health_status": "unknown"
-        })
+        # Use SQLAlchemy Bot model to create bot (simpler and safer)
+        test_bot = Bot(
+            id=bot_id,
+            client_id=client.id,
+            account=account,
+            instance_name=instance_name,
+            name="Sharp-VB-BitMart-Test",
+            bot_type="volume",
+            connector="bitmart",
+            pair="SHARP/USDT",
+            strategy="volume",
+            status="created",
+            config={
+                "daily_volume_usd": 5000,
+                "min_trade_usd": 10,
+                "max_trade_usd": 25,
+                "interval_min_seconds": 900,
+                "interval_max_seconds": 2700,
+                "slippage_bps": 50
+            },
+            stats={}
+        )
+        
+        db.add(test_bot)
+        db.flush()
+        
+        # Update exchange/chain/base_asset/quote_asset via raw SQL (columns may not be in model)
+        try:
+            db.execute(text("""
+                UPDATE bots 
+                SET exchange = :exchange,
+                    chain = :chain,
+                    base_asset = :base_asset,
+                    quote_asset = :quote_asset
+                WHERE id = :bot_id
+            """), {
+                "exchange": "bitmart",
+                "chain": "evm",
+                "base_asset": "SHARP",
+                "quote_asset": "USDT",
+                "bot_id": bot_id
+            })
+        except Exception as update_error:
+            logger.warning(f"Could not update bot fields: {update_error}")
+        
+        db.commit()
+        db.refresh(test_bot)
+        
+        row = (test_bot.id, test_bot.name, test_bot.bot_type, test_bot.account, test_bot.client_id, test_bot.status, test_bot.created_at)
         
         db.commit()
         
