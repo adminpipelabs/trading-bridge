@@ -519,43 +519,69 @@ def debug_check_bots(
     Debug endpoint to check if bots exist in database.
     Returns raw database data for troubleshooting.
     """
-    from sqlalchemy import text
-    
-    query = "SELECT id, name, bot_type, account, client_id, exchange, status, created_at FROM bots WHERE 1=1"
-    params = {}
-    
-    if account:
-        query += " AND account LIKE :account"
-        params["account"] = f"%{account}%"
-    
-    if client_id:
-        query += " AND client_id LIKE :client_id"
-        params["client_id"] = f"%{client_id}%"
-    
-    query += " ORDER BY created_at DESC LIMIT 10"
-    
-    result = db.execute(text(query), params)
-    rows = result.fetchall()
-    
-    bots = []
-    for row in rows:
-        bots.append({
-            "id": row[0],
-            "name": row[1],
-            "bot_type": row[2],
-            "account": row[3],
-            "client_id": row[4],
-            "exchange": row[5],
-            "status": row[6],
-            "created_at": row[7].isoformat() if row[7] else None,
-        })
-    
-    return {
-        "count": len(bots),
-        "bots": bots,
-        "query_used": query,
-        "params": params
-    }
+    try:
+        from sqlalchemy import text
+        
+        # Build query
+        query = "SELECT id, name, bot_type, account, client_id, exchange, status, created_at FROM bots WHERE 1=1"
+        params = {}
+        
+        if account:
+            query += " AND account LIKE :account"
+            params["account"] = f"%{account}%"
+        
+        if client_id:
+            query += " AND client_id LIKE :client_id"
+            params["client_id"] = f"%{client_id}%"
+        
+        # If no filters, check for 'sharp' in name/account/client_id
+        if not account and not client_id:
+            query += " AND (account LIKE '%sharp%' OR client_id LIKE '%sharp%' OR name LIKE '%sharp%')"
+        
+        query += " ORDER BY created_at DESC LIMIT 10"
+        
+        result = db.execute(text(query), params)
+        rows = result.fetchall()
+        
+        bots = []
+        for row in rows:
+            bots.append({
+                "id": row[0],
+                "name": row[1],
+                "bot_type": row[2],
+                "account": row[3],
+                "client_id": row[4],
+                "exchange": row[5],
+                "status": row[6],
+                "created_at": row[7].isoformat() if row[7] else None,
+            })
+        
+        # Also get bot type counts
+        count_query = "SELECT bot_type, COUNT(*) as count FROM bots"
+        count_params = {}
+        if account:
+            count_query += " WHERE account LIKE :account"
+            count_params["account"] = f"%{account}%"
+        elif client_id:
+            count_query += " WHERE client_id LIKE :client_id"
+            count_params["client_id"] = f"%{client_id}%"
+        else:
+            count_query += " WHERE (account LIKE '%sharp%' OR client_id LIKE '%sharp%')"
+        count_query += " GROUP BY bot_type"
+        
+        count_result = db.execute(text(count_query), count_params)
+        type_counts = {row[0] or 'NULL': row[1] for row in count_result.fetchall()}
+        
+        return {
+            "count": len(bots),
+            "bots": bots,
+            "bot_type_counts": type_counts,
+            "query_used": query,
+            "params": params
+        }
+    except Exception as e:
+        logger.error(f"Debug check-bots error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error querying database: {str(e)}")
 
 
 @router.get("/{bot_id}")
