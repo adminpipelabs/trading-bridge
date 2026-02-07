@@ -131,13 +131,16 @@ async def get_client_balances_admin(
                         free = float(balance_data.get("free", 0))
                         used = float(balance_data.get("used", 0))
                         
+                        # Calculate USD value: USDT/USDC = 1:1, others = 0
+                        usd_value = total if asset in ["USDT", "USDC"] else 0
+                        
                         balances_array.append({
                             "exchange": exchange_name,
                             "asset": asset,
                             "total": total,
                             "free": free,
                             "used": used,
-                            "usd_value": 0  # TODO: Calculate from prices
+                            "usd_value": usd_value
                         })
                         
                         # Sum USDT
