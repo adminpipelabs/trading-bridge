@@ -688,8 +688,20 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         asyncio.create_task(start_bot_background())
         logger.info(f"Bot startup task scheduled for {bot_id} - returning response immediately")
 
+        # Final verification - ensure bot was actually saved
+        db.refresh(bot)
+        final_bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        if not final_bot:
+            logger.error(f"❌ CRITICAL: Bot {bot_id} was not found in database after creation!")
+            raise HTTPException(
+                status_code=500,
+                detail="Bot creation failed - bot was not saved to database"
+            )
+        
         logger.info(f"✅ Bot setup completed successfully for client {client_id}, bot_id: {bot_id}")
-        logger.info(f"   Final bot state: account={bot.account}, bot_type={bot.bot_type}, name={bot.name}")
+        logger.info(f"   Final bot state: account={final_bot.account}, bot_type={final_bot.bot_type}, name={final_bot.name}, status={final_bot.status}")
+        logger.info(f"   Verification: Bot exists in DB: {final_bot.id == bot_id}")
+        
         return SetupBotResponse(
             success=True,
             bot_id=bot_id,
