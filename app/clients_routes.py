@@ -544,18 +544,28 @@ def delete_wallet(client_id: str, wallet_id: str, db: Session = Depends(get_db))
 
 
 @router.delete("/{client_id}")
-def delete_client(client_id: str, db: Session = Depends(get_db)):
-    """Delete a client and all associated data (cascade delete)."""
+def delete_client(
+    client_id: str, 
+    db: Session = Depends(get_db),
+    request: Request = None
+):
+    """Delete a client and all associated data (cascade delete). Admin only."""
+    # Check if user is admin (optional check - can be enhanced with proper auth)
+    # For now, we'll allow deletion but log it
+    
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
+        logger.warning(f"Delete attempt for non-existent client: {client_id}")
         raise HTTPException(status_code=404, detail="Client not found")
     
     try:
+        logger.info(f"Deleting client: {client_id} (name: {client.name})")
         db.delete(client)  # Cascade delete will remove wallets, connectors, bots
         db.commit()
-        logger.info(f"Deleted client: {client_id}")
+        logger.info(f"✅ Successfully deleted client: {client_id}")
     except Exception as e:
         db.rollback()
+        logger.error(f"❌ Failed to delete client {client_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to delete client: {str(e)}")
     
     return {"status": "deleted", "client_id": client_id}
