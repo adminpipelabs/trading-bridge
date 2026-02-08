@@ -143,7 +143,18 @@ class CEXVolumeBot:
             
             # Create exchange instance
             logger.info(f"Creating {ccxt_id} exchange instance...")
+            logger.debug(f"Exchange params keys: {list(exchange_params.keys())}")
+            if "options" in exchange_params:
+                logger.debug(f"Exchange options: {exchange_params['options']}")
             self.exchange = exchange_class(exchange_params)
+            
+            # Verify options were set correctly
+            if self.exchange_name == "bitmart" and hasattr(self.exchange, 'options'):
+                logger.info(f"✅ BitMart exchange created with options: {self.exchange.options}")
+                if self.exchange.options.get('defaultType'):
+                    logger.info(f"✅ defaultType set to: {self.exchange.options['defaultType']}")
+                else:
+                    logger.warning(f"⚠️  defaultType NOT set in exchange.options!")
             
             if self.exchange is None:
                 logger.error(f"Failed to create exchange instance - exchange_class returned None")
