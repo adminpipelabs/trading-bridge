@@ -186,9 +186,10 @@ class CEXBotRunner:
                     if not exchange_name or not isinstance(exchange_name, str):
                         exchange_name = "bitmart"
                     
-                    # Proxy URL is read from environment (QUOTAGUARD_PROXY_URL) for IP whitelisting
+                    # Proxy URL is read from environment (QUOTAGUARDSTATIC_URL) for IP whitelisting
+                    # Uses dedicated IP 3.222.129.4 via QuotaGuard
                     import os
-                    proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+                    proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
                     
                     bot = CEXVolumeBot(
                         bot_id=bot_record["id"],

@@ -60,7 +60,8 @@ class CEXVolumeBot:
         self.api_secret = api_secret
         self.passphrase = passphrase
         self.memo = memo  # BitMart memo/uid
-        self.proxy_url = proxy_url or os.getenv("QUOTAGUARD_PROXY_URL")
+        # Check for QuotaGuard static IP proxy (dedicated IP: 3.222.129.4)
+        self.proxy_url = proxy_url or os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
         
         # Default config
         self.config = {
@@ -147,13 +148,14 @@ class CEXVolumeBot:
                 else:
                     logger.debug(f"BitMart memo/UID not provided - using API keys only")
             
-            # Add proxy if configured (for QuotaGuard static IP)
+            # Add proxy if configured (for QuotaGuard static IP - dedicated IP: 3.222.129.4)
             if self.proxy_url:
                 exchange_params["proxies"] = {
                     "http": self.proxy_url,
                     "https": self.proxy_url,
                 }
-                logger.info(f"Using proxy for {self.exchange_name}: {self.proxy_url.split('@')[0]}@...")
+                logger.info(f"✅ Using QuotaGuard proxy for {self.exchange_name} (dedicated IP: 3.222.129.4)")
+                logger.debug(f"Proxy URL: {self.proxy_url.split('@')[0]}@...")
             
             # Create exchange instance
             logger.info(f"Creating {ccxt_id} exchange instance...")
