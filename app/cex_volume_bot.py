@@ -76,22 +76,53 @@ class CEXVolumeBot:
     async def initialize(self) -> bool:
         """Initialize exchange connection."""
         try:
-            exchange_config = get_exchange_config(self.exchange_name)
-            exchange_class = getattr(ccxt, exchange_config["ccxt_id"])
+            # Validate exchange_name is set and normalized
+            if not self.exchange_name or not isinstance(self.exchange_name, str):
+                logger.error(f"Invalid exchange_name: {self.exchange_name} (type: {type(self.exchange_name)})")
+                return False
             
+            # Ensure exchange_name is lowercase and stripped
+            self.exchange_name = self.exchange_name.lower().strip()
+            logger.info(f"Initializing exchange: {self.exchange_name} for bot {self.bot_id}")
+            
+            # Get exchange config
+            exchange_config = get_exchange_config(self.exchange_name)
+            if not exchange_config:
+                logger.error(f"No config found for exchange: {self.exchange_name}")
+                return False
+            
+            ccxt_id = exchange_config.get("ccxt_id")
+            if not ccxt_id:
+                logger.error(f"No ccxt_id in config for exchange: {self.exchange_name}")
+                return False
+            
+            logger.info(f"Using ccxt exchange ID: {ccxt_id}")
+            
+            # Get exchange class from ccxt
+            exchange_class = getattr(ccxt, ccxt_id, None)
+            if exchange_class is None:
+                logger.error(f"Exchange class not found in ccxt: {ccxt_id}. Available: {[x for x in dir(ccxt) if not x.startswith('_')]}")
+                return False
+            
+            # Build exchange parameters
             exchange_params = {
                 "apiKey": self.api_key,
                 "secret": self.api_secret,
                 "enableRateLimit": True,
-                "rateLimit": exchange_config["rate_limit_ms"],
+                "rateLimit": exchange_config.get("rate_limit_ms", 100),
             }
             
+            # Add passphrase if needed
             if self.passphrase and exchange_config.get("requires_passphrase"):
                 exchange_params["password"] = self.passphrase
             
-            # BitMart uses memo/uid (not passphrase)
-            if self.memo and self.exchange_name == "bitmart":
-                exchange_params["uid"] = self.memo
+            # BitMart REQUIRES memo/uid - log warning if missing
+            if self.exchange_name == "bitmart":
+                if self.memo:
+                    exchange_params["uid"] = self.memo
+                    logger.info(f"BitMart UID set: {self.memo[:4]}...")
+                else:
+                    logger.warning(f"⚠️  BitMart requires memo/UID but it's missing! This may cause auth failures.")
             
             # Add proxy if configured (for QuotaGuard static IP)
             if self.proxy_url:
@@ -101,20 +132,35 @@ class CEXVolumeBot:
                 }
                 logger.info(f"Using proxy for {self.exchange_name}: {self.proxy_url.split('@')[0]}@...")
             
+            # Create exchange instance
+            logger.info(f"Creating {ccxt_id} exchange instance...")
             self.exchange = exchange_class(exchange_params)
             
-            # Test connection
-            await self.exchange.load_markets()
-            
-            if self.symbol not in self.exchange.markets:
-                logger.error(f"Symbol {self.symbol} not found on {self.exchange_name}")
+            if self.exchange is None:
+                logger.error(f"Failed to create exchange instance - exchange_class returned None")
                 return False
             
-            logger.info(f"CEX Volume Bot initialized: {self.exchange_name} {self.symbol}")
+            # Test connection by loading markets
+            logger.info(f"Loading markets for {self.exchange_name}...")
+            await self.exchange.load_markets()
+            
+            if not hasattr(self.exchange, 'markets') or not self.exchange.markets:
+                logger.error(f"Failed to load markets for {self.exchange_name}")
+                return False
+            
+            # Verify symbol exists
+            if self.symbol not in self.exchange.markets:
+                logger.error(f"Symbol {self.symbol} not found on {self.exchange_name}. Available symbols: {list(self.exchange.markets.keys())[:10]}...")
+                return False
+            
+            logger.info(f"✅ CEX Volume Bot initialized successfully: {self.exchange_name} {self.symbol}")
             return True
             
+        except AttributeError as e:
+            logger.error(f"AttributeError initializing exchange {self.exchange_name}: {e}. Check if ccxt.{ccxt_id} exists.", exc_info=True)
+            return False
         except Exception as e:
-            logger.error(f"Failed to initialize exchange: {e}", exc_info=True)
+            logger.error(f"Failed to initialize exchange {self.exchange_name}: {e}", exc_info=True)
             return False
     
     async def close(self):
@@ -131,16 +177,35 @@ class CEXVolumeBot:
         Returns: (base_balance, quote_balance)
         """
         try:
+            # Validate exchange is initialized
+            if self.exchange is None:
+                logger.error(f"Exchange not initialized for bot {self.bot_id}. Call initialize() first.")
+                return 0, 0
+            
+            # Validate exchange_name is set
+            if not self.exchange_name or not isinstance(self.exchange_name, str):
+                logger.error(f"Invalid exchange_name when fetching balance: {self.exchange_name} (type: {type(self.exchange_name)})")
+                return 0, 0
+            
+            logger.debug(f"Fetching balance from {self.exchange_name} for {self.symbol}")
             balance = await self.exchange.fetch_balance()
             
-            base, quote = self.symbol.split("/")
-            base_free = float(balance.get(base, {}).get("free", 0))
-            quote_free = float(balance.get(quote, {}).get("free", 0))
+            if not balance:
+                logger.warning(f"Empty balance response from {self.exchange_name}")
+                return 0, 0
             
+            base, quote = self.symbol.split("/")
+            base_free = float(balance.get(base, {}).get("free", 0) or 0)
+            quote_free = float(balance.get(quote, {}).get("free", 0) or 0)
+            
+            logger.debug(f"Balance for {self.symbol}: {base}={base_free}, {quote}={quote_free}")
             return base_free, quote_free
             
+        except AttributeError as e:
+            logger.error(f"AttributeError fetching balance from {self.exchange_name}: {e}. Exchange may not be initialized properly.", exc_info=True)
+            return 0, 0
         except Exception as e:
-            logger.error(f"Failed to fetch balance: {e}")
+            logger.error(f"Failed to fetch balance from {self.exchange_name}: {e}", exc_info=True)
             return 0, 0
     
     async def get_price(self) -> Optional[float]:
