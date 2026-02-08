@@ -448,28 +448,79 @@ class CEXVolumeBot:
         return base_amount
     
     async def execute_trade(self, side: str, amount: float) -> Optional[dict]:
-        """Execute a market order."""
+        """Execute a trade order."""
         try:
             logger.info(f"Executing {side} {amount} {self.symbol}")
             
-            # BitMart requires type parameter for orders too
+            # BitMart requires price for market buy orders, so use limit orders instead
+            # Get current price for limit order
+            current_price = await self.get_price()
+            if not current_price:
+                logger.error(f"Could not get current price for {self.symbol}")
+                return None
+            
+            # BitMart requires type parameter for orders
             order_params = {}
             if self.exchange_name == "bitmart":
                 order_params['type'] = 'spot'
             
-            order = await self.exchange.create_market_order(
+            # Use limit orders for BitMart (market orders require price anyway)
+            # For buy: use current price (will fill immediately if market price)
+            # For sell: use current price (will fill immediately if market price)
+            price = current_price
+            
+            # Slight price adjustment to ensure fill:
+            # Buy: slightly above market (0.1% higher)
+            # Sell: slightly below market (0.1% lower)
+            if side == "buy":
+                price = current_price * 1.001  # 0.1% above market
+            else:
+                price = current_price * 0.999  # 0.1% below market
+            
+            logger.info(f"Placing limit {side} order: {amount} {self.symbol} @ {price}")
+            
+            order = await self.exchange.create_limit_order(
                 symbol=self.symbol,
                 side=side,
                 amount=amount,
+                price=price,
                 params=order_params,
             )
             
-            # Extract fill info
-            filled_amount = float(order.get("filled", amount))
-            avg_price = float(order.get("average", 0) or order.get("price", 0))
-            cost = float(order.get("cost", filled_amount * avg_price))
+            # For limit orders, check if filled immediately or wait for fill
+            order_id = order.get("id")
+            logger.info(f"Limit order placed: {order_id}, status: {order.get('status', 'unknown')}")
             
-            logger.info(f"Order filled: {side} {filled_amount} @ {avg_price} = ${cost:.2f}")
+            # Check if order was filled immediately
+            if order.get("status") == "closed" or order.get("filled", 0) > 0:
+                filled_amount = float(order.get("filled", amount))
+                avg_price = float(order.get("average", 0) or order.get("price", price))
+                cost = float(order.get("cost", filled_amount * avg_price))
+                logger.info(f"Order filled immediately: {side} {filled_amount} @ {avg_price} = ${cost:.2f}")
+            else:
+                # Order is open, wait a moment and check status
+                await asyncio.sleep(2)
+                try:
+                    order_status = await self.exchange.fetch_order(order_id, self.symbol)
+                    filled_amount = float(order_status.get("filled", 0))
+                    if filled_amount > 0:
+                        avg_price = float(order_status.get("average", 0) or order_status.get("price", price))
+                        cost = float(order_status.get("cost", filled_amount * avg_price))
+                        logger.info(f"Order filled: {side} {filled_amount} @ {avg_price} = ${cost:.2f}")
+                    else:
+                        # Cancel unfilled order
+                        await self.exchange.cancel_order(order_id, self.symbol)
+                        logger.warning(f"Order {order_id} not filled, cancelled")
+                        return None
+                except Exception as check_err:
+                    logger.warning(f"Could not check order status: {check_err}, assuming filled")
+                    filled_amount = amount
+                    avg_price = price
+                    cost = filled_amount * avg_price
+            
+            filled_amount = float(order.get("filled", filled_amount))
+            avg_price = float(order.get("average", 0) or order.get("price", avg_price))
+            cost = float(order.get("cost", filled_amount * avg_price))
             
             return {
                 "order_id": order.get("id"),

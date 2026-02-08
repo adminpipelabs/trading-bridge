@@ -95,6 +95,18 @@ async def lifespan(app: FastAPI):
     logger.info("STARTING DATABASE INITIALIZATION")
     logger.info("=" * 80)
     
+    # Log Railway outbound IP for BitMart whitelisting
+    try:
+        import requests
+        ip = requests.get('https://api.ipify.org', timeout=5).text
+        logger.info("=" * 80)
+        logger.info(f"🌐 RAILWAY OUTBOUND IP: {ip}")
+        logger.info("=" * 80)
+        logger.info("⚠️  IMPORTANT: Add this IP to BitMart API key whitelist!")
+        logger.info("=" * 80)
+    except Exception as e:
+        logger.warning(f"Could not fetch Railway IP: {e}")
+    
     # CRITICAL: Database must be initialized before app starts serving requests
     # If init fails, we should fail fast rather than serve broken endpoints
     try:
