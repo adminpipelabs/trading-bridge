@@ -21,6 +21,13 @@ from app.cex_exchanges import get_exchange_config, EXCHANGE_CONFIGS
 
 logger = logging.getLogger("cex_volume_bot")
 
+# Log ccxt version for debugging
+try:
+    import ccxt as ccxt_sync
+    logger.info(f"ccxt version: {ccxt_sync.__version__}")
+except Exception as e:
+    logger.warning(f"Could not get ccxt version: {e}")
+
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
 
@@ -75,6 +82,13 @@ class CEXVolumeBot:
         
     async def initialize(self) -> bool:
         """Initialize exchange connection."""
+        # Log ccxt version
+        try:
+            import ccxt as ccxt_sync
+            logger.info(f"🔍 ccxt version: {ccxt_sync.__version__}")
+        except Exception as e:
+            logger.warning(f"Could not get ccxt version: {e}")
+        
         try:
             # Validate exchange_name is set and normalized
             if not self.exchange_name or not isinstance(self.exchange_name, str):
@@ -245,16 +259,40 @@ class CEXVolumeBot:
                 logger.error(f"This means BitMart API returned an error, but error message was None")
                 logger.error(f"Likely causes: Authentication failure, IP not whitelisted, or API key invalid")
                 logger.error(f"Exchange config: apiKey present={bool(self.api_key)}, uid={self.memo}, options={getattr(self.exchange, 'options', {})}")
-                # Try to get more info from the exchange object
-                if hasattr(self.exchange, 'last_response_headers'):
-                    logger.error(f"Last response headers: {getattr(self.exchange, 'last_response_headers', None)}")
+                
+                # Log actual BitMart response body
+                if hasattr(self.exchange, 'last_http_response'):
+                    logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
+                if hasattr(self.exchange, 'last_json_response'):
+                    logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
                 if hasattr(self.exchange, 'last_response_body'):
-                    logger.error(f"Last response body: {getattr(self.exchange, 'last_response_body', None)}")
+                    logger.error(f"🔍 BitMart response body: {self.exchange.last_response_body}")
+                if hasattr(self.exchange, 'last_response_headers'):
+                    logger.error(f"🔍 BitMart response headers: {self.exchange.last_response_headers}")
+                if hasattr(self.exchange, 'last_response'):
+                    logger.error(f"🔍 BitMart last_response: {self.exchange.last_response}")
+                
+                # Try to get response from exception if available
+                if hasattr(attr_err, '__cause__') and attr_err.__cause__:
+                    logger.error(f"🔍 Exception cause: {attr_err.__cause__}")
+                if hasattr(attr_err, '__context__') and attr_err.__context__:
+                    logger.error(f"🔍 Exception context: {attr_err.__context__}")
+                
                 raise
             except Exception as e:
                 # Catch any other API errors
                 error_msg = str(e)
                 logger.error(f"❌ Error fetching balance from {self.exchange_name}: {error_msg}")
+                
+                # Log actual BitMart response body for any exception
+                if self.exchange_name == "bitmart":
+                    if hasattr(self.exchange, 'last_http_response'):
+                        logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
+                    if hasattr(self.exchange, 'last_json_response'):
+                        logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
+                    if hasattr(self.exchange, 'last_response_body'):
+                        logger.error(f"🔍 BitMart response body: {self.exchange.last_response_body}")
+                
                 logger.error(f"Full traceback:", exc_info=True)
                 raise
             
