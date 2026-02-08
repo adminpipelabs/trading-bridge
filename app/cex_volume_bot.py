@@ -21,10 +21,10 @@ from app.cex_exchanges import get_exchange_config, EXCHANGE_CONFIGS
 
 logger = logging.getLogger("cex_volume_bot")
 
-# Log ccxt version at module load
+# Log ccxt version at module load (use sync version just for version check)
 try:
-    import ccxt
-    logger.info(f"ccxt version: {ccxt.__version__}")
+    import ccxt as ccxt_sync_version
+    logger.info(f"ccxt version: {ccxt_sync_version.__version__}")
 except Exception as e:
     logger.warning(f"Could not get ccxt version: {e}")
 
@@ -89,10 +89,10 @@ class CEXVolumeBot:
         
     async def initialize(self) -> bool:
         """Initialize exchange connection."""
-        # Log ccxt version
+        # Log ccxt version (use sync version just for version check)
         try:
-            import ccxt as ccxt_sync
-            logger.info(f"🔍 ccxt version: {ccxt_sync.__version__}")
+            import ccxt as ccxt_sync_version
+            logger.info(f"🔍 ccxt version: {ccxt_sync_version.__version__}")
         except Exception as e:
             logger.warning(f"Could not get ccxt version: {e}")
         
@@ -265,9 +265,9 @@ class CEXVolumeBot:
                 logger.error(f"❌ AttributeError in ccxt error handler: {error_msg}")
                 logger.error(f"This means BitMart API returned an error, but error message was None")
                 
-                # Log ccxt version
-                import ccxt
-                logger.error(f"🔍 ccxt version: {ccxt.__version__}")
+                # Log ccxt version (use sync version just for version check)
+                import ccxt as ccxt_sync_version
+                logger.error(f"🔍 ccxt version: {ccxt_sync_version.__version__}")
                 
                 # Log actual BitMart response body
                 if hasattr(self.exchange, 'last_http_response'):
@@ -288,9 +288,12 @@ class CEXVolumeBot:
                 error_msg = str(e)
                 logger.error(f"❌ Error fetching balance from {self.exchange_name}: {error_msg}")
                 
-                # Log ccxt version
-                import ccxt
-                logger.error(f"🔍 ccxt version: {ccxt.__version__}")
+                # Log ccxt version (use sync version just for version check)
+                try:
+                    import ccxt as ccxt_sync_version
+                    logger.error(f"🔍 ccxt version: {ccxt_sync_version.__version__}")
+                except Exception:
+                    pass
                 
                 # Log actual BitMart response body for any exception
                 if self.exchange_name == "bitmart":
