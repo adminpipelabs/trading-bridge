@@ -849,6 +849,10 @@ async def start_bot(
         # CEX exchanges: bitmart, coinstore, binance, kucoin, gateio, mexc, etc.
         # IMPORTANT: Chain must NOT be 'solana' for CEX bots
         cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit']
+        
+        # DEBUG: Log exchange/chain detection
+        logger.info(f"🔍 CEX Detection for bot {bot_id}: bot_type={bot.bot_type}, exchange={exchange}, chain={chain}")
+        
         is_cex_bot = (
             bot.bot_type == 'volume' and 
             exchange and 
@@ -863,7 +867,9 @@ async def start_bot(
             # Additional check: exchange should not be a known DEX
             if exchange.lower() not in ['jupiter', 'uniswap', 'pancakeswap']:
                 is_cex_bot = True
-                logger.info(f"Detected CEX bot via fallback: exchange={exchange}, chain={chain}")
+                logger.info(f"✅ Detected CEX bot via fallback: exchange={exchange}, chain={chain}")
+        
+        logger.info(f"🔍 CEX Detection result: is_cex_bot={is_cex_bot}")
         
         # For Solana/EVM bots, start via bot runner
         if bot.bot_type in ['volume', 'spread'] and not is_cex_bot:
