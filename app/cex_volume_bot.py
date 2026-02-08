@@ -152,6 +152,15 @@ class CEXVolumeBot:
                 logger.error(f"Symbol {self.symbol} not found on {self.exchange_name}. Available symbols: {list(self.exchange.markets.keys())[:10]}...")
                 return False
             
+            # Verify exchange has required methods
+            if not hasattr(self.exchange, 'fetch_balance'):
+                logger.error(f"Exchange {self.exchange_name} doesn't have fetch_balance method")
+                return False
+            
+            # Store market info for debugging
+            market_info = self.exchange.markets.get(self.symbol)
+            logger.info(f"Market info for {self.symbol}: {market_info}")
+            
             logger.info(f"✅ CEX Volume Bot initialized successfully: {self.exchange_name} {self.symbol}")
             return True
             
@@ -187,6 +196,17 @@ class CEXVolumeBot:
                 return 0, 0
             
             logger.debug(f"Fetching balance from {self.exchange_name} for {self.symbol}")
+            
+            # DEBUG: Check exchange object state before calling fetch_balance
+            logger.debug(f"Exchange object type: {type(self.exchange)}")
+            logger.debug(f"Exchange has fetch_balance: {hasattr(self.exchange, 'fetch_balance')}")
+            if hasattr(self.exchange, 'apiKey'):
+                logger.debug(f"Exchange apiKey present: {bool(self.exchange.apiKey)}")
+            if hasattr(self.exchange, 'secret'):
+                logger.debug(f"Exchange secret present: {bool(self.exchange.secret)}")
+            if hasattr(self.exchange, 'uid'):
+                logger.debug(f"Exchange uid present: {bool(self.exchange.uid)}")
+            
             balance = await self.exchange.fetch_balance()
             
             if not balance:
@@ -203,17 +223,24 @@ class CEXVolumeBot:
         except AttributeError as e:
             # Check if error is about .lower() being called on None
             error_str = str(e)
-            if "'NoneType' object has no attribute 'lower'" in error_str:
-                logger.error(f"AttributeError fetching balance: {e}. This suggests exchange_name or connector_name is None. Exchange may not be initialized properly. Bot ID: {self.bot_id}, exchange_name: {self.exchange_name}, exchange initialized: {self.exchange is not None}", exc_info=True)
-            else:
-                logger.error(f"AttributeError fetching balance from {self.exchange_name}: {e}. Exchange may not be initialized properly.", exc_info=True)
+            logger.error(f"❌ AttributeError fetching balance: {e}")
+            logger.error(f"   Bot ID: {self.bot_id}")
+            logger.error(f"   Exchange name: {self.exchange_name}")
+            logger.error(f"   Exchange initialized: {self.exchange is not None}")
+            logger.error(f"   Exchange type: {type(self.exchange) if self.exchange else None}")
+            if self.exchange:
+                logger.error(f"   Exchange apiKey: {getattr(self.exchange, 'apiKey', None)}")
+                logger.error(f"   Exchange secret: {getattr(self.exchange, 'secret', None)}")
+                logger.error(f"   Exchange uid: {getattr(self.exchange, 'uid', None)}")
+            logger.error(f"   Full traceback:", exc_info=True)
             return 0, 0
         except Exception as e:
             error_str = str(e)
-            if "'NoneType' object has no attribute 'lower'" in error_str:
-                logger.error(f"Failed to fetch balance: {e}. This suggests exchange_name or connector_name is None. Bot ID: {self.bot_id}, exchange_name: {self.exchange_name}, exchange initialized: {self.exchange is not None}", exc_info=True)
-            else:
-                logger.error(f"Failed to fetch balance from {self.exchange_name}: {e}", exc_info=True)
+            logger.error(f"❌ Exception fetching balance: {e}")
+            logger.error(f"   Bot ID: {self.bot_id}")
+            logger.error(f"   Exchange name: {self.exchange_name}")
+            logger.error(f"   Exchange initialized: {self.exchange is not None}")
+            logger.error(f"   Full traceback:", exc_info=True)
             return 0, 0
     
     async def get_price(self) -> Optional[float]:
