@@ -201,10 +201,19 @@ class CEXVolumeBot:
             return base_free, quote_free
             
         except AttributeError as e:
-            logger.error(f"AttributeError fetching balance from {self.exchange_name}: {e}. Exchange may not be initialized properly.", exc_info=True)
+            # Check if error is about .lower() being called on None
+            error_str = str(e)
+            if "'NoneType' object has no attribute 'lower'" in error_str:
+                logger.error(f"AttributeError fetching balance: {e}. This suggests exchange_name or connector_name is None. Exchange may not be initialized properly. Bot ID: {self.bot_id}, exchange_name: {self.exchange_name}, exchange initialized: {self.exchange is not None}", exc_info=True)
+            else:
+                logger.error(f"AttributeError fetching balance from {self.exchange_name}: {e}. Exchange may not be initialized properly.", exc_info=True)
             return 0, 0
         except Exception as e:
-            logger.error(f"Failed to fetch balance from {self.exchange_name}: {e}", exc_info=True)
+            error_str = str(e)
+            if "'NoneType' object has no attribute 'lower'" in error_str:
+                logger.error(f"Failed to fetch balance: {e}. This suggests exchange_name or connector_name is None. Bot ID: {self.bot_id}, exchange_name: {self.exchange_name}, exchange initialized: {self.exchange is not None}", exc_info=True)
+            else:
+                logger.error(f"Failed to fetch balance from {self.exchange_name}: {e}", exc_info=True)
             return 0, 0
     
     async def get_price(self) -> Optional[float]:

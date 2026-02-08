@@ -180,10 +180,12 @@ class CEXBotRunner:
                     else:
                         logger.warning(f"⚠️  No proxy URL configured for bot {bot_record['id']} - IP whitelisting may not work")
                     
+                    logger.info(f"🔄 Attempting to initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
                     if await bot.initialize():
                         self.active_bots[bot_id] = bot
-                        logger.info(f"Initialized CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
+                        logger.info(f"✅ Initialized CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
                     else:
+                        logger.error(f"❌ Failed to initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')}) - check logs above for initialization errors")
                         # Mark bot as error
                         await conn.execute("""
                             UPDATE bots SET health_status = 'error', 
@@ -194,6 +196,16 @@ class CEXBotRunner:
                 
                 bot = self.active_bots.get(bot_id)
                 if not bot:
+                    continue
+                
+                # Ensure bot is initialized before using it
+                if bot_id not in self.active_bots:
+                    logger.warning(f"Bot {bot_id} not in active_bots - skipping cycle (initialization may have failed)")
+                    continue
+                
+                bot = self.active_bots.get(bot_id)
+                if not bot:
+                    logger.warning(f"Bot {bot_id} is None in active_bots - skipping cycle")
                     continue
                 
                 # Check if it's time to trade
