@@ -805,19 +805,23 @@ async def start_bot(
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
     
-    # Authorization check
-    try:
-        wallet_address = wallet_address or request.headers.get("X-Wallet-Address", None)
-        if wallet_address:
+    # Authorization check - try wallet first, then token
+    wallet_address = wallet_address or request.headers.get("X-Wallet-Address", None)
+    auth_header = request.headers.get("Authorization", "")
+    
+    if wallet_address:
+        try:
             current_client = get_current_client(wallet_address=wallet_address, db=db)
             check_bot_access(bot, current_client)
-        # If no wallet_address, allow (for admin with token)
-    except HTTPException:
-        # If get_current_client fails, check if admin token
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Authentication required")
-        # Admin access allowed
+        except HTTPException:
+            # Wallet auth failed - try token (admin)
+            if not auth_header.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="Authentication required")
+    elif auth_header.startswith("Bearer "):
+        # Token auth (admin)
+        pass
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
     if bot.status == "running":
         return {"status": "already_running", "bot_id": bot_id}
