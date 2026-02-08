@@ -246,16 +246,50 @@ class BotRunner:
             import json
             
             # Fetch bot with connector info (API keys)
-            bot_record = db.execute(text("""
-                SELECT b.*, 
-                       c.api_key,
-                       c.api_secret,
-                       c.memo
-                FROM bots b
-                JOIN clients cl ON cl.account_identifier = b.account
-                LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(b.exchange)
-                WHERE b.id = :bot_id
-            """), {"bot_id": bot_id}).first()
+            # Handle missing exchange column - use connector or bot name fallback
+            try:
+                bot_record = db.execute(text("""
+                    SELECT b.*, 
+                           c.api_key,
+                           c.api_secret,
+                           c.memo
+                    FROM bots b
+                    JOIN clients cl ON cl.account_identifier = b.account
+                    LEFT JOIN connectors c ON c.client_id = cl.id 
+                        AND LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector, 'bitmart'))
+                    WHERE b.id = :bot_id
+                """), {"bot_id": bot_id}).first()
+            except Exception as sql_error:
+                # Exchange column doesn't exist - use connector name or bot name fallback
+                db.rollback()
+                logger.warning(f"exchange column doesn't exist, using connector/bot name fallback: {sql_error}")
+                # Get bot first to extract name
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if not bot:
+                    logger.error(f"Bot {bot_id} not found")
+                    return
+                
+                # Detect exchange from bot name
+                bot_name_lower = (bot.name or "").lower()
+                exchange_from_name = "bitmart"  # default
+                cex_keywords = ['bitmart', 'binance', 'kucoin', 'coinstore', 'gateio', 'mexc', 'bybit', 'okx']
+                for kw in cex_keywords:
+                    if kw in bot_name_lower:
+                        exchange_from_name = kw
+                        break
+                
+                # Query with connector name matching
+                bot_record = db.execute(text("""
+                    SELECT b.*, 
+                           c.api_key,
+                           c.api_secret,
+                           c.memo
+                    FROM bots b
+                    JOIN clients cl ON cl.account_identifier = b.account
+                    LEFT JOIN connectors c ON c.client_id = cl.id 
+                        AND LOWER(c.name) = :exchange_name
+                    WHERE b.id = :bot_id
+                """), {"bot_id": bot_id, "exchange_name": exchange_from_name}).first()
             
             if not bot_record:
                 logger.error(f"Bot {bot_id} not found")
@@ -275,7 +309,27 @@ class BotRunner:
                 return
             
             # Build symbol
-            exchange_name = bot_record.exchange or "bitmart"
+            # Ensure exchange_name is never None - use multiple fallbacks
+            exchange_name = None
+            if hasattr(bot_record, 'exchange') and bot_record.exchange:
+                exchange_name = bot_record.exchange
+            elif hasattr(bot_record, 'connector') and bot_record.connector:
+                exchange_name = bot_record.connector
+            else:
+                # Fallback to bot name detection
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot and bot.name:
+                    bot_name_lower = bot.name.lower()
+                    cex_keywords = ['bitmart', 'binance', 'kucoin', 'coinstore', 'gateio', 'mexc', 'bybit', 'okx']
+                    for kw in cex_keywords:
+                        if kw in bot_name_lower:
+                            exchange_name = kw
+                            break
+                exchange_name = exchange_name or "bitmart"  # Final fallback
+            
+            # Ensure it's a string and not None
+            if not exchange_name or not isinstance(exchange_name, str):
+                exchange_name = "bitmart"
             if hasattr(bot_record, 'base_asset') and hasattr(bot_record, 'quote_asset') and bot_record.base_asset and bot_record.quote_asset:
                 symbol = f"{bot_record.base_asset}/{bot_record.quote_asset}"
             elif hasattr(bot_record, 'pair') and bot_record.pair:
