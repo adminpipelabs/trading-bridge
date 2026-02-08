@@ -44,4 +44,6 @@ EXCHANGE_CONFIGS = {
 
 def get_exchange_config(exchange: str) -> dict:
     """Get exchange configuration by name."""
+    if not exchange or not isinstance(exchange, str):
+        exchange = "bitmart"
     return EXCHANGE_CONFIGS.get(exchange.lower(), EXCHANGE_CONFIGS["bitmart"])

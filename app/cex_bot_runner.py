@@ -154,9 +154,14 @@ class CEXBotRunner:
                     if isinstance(config, str):
                         config = json.loads(config)
                     
+                    # Ensure exchange_name is never None
+                    exchange_name = bot_record.get("exchange") or bot_record.get("connector") or "bitmart"
+                    if not exchange_name or not isinstance(exchange_name, str):
+                        exchange_name = "bitmart"
+                    
                     bot = CEXVolumeBot(
                         bot_id=bot_record["id"],
-                        exchange_name=bot_record.get("exchange") or bot_record.get("connector", "bitmart"),
+                        exchange_name=exchange_name.lower(),  # Ensure lowercase
                         symbol=symbol,
                         api_key=bot_record["api_key"],  # Plaintext from connectors table
                         api_secret=bot_record["api_secret"],  # Plaintext from connectors table
@@ -189,12 +194,21 @@ class CEXBotRunner:
                 if last_trade is None:
                     should_trade = True
                 else:
-                    # Handle timezone awareness
-                    if last_trade.tzinfo is None:
-                        last_trade = last_trade.replace(tzinfo=timezone.utc)
-                    
-                    elapsed = (datetime.now(timezone.utc) - last_trade).total_seconds()
-                    should_trade = elapsed >= interval
+                    # Handle timezone awareness - ensure UTC
+                    try:
+                        if last_trade.tzinfo is None:
+                            # Naive datetime - make it UTC-aware
+                            last_trade = last_trade.replace(tzinfo=timezone.utc)
+                        else:
+                            # Already timezone-aware - convert to UTC
+                            last_trade = last_trade.astimezone(timezone.utc)
+                        
+                        elapsed = (datetime.now(timezone.utc) - last_trade).total_seconds()
+                        should_trade = elapsed >= interval
+                    except Exception as e:
+                        logger.error(f"Error calculating trade interval for bot {bot_id}: {e}")
+                        # If datetime comparison fails, allow trade (safer)
+                        should_trade = True
                 
                 if should_trade:
                     # Execute trade
