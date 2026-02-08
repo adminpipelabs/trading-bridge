@@ -106,12 +106,14 @@ class BotRunner:
                 logger.warning(f"Could not check exchange/chain columns: {sql_error}")
             
             # CEX bot check - check explicit CEX exchanges list
+            # IMPORTANT: Chain must NOT be 'solana' for CEX bots
             cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit']
             is_cex_bot = (
                 bot.bot_type == 'volume' and 
                 exchange and 
                 exchange.lower() not in ['jupiter', ''] and
-                exchange.lower() in cex_exchanges
+                exchange.lower() in cex_exchanges and
+                (not chain or chain.lower() != 'solana')  # Chain must NOT be solana
             )
             
             # Fallback: If exchange is set and chain is explicitly NOT solana
