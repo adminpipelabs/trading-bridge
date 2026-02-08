@@ -160,7 +160,10 @@ class CEXVolumeBot:
                     "https": self.proxy_url,
                 }
                 logger.info(f"✅ Using QuotaGuard proxy for {self.exchange_name} (dedicated IP: 3.222.129.4)")
-                logger.debug(f"Proxy URL: {self.proxy_url.split('@')[0]}@...")
+                logger.info(f"✅ Proxy configured: {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]}...")
+            else:
+                logger.error(f"❌ CRITICAL: No proxy URL set for {self.exchange_name}! BitMart will reject requests.")
+                logger.error(f"❌ Check Railway env vars: QUOTAGUARDSTATIC_URL or QUOTAGUARD_PROXY_URL must be set!")
             
             # Create exchange instance
             logger.info(f"Creating {ccxt_id} exchange instance...")
