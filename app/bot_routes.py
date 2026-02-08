@@ -829,12 +829,20 @@ async def start_bot(
     try:
         # Check if this is a CEX bot (has exchange field and not Solana)
         # Use raw SQL since exchange column may not be in SQLAlchemy model yet
-        bot_check = db.execute(text("""
-            SELECT exchange, chain FROM bots WHERE id = :bot_id
-        """), {"bot_id": bot_id}).first()
-        
-        exchange = bot_check[0] if bot_check else None
-        chain = bot_check[1] if bot_check else None
+        exchange = None
+        chain = None
+        try:
+            bot_check = db.execute(text("""
+                SELECT exchange, chain FROM bots WHERE id = :bot_id
+            """), {"bot_id": bot_id}).first()
+            
+            if bot_check:
+                exchange = bot_check[0] if len(bot_check) > 0 else None
+                chain = bot_check[1] if len(bot_check) > 1 else None
+        except Exception as sql_error:
+            # Columns might not exist yet - log but don't fail
+            logger.warning(f"Could not check exchange/chain columns (may not exist yet): {sql_error}")
+            # Default to None - will be treated as non-CEX bot
         
         is_cex_bot = (
             bot.bot_type == 'volume' and 
@@ -849,6 +857,9 @@ async def start_bot(
             bot.error = None
             db.commit()
             # Start bot in background
+            if bot_runner is None:
+                logger.error("bot_runner is None - cannot start Solana/EVM bot")
+                raise HTTPException(status_code=500, detail="Bot runner not initialized")
             await bot_runner.start_bot(bot_id, db)
             logger.info(f"Solana/EVM bot {bot_id} started")
         elif is_cex_bot:
