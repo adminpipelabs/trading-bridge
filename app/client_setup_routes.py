@@ -583,28 +583,42 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         db.add(bot)
         db.flush()  # Flush to get bot_id available for UPDATE
         
+        # CRITICAL: Commit bot creation FIRST before any UPDATEs
+        # This ensures bot exists even if later UPDATEs fail
+        db.commit()
+        logger.info(f"✅ Bot {bot_id} committed to database")
+        
         # Verify bot_type and account were saved correctly
         db.refresh(bot)
         logger.info(f"   After save: bot.account={bot.account}, bot.bot_type={bot.bot_type}, bot.client_id={bot.client_id}")
         
+        # Fix bot_type if needed (separate transaction)
         if bot.bot_type != request.bot_type:
             logger.error(f"⚠️ WARNING: Bot bot_type mismatch! Expected: {request.bot_type}, Got: {bot.bot_type}")
-            # Fix it via raw SQL if needed
-            db.execute(text("UPDATE bots SET bot_type = :bot_type WHERE id = :bot_id"), {
-                "bot_type": request.bot_type,
-                "bot_id": bot_id
-            })
-            db.commit()
-            logger.info(f"✅ Fixed bot_type for bot {bot_id}: {request.bot_type}")
+            try:
+                db.execute(text("UPDATE bots SET bot_type = :bot_type WHERE id = :bot_id"), {
+                    "bot_type": request.bot_type,
+                    "bot_id": bot_id
+                })
+                db.commit()
+                logger.info(f"✅ Fixed bot_type for bot {bot_id}: {request.bot_type}")
+            except Exception as fix_error:
+                logger.warning(f"Could not fix bot_type: {fix_error}")
+                db.rollback()
         
+        # Fix account if needed (separate transaction)
         if bot.account != client.account_identifier:
             logger.error(f"⚠️ CRITICAL: Bot account mismatch! Expected: {client.account_identifier}, Got: {bot.account}")
-            db.execute(text("UPDATE bots SET account = :account WHERE id = :bot_id"), {
-                "account": client.account_identifier,
-                "bot_id": bot_id
-            })
-            db.commit()
-            logger.info(f"✅ Fixed account for bot {bot_id}: {client.account_identifier}")
+            try:
+                db.execute(text("UPDATE bots SET account = :account WHERE id = :bot_id"), {
+                    "account": client.account_identifier,
+                    "bot_id": bot_id
+                })
+                db.commit()
+                logger.info(f"✅ Fixed account for bot {bot_id}: {client.account_identifier}")
+            except Exception as fix_error:
+                logger.warning(f"Could not fix account: {fix_error}")
+                db.rollback()
         
         # Store chain/exchange/base_asset/quote_asset in database using raw SQL (columns exist but not in SQLAlchemy model)
         # This must happen AFTER bot is added/flushed so bot_id exists
@@ -662,27 +676,51 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             # Re-query bot to ensure it's attached to the session (after previous commits)
             bot = db.query(Bot).filter(Bot.id == bot_id).first()
             if not bot:
-                raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
+                # Bot should exist since we committed it earlier - log error but don't fail
+                logger.error(f"❌ Bot {bot_id} not found in database - this should not happen!")
+                # Try to verify bot exists via raw SQL
+                bot_check = db.execute(text("SELECT id FROM bots WHERE id = :bot_id"), {"bot_id": bot_id}).first()
+                if bot_check:
+                    logger.info(f"✅ Bot exists in DB (found via raw SQL) - re-querying...")
+                    db.rollback()  # Clear any aborted transaction
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                else:
+                    raise HTTPException(status_code=500, detail=f"Bot {bot_id} was not saved to database")
             
             bot.status = "running"
             db.commit()
+            logger.info(f"✅ Bot {bot_id} status set to 'running'")
+        except HTTPException:
+            # Re-raise HTTP exceptions
+            raise
         except Exception as status_error:
             # If transaction was aborted, rollback first
             logger.warning(f"Failed to update bot status (transaction may be aborted): {status_error}")
             try:
                 db.rollback()
-                # Re-query bot after rollback
+                # Re-query bot after rollback - bot should exist since we committed it earlier
                 bot = db.query(Bot).filter(Bot.id == bot_id).first()
                 if bot:
                     bot.status = "running"
                     db.commit()
                     logger.info(f"✅ Retried and succeeded updating bot status after rollback")
                 else:
-                    raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found after rollback")
+                    # Bot doesn't exist - this is a critical error
+                    logger.error(f"❌ Bot {bot_id} not found after rollback - bot may not have been committed")
+                    # Try one more time with raw SQL to verify
+                    bot_check = db.execute(text("SELECT id FROM bots WHERE id = :bot_id"), {"bot_id": bot_id}).first()
+                    if bot_check:
+                        logger.info(f"✅ Bot exists (found via raw SQL) - continuing...")
+                        # Bot exists, just couldn't query via ORM - this is OK, status update will happen in background
+                    else:
+                        raise HTTPException(status_code=500, detail=f"Bot {bot_id} was not saved to database")
+            except HTTPException:
+                raise
             except Exception as retry_error:
                 logger.error(f"Failed to update bot status even after rollback: {retry_error}")
                 db.rollback()
-                raise
+                # Don't fail - bot exists, status update can happen in background task
+                logger.warning(f"⚠️  Could not update bot status immediately - will be updated by background task")
         
         # Start bot in background task - don't await it
         # This ensures the HTTP response returns immediately
