@@ -303,14 +303,6 @@ class CEXVolumeBot:
                 
                 logger.error(f"Full traceback:", exc_info=True)
                 raise
-                        logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
-                    if hasattr(self.exchange, 'last_json_response'):
-                        logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
-                    if hasattr(self.exchange, 'last_response_body'):
-                        logger.error(f"🔍 BitMart response body: {self.exchange.last_response_body}")
-                
-                logger.error(f"Full traceback:", exc_info=True)
-                raise
             
             if not balance:
                 logger.warning(f"Empty balance response from {self.exchange_name}")
