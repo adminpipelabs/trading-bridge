@@ -518,12 +518,8 @@ class CEXVolumeBot:
                     avg_price = price
                     cost = filled_amount * avg_price
             
-            filled_amount = float(order.get("filled", filled_amount))
-            avg_price = float(order.get("average", 0) or order.get("price", avg_price))
-            cost = float(order.get("cost", filled_amount * avg_price))
-            
             return {
-                "order_id": order.get("id"),
+                "order_id": order_id,
                 "side": side,
                 "amount": filled_amount,
                 "price": avg_price,

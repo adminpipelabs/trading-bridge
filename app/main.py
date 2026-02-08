@@ -10,6 +10,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from contextlib import asynccontextmanager
 import asyncio
+import requests
 from app.jupiter_routes import router as jupiter_router
 from app.solana_routes import router as solana_router
 
