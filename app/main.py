@@ -26,6 +26,7 @@ from app.admin_routes import router as admin_router
 from app.cex_credential_routes import router as cex_credential_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
+from app.cex_volume_bot import extract_proxy_url_from_quotaguard_info
 import os
 import logging
 import json
@@ -103,6 +104,27 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 80)
     logger.info("STARTING DATABASE INITIALIZATION")
     logger.info("=" * 80)
+    
+    # Set HTTP_PROXY and HTTPS_PROXY from QUOTAGUARDSTATIC_URL for aiohttp (ccxt async)
+    # This ensures aiohttp automatically uses the proxy for all requests
+    quotaguard_url = os.getenv("QUOTAGUARDSTATIC_URL")
+    if quotaguard_url:
+        # Extract proxy URL if it's in QuotaGuard connection info format
+        proxy_url = extract_proxy_url_from_quotaguard_info(quotaguard_url) or quotaguard_url
+        
+        # Set environment variables for aiohttp to pick up automatically
+        os.environ["HTTP_PROXY"] = proxy_url
+        os.environ["HTTPS_PROXY"] = proxy_url
+        logger.info("=" * 80)
+        logger.info("✅ Set HTTP_PROXY and HTTPS_PROXY for aiohttp (ccxt async)")
+        logger.info(f"   Proxy URL: {proxy_url.split('@')[0] if '@' in proxy_url else proxy_url[:30]}...")
+        logger.info("=" * 80)
+        print("=" * 80)
+        print("✅ Set HTTP_PROXY and HTTPS_PROXY for aiohttp (ccxt async)")
+        print(f"   Proxy URL: {proxy_url.split('@')[0] if '@' in proxy_url else proxy_url[:30]}...")
+        print("=" * 80)
+    else:
+        logger.warning("⚠️  QUOTAGUARDSTATIC_URL not set - proxy will not be used by aiohttp")
     
     # Log Railway outbound IP for BitMart whitelisting - MUST BE FIRST THING
     # Use print() so it's visible in Railway logs immediately
