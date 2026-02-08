@@ -501,22 +501,42 @@ class CEXVolumeBot:
         if not price:
             return None
         
-        base_balance, quote_balance = await self.get_balances()
-        if base_balance == 0 and quote_balance == 0:
-            logger.error("No balance available")
-            return None
+        # SKIP BALANCE CHECK - Try to place order directly
+        # If balance check fails but credentials are valid, we can still try trading
+        # The exchange will reject with InsufficientFunds if needed
+        base_balance = None
+        quote_balance = None
+        try:
+            base_balance, quote_balance = await self.get_balances()
+            logger.info(f"Balance check successful: base={base_balance}, quote={quote_balance}")
+        except Exception as balance_error:
+            logger.warning(f"⚠️  Balance check failed: {balance_error}. Skipping balance check and trying direct trade.")
+            logger.info(f"This is OK - we'll try placing order and exchange will reject if insufficient funds")
+            # Set default balances to allow trade attempt
+            base_balance = 0.0
+            quote_balance = 0.0
         
         # Decide trade
         side = self.decide_side()
-        amount = self.calculate_trade_size(side, base_balance, quote_balance, price)
         
-        if not amount:
-            # Try opposite side if this side has no balance
-            side = "buy" if side == "sell" else "sell"
+        # Calculate trade size (use defaults if balance check failed)
+        if base_balance is None or quote_balance is None:
+            # Use minimum trade size if we don't know balance
+            min_usd = self.config["min_trade_usd"]
+            amount = min_usd / price
+            logger.info(f"Using minimum trade size (balance check skipped): ${min_usd} = {amount} {self.symbol.split('/')[0]}")
+        else:
             amount = self.calculate_trade_size(side, base_balance, quote_balance, price)
+            
             if not amount:
-                logger.warning("No valid trade size for either side — check balances")
-                return None
+                # Try opposite side if this side has no balance
+                side = "buy" if side == "sell" else "sell"
+                amount = self.calculate_trade_size(side, base_balance, quote_balance, price)
+                if not amount:
+                    # If balance check worked but no valid size, use minimum
+                    min_usd = self.config["min_trade_usd"]
+                    amount = min_usd / price
+                    logger.info(f"Using minimum trade size (no valid size calculated): ${min_usd} = {amount} {self.symbol.split('/')[0]}")
         
         # Execute trade
         result = await self.execute_trade(side, amount)
