@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict
 
-from app.cex_volume_bot import CEXVolumeBot, create_bot_from_db
+from app.cex_volume_bot import CEXVolumeBot, create_bot_from_db, extract_proxy_url_from_quotaguard_info
 
 logger = logging.getLogger("cex_bot_runner")
 
@@ -189,7 +189,15 @@ class CEXBotRunner:
                     # Proxy URL is read from environment (QUOTAGUARDSTATIC_URL) for IP whitelisting
                     # Uses dedicated IP 3.222.129.4 via QuotaGuard
                     import os
-                    proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+                    raw_proxy = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+                    
+                    # Extract actual URL if QuotaGuard connection info format
+                    if raw_proxy:
+                        proxy_url = extract_proxy_url_from_quotaguard_info(raw_proxy) or raw_proxy
+                        if proxy_url != raw_proxy:
+                            logger.info(f"🔍 Extracted proxy URL from QuotaGuard connection info")
+                    else:
+                        proxy_url = None
                     
                     # Debug logging for proxy configuration
                     if proxy_url:

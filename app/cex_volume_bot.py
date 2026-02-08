@@ -31,6 +31,40 @@ except Exception as e:
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
 
+def extract_proxy_url_from_quotaguard_info(connection_info: str) -> Optional[str]:
+    """
+    Extract the proxy URL from QuotaGuard connection information.
+    
+    QuotaGuard provides connection info in format:
+    Connection Information
+    CONNECTION URL https://user:pass@host:port
+    IP Addresses
+    3.222.129.4
+    ...
+    
+    We need to extract just the URL line.
+    """
+    if not connection_info:
+        return None
+    
+    # Look for "CONNECTION URL" line
+    for line in connection_info.split('\n'):
+        line = line.strip()
+        if 'CONNECTION URL' in line.upper():
+            # Extract URL after "CONNECTION URL"
+            parts = line.split('CONNECTION URL', 1)
+            if len(parts) > 1:
+                url = parts[1].strip()
+                if url.startswith(('http://', 'https://')):
+                    return url
+        elif line.startswith(('http://', 'https://')):
+            # Direct URL found
+            return line
+    
+    # If no URL found, return None
+    return None
+
+
 class CEXVolumeBot:
     """
     Volume generation bot for centralized exchanges.
@@ -62,7 +96,15 @@ class CEXVolumeBot:
         self.memo = memo  # BitMart memo/uid
         # Check for QuotaGuard static IP proxy (dedicated IP: 3.222.129.4)
         import os
-        self.proxy_url = proxy_url or os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+        raw_proxy = proxy_url or os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+        
+        # Extract actual URL if QuotaGuard connection info format
+        if raw_proxy:
+            self.proxy_url = extract_proxy_url_from_quotaguard_info(raw_proxy) or raw_proxy
+            if self.proxy_url != raw_proxy:
+                logger.info(f"🔍 Extracted proxy URL from QuotaGuard connection info")
+        else:
+            self.proxy_url = None
         
         # Debug logging for proxy configuration
         if not self.proxy_url:
