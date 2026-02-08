@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 import logging
 
-from app.database import get_db, Client, Wallet, Connector, Bot
+from app.database import get_db, Client, Wallet, Connector, Bot, BotTrade
 from app.services.exchange import exchange_manager
 
 logger = logging.getLogger(__name__)
@@ -350,7 +350,14 @@ async def get_client_trades(
 ):
     """
     Get trade history for a client by wallet address.
+    Includes trades from:
+    1. Exchange API (via exchange_manager) - real exchange trades
+    2. Bot trades from trade_logs table (CEX volume bots)
+    3. Bot trades from bot_trades table (DEX bots)
     """
+    from sqlalchemy import text
+    from datetime import datetime, timedelta, timezone
+    
     # Look up client by wallet
     wallet_lower = wallet_address.lower()
     wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
@@ -363,40 +370,148 @@ async def get_client_trades(
     
     client = wallet.client
     account_identifier = client.account_identifier
+    logger.info(f"📊 Fetching trades for client: {client.name} (account: {account_identifier})")
     
-    # Sync connectors to exchange_manager
-    synced = await sync_connectors_to_exchange_manager(account_identifier, db)
-    if not synced:
-        return {
-            "account": account_identifier,
-            "trades": [],
-            "count": 0,
-            "message": "No connectors configured"
-        }
+    all_trades = []
     
-    # Get account from exchange_manager
-    account = exchange_manager.get_account(account_identifier)
-    if not account:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to create account in exchange_manager"
-        )
-    
+    # 1. Get bot trades from trade_logs table (CEX volume bots)
     try:
-        # Format trading_pair if provided (SHARP-USDT -> SHARP/USDT for ccxt)
-        formatted_pair = None
-        if trading_pair:
-            formatted_pair = trading_pair.replace("-", "/").replace("_", "/")
+        # Get all bots for this client
+        client_bots = db.query(Bot).filter(Bot.account == account_identifier).all()
+        bot_ids = [bot.id for bot in client_bots]
         
-        trades = await account.get_trades(trading_pair=formatted_pair, limit=limit)
-        return {
-            "account": account_identifier,
-            "trades": trades,
-            "count": len(trades)
-        }
+        if bot_ids:
+            # Query trade_logs table using parameterized query
+            placeholders = ','.join([':bot_id_' + str(i) for i in range(len(bot_ids))])
+            params = {f'bot_id_{i}': bot_id for i, bot_id in enumerate(bot_ids)}
+            
+            trade_logs_query = f"""
+                SELECT bot_id, side, amount, price, cost_usd, order_id, created_at
+                FROM trade_logs
+                WHERE bot_id IN ({placeholders})
+                ORDER BY created_at DESC
+                LIMIT :limit
+            """
+            params['limit'] = limit * 2  # Get more to account for filtering
+            
+            trade_logs = db.execute(text(trade_logs_query), params).fetchall()
+            
+            for trade in trade_logs:
+                # Get bot info to determine trading pair
+                bot = next((b for b in client_bots if b.id == trade.bot_id), None)
+                if bot:
+                    pair = f"{bot.base_asset or 'UNKNOWN'}/{bot.quote_asset or 'USDT'}"
+                    trading_pair_formatted = pair.replace("/", "-")
+                    
+                    # Filter by trading_pair if provided
+                    if trading_pair and trading_pair_formatted.upper() != trading_pair.upper():
+                        continue
+                    
+                    all_trades.append({
+                        "trading_pair": trading_pair_formatted,
+                        "side": trade.side.lower(),
+                        "amount": float(trade.amount) if trade.amount else 0,
+                        "price": float(trade.price) if trade.price else 0,
+                        "cost": float(trade.cost_usd) if trade.cost_usd else 0,
+                        "timestamp": int(trade.created_at.timestamp() * 1000) if trade.created_at else 0,
+                        "exchange": bot.exchange or "bitmart",
+                        "id": str(trade.order_id) if trade.order_id else None,
+                        "order_id": trade.order_id,
+                        "source": "bot_trade_logs",
+                        "bot_id": trade.bot_id,
+                        "bot_name": bot.name
+                    })
+            
+            logger.info(f"✅ Found {len(trade_logs)} trade(s) from trade_logs table")
     except Exception as e:
-        logger.error(f"Failed to get trades: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"⚠️  Could not query trade_logs table: {e}")
+    
+    # 2. Get bot trades from bot_trades table (DEX bots)
+    try:
+        bot_trades = db.query(BotTrade).filter(
+            BotTrade.bot_id.in_(bot_ids) if bot_ids else False
+        ).order_by(BotTrade.created_at.desc()).limit(limit).all()
+        
+        for trade in bot_trades:
+            # Get bot info
+            bot = next((b for b in client_bots if b.id == trade.bot_id), None)
+            if bot:
+                pair = f"{bot.base_asset or 'UNKNOWN'}/{bot.quote_asset or 'USDT'}"
+                trading_pair_formatted = pair.replace("/", "-")
+                
+                # Filter by trading_pair if provided
+                if trading_pair and trading_pair_formatted.upper() != trading_pair.upper():
+                    continue
+                
+                all_trades.append({
+                    "trading_pair": trading_pair_formatted,
+                    "side": trade.side.lower() if trade.side else "unknown",
+                    "amount": float(trade.amount) if trade.amount else 0,
+                    "price": float(trade.price) if trade.price else 0,
+                    "cost": float(trade.value_usd) if trade.value_usd else 0,
+                    "timestamp": int(trade.created_at.timestamp() * 1000) if trade.created_at else 0,
+                    "exchange": bot.exchange or "unknown",
+                    "id": trade.tx_signature,
+                    "order_id": trade.tx_signature,
+                    "tx_signature": trade.tx_signature,
+                    "status": trade.status,
+                    "source": "bot_trades",
+                    "bot_id": trade.bot_id,
+                    "bot_name": bot.name
+                })
+        
+        logger.info(f"✅ Found {len(bot_trades)} trade(s) from bot_trades table")
+    except Exception as e:
+        logger.warning(f"⚠️  Could not query bot_trades table: {e}")
+    
+    # 3. Get trades from exchange API (if connectors are configured)
+    try:
+        synced = await sync_connectors_to_exchange_manager(account_identifier, db)
+        if synced:
+            account = exchange_manager.get_account(account_identifier)
+            if account:
+                # Format trading_pair if provided (SHARP-USDT -> SHARP/USDT for ccxt)
+                formatted_pair = None
+                if trading_pair:
+                    formatted_pair = trading_pair.replace("-", "/").replace("_", "/")
+                
+                exchange_trades = await account.get_trades(trading_pair=formatted_pair, limit=limit)
+                
+                # Transform exchange trades to match format
+                for trade in exchange_trades:
+                    symbol = trade.get("symbol", "")
+                    trading_pair_formatted = symbol.replace("/", "-") if "/" in symbol else symbol
+                    
+                    all_trades.append({
+                        "trading_pair": trading_pair_formatted,
+                        "side": trade.get("side", "").lower(),
+                        "amount": float(trade.get("amount", 0)),
+                        "price": float(trade.get("price", 0)),
+                        "cost": float(trade.get("cost", 0)),
+                        "timestamp": trade.get("timestamp", 0),
+                        "exchange": trade.get("connector", "unknown"),
+                        "id": trade.get("id"),
+                        "order_id": trade.get("order_id"),
+                        "source": "exchange_api"
+                    })
+                
+                logger.info(f"✅ Found {len(exchange_trades)} trade(s) from exchange API")
+    except Exception as e:
+        logger.warning(f"⚠️  Could not fetch trades from exchange API: {e}")
+    
+    # Sort by timestamp descending (most recent first)
+    all_trades.sort(key=lambda t: t.get("timestamp", 0), reverse=True)
+    
+    # Apply limit
+    all_trades = all_trades[:limit]
+    
+    logger.info(f"✅ Returning {len(all_trades)} total trade(s) for {account_identifier}")
+    
+    return {
+        "account": account_identifier,
+        "trades": all_trades,
+        "count": len(all_trades)
+    }
 
 
 @router.get("/volume")
