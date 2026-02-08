@@ -21,6 +21,8 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/bots", tags=["bots"])
 
 
@@ -1060,18 +1062,20 @@ def update_bot(
 
 @router.get("/{bot_id}/stats")
 def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
-    """Get bot statistics."""
+    """Get bot statistics including trades from both bot_trades and trade_logs tables."""
+    from sqlalchemy import text
+    
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
 
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
-    # Get recent trades
-    recent_trades = db.query(BotTrade).filter(
+    # Get trades from bot_trades table (DEX bots)
+    recent_trades_dex = db.query(BotTrade).filter(
         BotTrade.bot_id == bot_id
     ).order_by(BotTrade.created_at.desc()).limit(100).all()
 
-    trades_data = [{
+    trades_data_dex = [{
         "id": t.id,
         "side": t.side,
         "amount": float(t.amount) if t.amount else None,
@@ -1079,14 +1083,147 @@ def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
         "value_usd": float(t.value_usd) if t.value_usd else None,
         "tx_signature": t.tx_signature,
         "status": t.status,
-        "created_at": t.created_at.isoformat() if t.created_at else None
-    } for t in recent_trades]
+        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "source": "bot_trades"  # DEX trades
+    } for t in recent_trades_dex]
+
+    # Get trades from trade_logs table (CEX bots)
+    trades_data_cex = []
+    try:
+        trade_logs = db.execute(text("""
+            SELECT id, side, amount, price, cost_usd, order_id, created_at
+            FROM trade_logs
+            WHERE bot_id = :bot_id
+            ORDER BY created_at DESC
+            LIMIT 100
+        """), {"bot_id": bot_id}).fetchall()
+        
+        trades_data_cex = [{
+            "id": str(t.id),
+            "side": t.side,
+            "amount": float(t.amount) if t.amount else None,
+            "price": float(t.price) if t.price else None,
+            "value_usd": float(t.cost_usd) if t.cost_usd else None,
+            "order_id": t.order_id,
+            "status": "success",
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+            "source": "trade_logs"  # CEX trades
+        } for t in trade_logs]
+    except Exception as e:
+        # Table might not exist - that's OK
+        logger.debug(f"Could not query trade_logs table: {e}")
+
+    # Combine and sort by created_at
+    all_trades = trades_data_dex + trades_data_cex
+    all_trades.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    
+    # Calculate totals
+    total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
+    buy_count = sum(1 for t in all_trades if t.get("side", "").lower() == "buy")
+    sell_count = sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
 
     return {
         "bot_id": bot_id,
+        "bot_name": bot.name,
+        "bot_type": bot.bot_type,
+        "status": bot.status,
         "stats": bot.stats or {},
-        "recent_trades": trades_data,
-        "total_trades": len(trades_data)
+        "recent_trades": all_trades[:100],  # Limit to 100 most recent
+        "total_trades": len(all_trades),
+        "total_volume_usd": round(total_volume, 2),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "last_trade_time": bot.last_trade_time.isoformat() if bot.last_trade_time else None,
+        "health_status": bot.health_status,
+        "health_message": bot.health_message
+    }
+
+
+@router.get("/{bot_id}/trades")
+def get_bot_trades(
+    bot_id: str,
+    limit: int = Query(50, description="Max trades to return"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all trades for a bot from both bot_trades (DEX) and trade_logs (CEX) tables.
+    Returns unified format with source indicator.
+    """
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    all_trades = []
+
+    # Get trades from bot_trades table (DEX bots)
+    try:
+        recent_trades_dex = db.query(BotTrade).filter(
+            BotTrade.bot_id == bot_id
+        ).order_by(BotTrade.created_at.desc()).limit(limit).all()
+
+        for t in recent_trades_dex:
+            all_trades.append({
+                "id": t.id,
+                "side": t.side,
+                "amount": float(t.amount) if t.amount else None,
+                "price": float(t.price) if t.price else None,
+                "value_usd": float(t.value_usd) if t.value_usd else None,
+                "tx_signature": t.tx_signature,
+                "order_id": None,
+                "status": t.status,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "source": "bot_trades"  # DEX trades
+            })
+    except Exception as e:
+        logger.warning(f"Error querying bot_trades: {e}")
+
+    # Get trades from trade_logs table (CEX bots)
+    try:
+        trade_logs = db.execute(text("""
+            SELECT id, side, amount, price, cost_usd, order_id, created_at
+            FROM trade_logs
+            WHERE bot_id = :bot_id
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """), {"bot_id": bot_id, "limit": limit}).fetchall()
+        
+        for t in trade_logs:
+            all_trades.append({
+                "id": str(t.id),
+                "side": t.side,
+                "amount": float(t.amount) if t.amount else None,
+                "price": float(t.price) if t.price else None,
+                "value_usd": float(t.cost_usd) if t.cost_usd else None,
+                "tx_signature": None,
+                "order_id": t.order_id,
+                "status": "success",
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+                "source": "trade_logs"  # CEX trades
+            })
+    except Exception as e:
+        # Table might not exist - that's OK
+        logger.debug(f"Could not query trade_logs table: {e}")
+
+    # Sort by created_at descending
+    all_trades.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    
+    # Calculate summary stats
+    total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
+    buy_count = sum(1 for t in all_trades if t.get("side", "").lower() == "buy")
+    sell_count = sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
+
+    return {
+        "bot_id": bot_id,
+        "bot_name": bot.name,
+        "bot_type": bot.bot_type,
+        "exchange": bot.exchange,
+        "trades": all_trades[:limit],
+        "total_trades": len(all_trades),
+        "total_volume_usd": round(total_volume, 2),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "last_trade_time": bot.last_trade_time.isoformat() if bot.last_trade_time else None
     }
 
 
