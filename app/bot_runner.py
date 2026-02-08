@@ -89,9 +89,39 @@ class BotRunner:
                 logger.error(f"Bot {bot_id} not found in database")
                 return
             
+            # Check if this is a CEX bot - CEX bots should NOT be handled by bot_runner
+            # They are handled by CEXBotRunner automatically
+            from sqlalchemy import text
+            exchange = None
+            chain = None
+            try:
+                bot_check = db.execute(text("""
+                    SELECT exchange, chain FROM bots WHERE id = :bot_id
+                """), {"bot_id": bot_id}).first()
+                
+                if bot_check:
+                    exchange = bot_check[0] if len(bot_check) > 0 else None
+                    chain = bot_check[1] if len(bot_check) > 1 else None
+            except Exception as sql_error:
+                logger.warning(f"Could not check exchange/chain columns: {sql_error}")
+            
+            # CEX bot check - if exchange is set and not Jupiter, it's a CEX bot
+            is_cex_bot = (
+                bot.bot_type == 'volume' and 
+                exchange and 
+                exchange.lower() not in ['jupiter', ''] and
+                chain and chain.lower() != 'solana'
+            )
+            
+            if is_cex_bot:
+                logger.error(f"❌ Bot {bot_id} is a CEX bot (exchange={exchange}) - should NOT be handled by bot_runner!")
+                logger.error(f"   CEX bots are handled by CEXBotRunner automatically.")
+                logger.error(f"   This bot should have been routed to CEX runner in bot_routes.py")
+                return  # Don't start CEX bots here - CEX runner handles them
+            
             # Determine chain (default to solana for backward compatibility)
             config = bot.config or {}
-            chain = config.get("chain", "solana")
+            chain = chain or config.get("chain", "solana")
             
             if bot.bot_type == 'volume':
                 if chain == "solana":

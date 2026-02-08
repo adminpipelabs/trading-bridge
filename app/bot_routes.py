@@ -845,12 +845,20 @@ async def start_bot(
             logger.warning(f"Could not check exchange/chain columns (may not exist yet): {sql_error}")
             # Default to None - will be treated as non-CEX bot
         
+        # CEX bot detection - check exchange field
+        # CEX exchanges: bitmart, coinstore, binance, kucoin, gateio, mexc, etc.
+        cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit']
         is_cex_bot = (
             bot.bot_type == 'volume' and 
             exchange and 
-            exchange.lower() != 'jupiter' and
-            chain != 'solana'
+            exchange.lower() not in ['jupiter', ''] and
+            exchange.lower() in cex_exchanges
         )
+        
+        # Also check chain - if chain is NOT solana and exchange is set, it's likely CEX
+        if not is_cex_bot and exchange and chain and chain.lower() != 'solana':
+            is_cex_bot = True
+            logger.info(f"Detected CEX bot: exchange={exchange}, chain={chain}")
         
         # For Solana/EVM bots, start via bot runner
         if bot.bot_type in ['volume', 'spread'] and not is_cex_bot:
