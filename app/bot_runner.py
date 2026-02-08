@@ -420,28 +420,45 @@ class BotRunner:
                 logger.error(f"Bot {bot_id} not found")
                 return
             
-            bot_check = db.execute(text("""
-                SELECT exchange, chain FROM bots WHERE id = :bot_id
-            """), {"bot_id": bot_id}).first()
-            
-            if bot_check:
-                exchange = bot_check[0] if len(bot_check) > 0 else None
-                chain = bot_check[1] if len(bot_check) > 1 else None
+            exchange_column_exists = True
+            try:
+                bot_check = db.execute(text("""
+                    SELECT exchange, chain FROM bots WHERE id = :bot_id
+                """), {"bot_id": bot_id}).first()
+                
+                if bot_check:
+                    exchange = bot_check[0] if len(bot_check) > 0 else None
+                    chain = bot_check[1] if len(bot_check) > 1 else None
+            except Exception as sql_error:
+                # Columns don't exist - use bot name fallback
+                exchange_column_exists = False
+                logger.warning(f"⚠️  exchange/chain columns don't exist (will use bot name fallback): {sql_error}")
+                db.rollback()
             
             # CEX exchanges list (expanded per dev request)
             CEX_EXCHANGES = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'gate', 'mexc', 'bybit', 'okx', 'htx', 'kraken']
             
-            # Check if this is a CEX bot
+            # Primary detection: Check if this is a CEX bot from exchange column
             is_cex_bot = (
                 exchange and 
                 exchange.lower() in CEX_EXCHANGES and
                 (not chain or chain.lower() != 'solana')
             )
             
+            # Fallback: If exchange column doesn't exist, detect from bot name
+            if not is_cex_bot and not exchange_column_exists:
+                bot_name = (bot.name or '').lower()
+                cex_keywords = ['bitmart', 'binance', 'kucoin', 'coinstore', 'gateio', 'gate', 'mexc', 'bybit', 'okx', 'htx', 'kraken']
+                is_cex_from_name = any(kw in bot_name for kw in cex_keywords)
+                
+                if is_cex_from_name:
+                    is_cex_bot = True
+                    logger.info(f"✅ Detected CEX bot from name fallback: bot_name='{bot.name}' contains CEX keyword")
+            
             if is_cex_bot:
                 logger.warning("=" * 80)
                 logger.warning(f"⚠️  CEX bot {bot_id} reached _run_volume_bot (should have been caught earlier)")
-                logger.warning(f"   Exchange: {exchange}, Chain: {chain}")
+                logger.warning(f"   Exchange: {exchange}, Chain: {chain}, Bot Name: {bot.name}")
                 logger.warning(f"   Routing to CEXVolumeBot as safety net...")
                 logger.warning("=" * 80)
                 

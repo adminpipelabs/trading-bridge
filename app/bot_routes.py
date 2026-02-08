@@ -831,6 +831,7 @@ async def start_bot(
         # Use raw SQL since exchange column may not be in SQLAlchemy model yet
         exchange = None
         chain = None
+        exchange_column_exists = True
         try:
             bot_check = db.execute(text("""
                 SELECT exchange, chain FROM bots WHERE id = :bot_id
@@ -842,17 +843,18 @@ async def start_bot(
         except Exception as sql_error:
             # Columns might not exist yet - rollback transaction and continue
             db.rollback()
-            logger.warning(f"Could not check exchange/chain columns (may not exist yet): {sql_error}")
-            # Default to None - will be treated as non-CEX bot
+            exchange_column_exists = False
+            logger.warning(f"⚠️  exchange/chain columns don't exist (will use bot name fallback): {sql_error}")
         
-        # CEX bot detection - check exchange field
+        # CEX bot detection - check exchange field OR bot name as fallback
         # CEX exchanges: bitmart, coinstore, binance, kucoin, gateio, mexc, etc.
         # IMPORTANT: Chain must NOT be 'solana' for CEX bots
-        cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit']
+        cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit', 'gate', 'htx', 'kraken']
         
         # DEBUG: Log exchange/chain detection
-        logger.info(f"🔍 CEX Detection for bot {bot_id}: bot_type={bot.bot_type}, exchange={exchange}, chain={chain}")
+        logger.info(f"🔍 CEX Detection for bot {bot_id}: bot_type={bot.bot_type}, exchange={exchange}, chain={chain}, exchange_column_exists={exchange_column_exists}")
         
+        # Primary detection: Use exchange column if available
         is_cex_bot = (
             bot.bot_type == 'volume' and 
             exchange and 
@@ -861,13 +863,22 @@ async def start_bot(
             (not chain or chain.lower() != 'solana')  # Chain must NOT be solana
         )
         
-        # Fallback: If exchange is set and chain is explicitly NOT solana, treat as CEX
-        # Only use fallback if exchange exists and chain is explicitly set to non-solana
+        # Fallback 1: If exchange is set and chain is explicitly NOT solana, treat as CEX
         if not is_cex_bot and exchange and chain and chain.lower() not in ['solana', '']:
             # Additional check: exchange should not be a known DEX
             if exchange.lower() not in ['jupiter', 'uniswap', 'pancakeswap']:
                 is_cex_bot = True
                 logger.info(f"✅ Detected CEX bot via fallback: exchange={exchange}, chain={chain}")
+        
+        # Fallback 2: If exchange column doesn't exist, detect from bot name
+        if not is_cex_bot and not exchange_column_exists:
+            bot_name = (bot.name or '').lower()
+            cex_keywords = ['bitmart', 'binance', 'kucoin', 'coinstore', 'gateio', 'gate', 'mexc', 'bybit', 'okx', 'htx', 'kraken']
+            is_cex_from_name = any(kw in bot_name for kw in cex_keywords)
+            
+            if is_cex_from_name and bot.bot_type == 'volume':
+                is_cex_bot = True
+                logger.info(f"✅ Detected CEX bot from name fallback: bot_name='{bot.name}' contains CEX keyword")
         
         logger.info(f"🔍 CEX Detection result: is_cex_bot={is_cex_bot}")
         
