@@ -28,13 +28,6 @@ try:
 except Exception as e:
     logger.warning(f"Could not get ccxt version: {e}")
 
-# Log ccxt version for debugging
-try:
-    import ccxt as ccxt_sync
-    logger.info(f"ccxt version: {ccxt_sync.__version__}")
-except Exception as e:
-    logger.warning(f"Could not get ccxt version: {e}")
-
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
 
@@ -167,7 +160,22 @@ class CEXVolumeBot:
             logger.debug(f"Exchange params keys: {list(exchange_params.keys())}")
             if "options" in exchange_params:
                 logger.debug(f"Exchange options: {exchange_params['options']}")
+            
+            # Verify we're using async ccxt
+            if not hasattr(exchange_class, '__call__'):
+                logger.error(f"Exchange class {ccxt_id} is not callable")
+                return False
+            
+            # Create exchange instance (from async_support, so it's async)
             self.exchange = exchange_class(exchange_params)
+            
+            # Verify exchange is async (has coroutine methods)
+            if not hasattr(self.exchange, 'load_markets') or not asyncio.iscoroutinefunction(self.exchange.load_markets):
+                logger.error(f"❌ Exchange {ccxt_id} is NOT async! load_markets is not a coroutine.")
+                logger.error(f"This means sync ccxt was imported instead of async_support")
+                return False
+            
+            logger.info(f"✅ Exchange instance created (async verified)")
             
             # Verify options were set correctly
             if self.exchange_name == "bitmart" and hasattr(self.exchange, 'options'):
