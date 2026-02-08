@@ -91,20 +91,40 @@ class CEXBotRunner:
                         SELECT b.*, 
                                c.api_key,
                                c.api_secret,
-                               c.memo
+                               c.memo,
+                               c.name as connector_name,
+                               cl.id as client_id,
+                               cl.account_identifier
                         FROM bots b
                         JOIN clients cl ON cl.account_identifier = b.account
-                        LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = 'bitmart'
+                        LEFT JOIN connectors c ON c.client_id = cl.id
                         WHERE b.status = 'running'
                           AND b.bot_type = 'volume'
                     """)
+                    
+                    # DEBUG: Log what we found
+                    logger.info(f"🔍 DEBUG: Found {len(all_bots)} volume bots before filtering")
+                    for bot in all_bots:
+                        logger.info(f"🔍 DEBUG: Bot {bot.get('id')} - account={bot.get('account_identifier')}, client_id={bot.get('client_id')}, connector_name={bot.get('connector_name')}, has_api_key={bool(bot.get('api_key'))}")
+                    
                     # Filter for CEX bots (name contains bitmart, binance, etc.)
                     cex_keywords = ['bitmart', 'binance', 'kucoin', 'coinstore', 'gateio', 'mexc', 'bybit', 'okx']
-                    bots = [
-                        bot for bot in all_bots 
-                        if bot.get("name") and any(kw in bot["name"].lower() for kw in cex_keywords)
-                        and bot.get("api_key") and bot.get("api_secret")  # Must have API keys
-                    ]
+                    bots = []
+                    for bot in all_bots:
+                        bot_name_lower = (bot.get("name") or "").lower()
+                        is_cex_bot = any(kw in bot_name_lower for kw in cex_keywords)
+                        has_keys = bot.get("api_key") and bot.get("api_secret")
+                        connector_name = (bot.get("connector_name") or "").lower()
+                        
+                        logger.info(f"🔍 DEBUG: Bot {bot.get('id')} - is_cex={is_cex_bot}, has_keys={has_keys}, connector_name={connector_name}")
+                        
+                        if is_cex_bot and has_keys:
+                            # Also check connector name matches
+                            if connector_name == 'bitmart' or not connector_name:
+                                bots.append(bot)
+                            else:
+                                logger.warning(f"⚠️  Bot {bot.get('id')} has connector '{connector_name}' but expected 'bitmart'")
+                    
                     logger.info(f"Found {len(bots)} CEX bots using name fallback")
             except Exception as e:
                 # If query fails completely, log and skip
