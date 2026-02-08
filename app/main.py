@@ -88,6 +88,9 @@ def setup_logging():
 setup_logging()
 logger = logging.getLogger(__name__)
 
+# Store Railway IP at startup for easy access via /railway-ip endpoint
+_railway_ip = None
+
 
 # Store Railway IP globally so it can be accessed via health endpoint
 railway_outbound_ip = None
@@ -106,19 +109,21 @@ async def lifespan(app: FastAPI):
     print("=" * 80)
     print("FETCHING RAILWAY OUTBOUND IP FOR BITMART WHITELISTING...")
     print("=" * 80)
+    global _railway_ip
     try:
         railway_outbound_ip = requests.get('https://api.ipify.org', timeout=5).text
+        _railway_ip = railway_outbound_ip  # Store globally for /railway-ip endpoint
         print("=" * 80)
         print(f"🌐 Railway outbound IP: {railway_outbound_ip}")
         print("=" * 80)
         print("⚠️  IMPORTANT: Add this IP to BitMart API key whitelist!")
-        print("=" * 80)
-        print(f"💡 You can also get this IP by calling: GET /health")
+        print(f"📡 Or visit: https://trading-bridge-production.up.railway.app/railway-ip")
         print("=" * 80)
         logger.info("=" * 80)
         logger.info(f"🌐 RAILWAY OUTBOUND IP: {railway_outbound_ip}")
         logger.info("=" * 80)
         logger.info("⚠️  IMPORTANT: Add this IP to BitMart API key whitelist!")
+        logger.info(f"📡 Or visit: https://trading-bridge-production.up.railway.app/railway-ip")
         logger.info("=" * 80)
     except Exception as e:
         print(f"❌ Could not fetch Railway IP: {e}")
@@ -443,6 +448,36 @@ async def health_check(request: Request):
         response["bitmart_whitelist_note"] = "Add this IP to BitMart API key whitelist"
     
     return response
+
+
+@app.get("/railway-ip")
+@limiter.limit("10/minute")
+async def get_railway_ip():
+    """Get Railway's outbound IP address for BitMart whitelisting."""
+    global _railway_ip
+    if _railway_ip:
+        return {
+            "railway_ip": _railway_ip,
+            "message": "Add this IP to BitMart API key whitelist",
+            "status": "success"
+        }
+    else:
+        # Try to fetch it now if not stored
+        try:
+            ip = requests.get('https://api.ipify.org', timeout=5).text
+            _railway_ip = ip
+            return {
+                "railway_ip": ip,
+                "message": "Add this IP to BitMart API key whitelist",
+                "status": "success"
+            }
+        except Exception as e:
+            return {
+                "railway_ip": None,
+                "error": str(e),
+                "status": "error",
+                "message": "Could not fetch Railway IP"
+            }
 
 
 @app.get("/health/bot-runner")
