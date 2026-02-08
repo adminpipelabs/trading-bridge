@@ -212,9 +212,25 @@ class CEXVolumeBot:
             if hasattr(self.exchange, 'secret'):
                 logger.debug(f"Exchange secret present: {bool(self.exchange.secret)}")
             if hasattr(self.exchange, 'uid'):
-                logger.debug(f"Exchange uid present: {bool(self.exchange.uid)}")
+                logger.debug(f"Exchange uid: {self.exchange.uid}")
+            if hasattr(self.exchange, 'options'):
+                logger.debug(f"Exchange options: {self.exchange.options}")
             
-            balance = await self.exchange.fetch_balance()
+            # Call fetch_balance with full error context
+            try:
+                balance = await self.exchange.fetch_balance()
+            except AttributeError as attr_err:
+                # This is the specific error we're seeing - it's coming from INSIDE ccxt
+                error_msg = str(attr_err)
+                logger.error(f"❌ AttributeError in ccxt.fetch_balance(): {error_msg}")
+                logger.error(f"Full traceback:", exc_info=True)
+                # Check if it's the .lower() error
+                if "'NoneType' object has no attribute 'lower'" in error_msg:
+                    logger.error(f"⚠️  This error is coming from INSIDE ccxt library, not our code.")
+                    logger.error(f"Exchange object state: type={type(self.exchange)}, apiKey={hasattr(self.exchange, 'apiKey')}, uid={getattr(self.exchange, 'uid', None)}")
+                    logger.error(f"This suggests ccxt bitmart is calling .lower() on a None value internally.")
+                    logger.error(f"Possible causes: missing uid parameter, or ccxt version issue")
+                raise
             
             if not balance:
                 logger.warning(f"Empty balance response from {self.exchange_name}")
