@@ -191,6 +191,12 @@ class CEXBotRunner:
                     import os
                     proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
                     
+                    # Debug logging for proxy configuration
+                    if proxy_url:
+                        logger.info(f"✅ Found proxy URL: {proxy_url.split('@')[0] if '@' in proxy_url else proxy_url[:20]}...")
+                    else:
+                        logger.warning(f"⚠️  No proxy URL found! Checked: QUOTAGUARDSTATIC_URL={bool(os.getenv('QUOTAGUARDSTATIC_URL'))}, QUOTAGUARD_PROXY_URL={bool(os.getenv('QUOTAGUARD_PROXY_URL'))}, HTTP_PROXY={bool(os.getenv('HTTP_PROXY'))}, HTTPS_PROXY={bool(os.getenv('HTTPS_PROXY'))}")
+                    
                     bot = CEXVolumeBot(
                         bot_id=bot_record["id"],
                         exchange_name=exchange_name.lower(),  # Ensure lowercase

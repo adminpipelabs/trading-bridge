@@ -61,7 +61,12 @@ class CEXVolumeBot:
         self.passphrase = passphrase
         self.memo = memo  # BitMart memo/uid
         # Check for QuotaGuard static IP proxy (dedicated IP: 3.222.129.4)
+        import os
         self.proxy_url = proxy_url or os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+        
+        # Debug logging for proxy configuration
+        if not self.proxy_url:
+            logger.warning(f"⚠️  No proxy URL configured! Checked env vars: QUOTAGUARDSTATIC_URL={bool(os.getenv('QUOTAGUARDSTATIC_URL'))}, QUOTAGUARD_PROXY_URL={bool(os.getenv('QUOTAGUARD_PROXY_URL'))}")
         
         # Default config
         self.config = {
