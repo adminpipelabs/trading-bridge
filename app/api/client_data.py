@@ -381,20 +381,21 @@ async def get_client_trades(
         bot_ids = [bot.id for bot in client_bots]
         
         if bot_ids:
-            # Query trade_logs table using parameterized query
-            placeholders = ','.join([':bot_id_' + str(i) for i in range(len(bot_ids))])
+            # Query trade_logs table using parameterized query (safe from SQL injection)
+            # Build placeholders and params
+            placeholders = ','.join([f':bot_id_{i}' for i in range(len(bot_ids))])
             params = {f'bot_id_{i}': bot_id for i, bot_id in enumerate(bot_ids)}
+            params['limit'] = limit * 2  # Get more to account for filtering
             
-            trade_logs_query = f"""
+            trade_logs_query = text(f"""
                 SELECT bot_id, side, amount, price, cost_usd, order_id, created_at
                 FROM trade_logs
                 WHERE bot_id IN ({placeholders})
                 ORDER BY created_at DESC
                 LIMIT :limit
-            """
-            params['limit'] = limit * 2  # Get more to account for filtering
+            """)
             
-            trade_logs = db.execute(text(trade_logs_query), params).fetchall()
+            trade_logs = db.execute(trade_logs_query, params).fetchall()
             
             for trade in trade_logs:
                 # Get bot info to determine trading pair
