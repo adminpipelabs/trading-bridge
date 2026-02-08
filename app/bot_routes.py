@@ -886,9 +886,22 @@ async def start_bot(
         
         # For Solana/EVM bots, start via bot runner
         if bot.bot_type in ['volume', 'spread'] and not is_cex_bot:
-            bot.status = "running"
-            bot.error = None
-            db.commit()
+            try:
+                bot.status = "running"
+                bot.error = None
+                db.commit()
+            except Exception as commit_error:
+                logger.warning(f"Failed to commit bot status (transaction may be aborted): {commit_error}")
+                try:
+                    db.rollback()
+                    bot.status = "running"
+                    bot.error = None
+                    db.commit()
+                    logger.info(f"✅ Retried and succeeded updating bot status after rollback")
+                except Exception as retry_error:
+                    logger.error(f"Failed to update bot status even after rollback: {retry_error}")
+                    db.rollback()
+                    raise
             # Start bot in background
             if bot_runner is None:
                 logger.error("bot_runner is None - cannot start Solana/EVM bot")
@@ -898,16 +911,42 @@ async def start_bot(
         elif is_cex_bot:
             # CEX bots are handled by CEX bot runner automatically
             # Just set status to running and CEX runner will pick it up
-            bot.status = "running"
-            bot.error = None
-            db.commit()
+            try:
+                bot.status = "running"
+                bot.error = None
+                db.commit()
+            except Exception as commit_error:
+                logger.warning(f"Failed to commit bot status (transaction may be aborted): {commit_error}")
+                try:
+                    db.rollback()
+                    bot.status = "running"
+                    bot.error = None
+                    db.commit()
+                    logger.info(f"✅ Retried and succeeded updating bot status after rollback")
+                except Exception as retry_error:
+                    logger.error(f"Failed to update bot status even after rollback: {retry_error}")
+                    db.rollback()
+                    raise
             logger.info(f"CEX bot {bot_id} started (will be picked up by CEX runner)")
         else:
             # Hummingbot bots (future)
             # TODO: Integrate with hummingbot_client when ready
-            bot.status = "running"
-            bot.error = None
-            db.commit()
+            try:
+                bot.status = "running"
+                bot.error = None
+                db.commit()
+            except Exception as commit_error:
+                logger.warning(f"Failed to commit bot status (transaction may be aborted): {commit_error}")
+                try:
+                    db.rollback()
+                    bot.status = "running"
+                    bot.error = None
+                    db.commit()
+                    logger.info(f"✅ Retried and succeeded updating bot status after rollback")
+                except Exception as retry_error:
+                    logger.error(f"Failed to update bot status even after rollback: {retry_error}")
+                    db.rollback()
+                    raise
             logger.info(f"Bot {bot_id} started")
         
         # Update reported_status for health monitor (using raw SQL since column may not be in model yet)
@@ -921,6 +960,11 @@ async def start_bot(
         except Exception as e:
             # Column might not exist yet if migration hasn't run - log but don't fail
             logger.warning(f"Could not update reported_status (migration may not have run): {e}")
+            # Rollback the failed UPDATE to clear aborted transaction
+            try:
+                db.rollback()
+            except Exception as rollback_error:
+                logger.debug(f"Rollback after reported_status update failed: {rollback_error}")
         
         return {"status": "started", "bot_id": bot_id}
     except Exception as e:

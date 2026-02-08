@@ -629,9 +629,13 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 logger.info(f"Updated bot {bot_id} fields: {update_fields}")
         except Exception as update_error:
             logger.warning(f"Could not update bot fields (may not exist): {update_error}")
-            # Don't fail - fields can be derived if needed
-            # CRITICAL: Don't rollback here - bot creation already committed!
-            # db.rollback()  # ← This was rolling back bot creation!
+            # CRITICAL: Rollback the failed UPDATE to clear the aborted transaction
+            # This allows subsequent commits to work
+            try:
+                db.rollback()
+            except Exception as rollback_error:
+                logger.error(f"Failed to rollback after UPDATE error: {rollback_error}")
+            # Don't fail - fields can be derived if needed, bot creation already committed earlier
 
         # Add wallet to bot_wallets table (only for DEX bots)
         if wallet_address and not is_cex:
@@ -654,8 +658,22 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         # Start the bot in background (truly non-blocking)
         # Don't wait for startup to complete - return response immediately
         logger.info(f"Scheduling bot {bot_id} to start for client {client_id} (CEX: {is_cex})")
-        bot.status = "running"
-        db.commit()
+        try:
+            bot.status = "running"
+            db.commit()
+        except Exception as status_error:
+            # If transaction was aborted, rollback first
+            logger.warning(f"Failed to update bot status (transaction may be aborted): {status_error}")
+            try:
+                db.rollback()
+                # Retry after rollback
+                bot.status = "running"
+                db.commit()
+                logger.info(f"✅ Retried and succeeded updating bot status after rollback")
+            except Exception as retry_error:
+                logger.error(f"Failed to update bot status even after rollback: {retry_error}")
+                db.rollback()
+                raise
         
         # Start bot in background task - don't await it
         # This ensures the HTTP response returns immediately
