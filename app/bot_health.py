@@ -483,7 +483,12 @@ class BotHealthMonitor:
           - If both are ~0, bot can't do anything
         """
         try:
-            balance = await exchange.fetch_balance()
+            # BitMart requires type parameter - pass it explicitly
+            connector_name = (bot.get('exchange') or bot.get('connector') or '').lower()
+            if connector_name == 'bitmart':
+                balance = await exchange.fetch_balance({'type': 'spot'})
+            else:
+                balance = await exchange.fetch_balance()
         except Exception as e:
             logger.warning(f"Could not fetch balance: {e}")
             return None

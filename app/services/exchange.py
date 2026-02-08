@@ -118,7 +118,11 @@ class Account:
         
         for connector_name, exchange in self.connectors.items():
             try:
-                balance = await exchange.fetch_balance()
+                # BitMart requires type parameter - pass it explicitly
+                if connector_name.lower() == 'bitmart':
+                    balance = await exchange.fetch_balance({'type': 'spot'})
+                else:
+                    balance = await exchange.fetch_balance()
                 
                 # Filter to non-zero balances
                 non_zero = {}

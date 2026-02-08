@@ -220,8 +220,13 @@ class CEXVolumeBot:
                 logger.debug(f"Exchange options: {self.exchange.options}")
             
             # Call fetch_balance with full error context
+            # BitMart requires type parameter - pass it explicitly to prevent NoneType.lower() error
             try:
-                balance = await self.exchange.fetch_balance()
+                if self.exchange_name == "bitmart":
+                    # Explicitly pass type='spot' to prevent ccxt calling .lower() on None
+                    balance = await self.exchange.fetch_balance({'type': 'spot'})
+                else:
+                    balance = await self.exchange.fetch_balance()
             except AttributeError as attr_err:
                 # This is the specific error we're seeing - it's coming from INSIDE ccxt
                 error_msg = str(attr_err)
