@@ -124,8 +124,11 @@ class BotHealthMonitor:
                 FROM bots b
                 LEFT JOIN clients cl ON cl.account_identifier = b.account
                 LEFT JOIN connectors c ON c.client_id = cl.id 
-                    AND (LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector)) 
-                         OR (b.exchange IS NULL AND b.connector IS NULL))
+                    AND (
+                        LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector))
+                        OR (b.exchange IS NULL AND b.connector IS NULL)
+                        OR (LOWER(b.name) LIKE '%' || LOWER(c.name) || '%')
+                    )
                 LEFT JOIN wallets w ON w.client_id = cl.id
                 WHERE b.reported_status = 'running' OR b.status = 'running'
             """)
@@ -380,7 +383,16 @@ class BotHealthMonitor:
             logger.warning(f"Could not fetch trades for bot {bot_id}: {e}")
 
         # ── Check wallet balance ──
-        balance_info = await self._check_balance(exchange, pair)
+        connector_name = (bot.get('exchange') or bot.get('connector') or '').lower()
+        # Extract from bot name if needed
+        if not connector_name:
+            bot_name_lower = (bot.get('name') or '').lower()
+            cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+            for kw in cex_keywords:
+                if kw in bot_name_lower:
+                    connector_name = kw
+                    break
+        balance_info = await self._check_balance(exchange, pair, connector_name)
 
         # ── Evaluate: trades first, then balance for diagnosis ──
         if trades:
@@ -472,7 +484,7 @@ class BotHealthMonitor:
     # Balance checking
     # ──────────────────────────────────────────────────────────
 
-    async def _check_balance(self, exchange, pair: str) -> Optional[dict]:
+    async def _check_balance(self, exchange, pair: str, connector_name: Optional[str] = None) -> Optional[dict]:
         """
         Check if the wallet has sufficient balance to trade the given pair.
         Returns balance info dict or None if check failed.
@@ -484,9 +496,11 @@ class BotHealthMonitor:
         """
         try:
             # BitMart requires type parameter - pass it explicitly
-            connector_name = (bot.get('exchange') or bot.get('connector') or '').lower()
-            if connector_name == 'bitmart':
+            if connector_name and connector_name.lower() == 'bitmart':
                 balance = await exchange.fetch_balance({'type': 'spot'})
+            elif connector_name and connector_name.lower() == 'coinstore':
+                # Coinstore uses custom adapter
+                balance = await exchange.fetch_balance()
             else:
                 balance = await exchange.fetch_balance()
         except Exception as e:
@@ -610,7 +624,30 @@ class BotHealthMonitor:
             return None
 
         # Use exchange field if available (for CEX bots), otherwise fall back to connector
+        # Also check bot name for exchange keywords (e.g., "SHARP-VB-Coinstore" → "coinstore")
         connector_name = (bot.get('exchange') or bot.get('connector') or '').lower()
+        bot_name_lower = (bot.get('name') or '').lower()
+        
+        # Extract exchange from bot name if connector_name is empty
+        if not connector_name:
+            cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+            for kw in cex_keywords:
+                if kw in bot_name_lower:
+                    connector_name = kw
+                    break
+
+        # Handle Coinstore specially (custom adapter, not in ccxt)
+        if connector_name == 'coinstore':
+            from app.coinstore_adapter import create_coinstore_exchange
+            import os
+            proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+            exchange = await create_coinstore_exchange(
+                api_key=bot['api_key'],
+                api_secret=bot['api_secret'],
+                proxy_url=proxy_url
+            )
+            self._exchange_cache[cache_key] = exchange
+            return exchange
 
         # Map connector names to ccxt exchange classes
         exchange_map = {
@@ -623,7 +660,7 @@ class BotHealthMonitor:
 
         exchange_class = exchange_map.get(connector_name)
         if not exchange_class:
-            logger.warning(f"Unknown exchange: {connector_name}")
+            logger.warning(f"Unknown exchange: {connector_name} (bot: {bot.get('name')})")
             return None
 
         config = {
