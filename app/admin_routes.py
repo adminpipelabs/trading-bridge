@@ -202,3 +202,45 @@ async def get_admin_notifications(
             return {"notifications": []}
         logger.error(f"Error fetching notifications: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error fetching notifications: {str(e)}")
+
+
+@router.get("/check-sharp-connectors")
+async def check_sharp_connectors(db: Session = Depends(get_db)):
+    """Check Sharp's BitMart connectors - diagnostic endpoint"""
+    try:
+        result = db.execute(text("""
+            SELECT 
+                c.id,
+                c.name as connector_name,
+                c.memo,
+                c.api_key IS NOT NULL as has_api_key,
+                c.api_secret IS NOT NULL as has_api_secret,
+                cl.account_identifier,
+                cl.name as client_name
+            FROM connectors c
+            LEFT JOIN clients cl ON cl.id = c.client_id
+            WHERE cl.account_identifier LIKE '%sharp%'
+               OR c.name ILIKE '%bitmart%'
+            ORDER BY c.created_at DESC
+        """))
+        rows = result.fetchall()
+        
+        connectors = []
+        for row in rows:
+            connectors.append({
+                "id": str(row[0]),
+                "name": row[1],
+                "memo": row[2],
+                "has_api_key": row[3],
+                "has_api_secret": row[4],
+                "account_identifier": row[5],
+                "client_name": row[6]
+            })
+        
+        return {
+            "found": len(connectors),
+            "connectors": connectors
+        }
+    except Exception as e:
+        logger.error(f"Error checking connectors: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
