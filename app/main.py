@@ -452,7 +452,7 @@ async def health_check(request: Request):
 
 @app.get("/railway-ip")
 @limiter.limit("10/minute")
-async def get_railway_ip():
+async def get_railway_ip(request: Request):
     """Get Railway's outbound IP address for BitMart whitelisting."""
     global _railway_ip
     if _railway_ip:
