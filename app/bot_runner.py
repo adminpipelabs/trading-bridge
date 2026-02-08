@@ -230,15 +230,196 @@ class BotRunner:
             except Exception as db_error:
                 logger.error(f"Failed to update bot status in DB: {db_error}")
     
-    async def _run_volume_bot(self, bot_id: str):
-        """Run Solana volume generation bot - ONLY for DEX bots, NOT CEX"""
-        logger.info(f"📊 Volume bot {bot_id} starting main loop...")
+    async def _run_cex_volume_bot(self, bot_id: str, db: Optional[Session] = None):
+        """Run CEX volume bot using ccxt (safety net routing)"""
+        logger.info(f"🏦 Starting CEX volume bot for {bot_id}")
         
-        # CRITICAL: Check if this is a CEX bot BEFORE initializing Jupiter
-        # CEX bots should NEVER reach this function - they're handled by CEXBotRunner
-        db = get_db_session()
+        # Use provided session or create new one
+        should_close_db = False
+        if db is None:
+            db = get_db_session()
+            should_close_db = True
+        
         try:
             from sqlalchemy import text
+            from app.cex_volume_bot import CEXVolumeBot
+            import json
+            
+            # Fetch bot with connector info (API keys)
+            bot_record = db.execute(text("""
+                SELECT b.*, 
+                       c.api_key,
+                       c.api_secret,
+                       c.memo
+                FROM bots b
+                JOIN clients cl ON cl.account_identifier = b.account
+                LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(b.exchange)
+                WHERE b.id = :bot_id
+            """), {"bot_id": bot_id}).first()
+            
+            if not bot_record:
+                logger.error(f"Bot {bot_id} not found")
+                return
+            
+            # Check if API keys exist
+            api_key = bot_record.api_key if hasattr(bot_record, 'api_key') else None
+            api_secret = bot_record.api_secret if hasattr(bot_record, 'api_secret') else None
+            
+            if not api_key or not api_secret:
+                logger.error(f"Bot {bot_id} missing API keys in connectors table")
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bot.status = "error"
+                    bot.error = "Missing API keys - add exchange connector"
+                    db.commit()
+                return
+            
+            # Build symbol
+            exchange_name = bot_record.exchange or "bitmart"
+            if hasattr(bot_record, 'base_asset') and hasattr(bot_record, 'quote_asset') and bot_record.base_asset and bot_record.quote_asset:
+                symbol = f"{bot_record.base_asset}/{bot_record.quote_asset}"
+            elif hasattr(bot_record, 'pair') and bot_record.pair:
+                symbol = bot_record.pair.replace("_", "/").replace("-", "/")
+            else:
+                logger.error(f"Bot {bot_id} missing trading pair")
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bot.status = "error"
+                    bot.error = "Missing trading pair - set base_asset and quote_asset"
+                    db.commit()
+                return
+            
+            # Parse config
+            config = {}
+            if hasattr(bot_record, 'config') and bot_record.config:
+                if isinstance(bot_record.config, str):
+                    config = json.loads(bot_record.config)
+                else:
+                    config = bot_record.config
+            
+            # Create CEX bot instance
+            cex_bot = CEXVolumeBot(
+                bot_id=bot_id,
+                exchange_name=exchange_name,
+                symbol=symbol,
+                api_key=api_key,
+                api_secret=api_secret,
+                passphrase=None,
+                memo=bot_record.memo if hasattr(bot_record, 'memo') else None,
+                config=config,
+            )
+            
+            # Initialize exchange connection
+            if not await cex_bot.initialize():
+                logger.error(f"Failed to initialize CEX bot {bot_id}")
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bot.status = "error"
+                    bot.error = "Failed to initialize exchange connection"
+                    db.commit()
+                return
+            
+            logger.info(f"✅ CEX Volume Bot initialized for {symbol} on {exchange_name}")
+            logger.info(f"🔄 Starting trade cycle...")
+            
+            # Run bot in loop
+            while not self.shutdown_event.is_set():
+                try:
+                    # Check if bot is still running
+                    db_check = get_db_session()
+                    try:
+                        bot = db_check.query(Bot).filter(Bot.id == bot_id).first()
+                        if not bot or bot.status != "running":
+                            logger.info(f"Bot {bot_id} stopped - exiting CEX bot loop")
+                            break
+                    finally:
+                        db_check.close()
+                    
+                    # Run single trade cycle
+                    result = await cex_bot.run_single_cycle()
+                    
+                    if result:
+                        logger.info(f"Bot {bot_id} trade: {result['side']} ${result['cost_usd']:.2f}")
+                        
+                        # Update database
+                        db_update = get_db_session()
+                        try:
+                            from datetime import timezone
+                            db_update.execute(text("""
+                                UPDATE bots SET 
+                                    last_trade_time = :now,
+                                    health_status = 'healthy',
+                                    health_message = :message,
+                                    status_updated_at = :now
+                                WHERE id = :bot_id
+                            """), {
+                                "now": datetime.now(timezone.utc),
+                                "message": f"Trade executed: {result['side']} ${result['cost_usd']:.2f} | Daily: ${result['daily_volume_total']:.2f}/{result['daily_target']}",
+                                "bot_id": bot_id
+                            })
+                            db_update.commit()
+                        except Exception as db_err:
+                            logger.warning(f"Could not update bot status: {db_err}")
+                        finally:
+                            db_update.close()
+                    else:
+                        # Check if daily target reached
+                        if not cex_bot.should_continue():
+                            logger.info(f"Bot {bot_id} daily target reached")
+                            break
+                    
+                    # Wait for next interval
+                    interval = cex_bot.get_next_interval()
+                    await asyncio.sleep(interval)
+                    
+                except asyncio.CancelledError:
+                    logger.info(f"CEX bot {bot_id} cancelled")
+                    break
+                except Exception as e:
+                    logger.error(f"❌ Error in CEX bot {bot_id} loop: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    await asyncio.sleep(60)  # Wait before retrying
+            
+            # Cleanup
+            await cex_bot.close()
+            logger.info(f"CEX bot {bot_id} stopped")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start CEX bot {bot_id}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            # Update bot status
+            try:
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bot.status = "error"
+                    bot.error = f"CEX bot error: {str(e)[:200]}"
+                    db.commit()
+            except:
+                pass
+        finally:
+            if should_close_db:
+                db.close()
+    
+    async def _run_volume_bot(self, bot_id: str):
+        """Route volume bot to correct runner based on exchange type (CEX vs DEX)"""
+        logger.info(f"📊 Volume bot {bot_id} starting...")
+        
+        # CRITICAL: Check if this is a CEX bot BEFORE initializing Jupiter
+        # Route CEX bots to CEXVolumeBot, DEX bots to Jupiter
+        db = get_db_session()
+        exchange = None
+        chain = None
+        bot = None
+        
+        try:
+            from sqlalchemy import text
+            bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            if not bot:
+                logger.error(f"Bot {bot_id} not found")
+                return
+            
             bot_check = db.execute(text("""
                 SELECT exchange, chain FROM bots WHERE id = :bot_id
             """), {"bot_id": bot_id}).first()
@@ -246,33 +427,31 @@ class BotRunner:
             if bot_check:
                 exchange = bot_check[0] if len(bot_check) > 0 else None
                 chain = bot_check[1] if len(bot_check) > 1 else None
+            
+            # CEX exchanges list (expanded per dev request)
+            CEX_EXCHANGES = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'gate', 'mexc', 'bybit', 'okx', 'htx', 'kraken']
+            
+            # Check if this is a CEX bot
+            is_cex_bot = (
+                exchange and 
+                exchange.lower() in CEX_EXCHANGES and
+                (not chain or chain.lower() != 'solana')
+            )
+            
+            if is_cex_bot:
+                logger.warning("=" * 80)
+                logger.warning(f"⚠️  CEX bot {bot_id} reached _run_volume_bot (should have been caught earlier)")
+                logger.warning(f"   Exchange: {exchange}, Chain: {chain}")
+                logger.warning(f"   Routing to CEXVolumeBot as safety net...")
+                logger.warning("=" * 80)
                 
-                # CEX exchanges list
-                CEX_EXCHANGES = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
-                
-                # Check if this is a CEX bot
-                is_cex_bot = (
-                    exchange and 
-                    exchange.lower() in CEX_EXCHANGES and
-                    (not chain or chain.lower() != 'solana')
-                )
-                
-                if is_cex_bot:
-                    logger.error("=" * 80)
-                    logger.error(f"❌ CRITICAL ERROR: CEX bot {bot_id} reached _run_volume_bot!")
-                    logger.error(f"   Exchange: {exchange}, Chain: {chain}")
-                    logger.error(f"   CEX bots should be handled by CEXBotRunner, NOT bot_runner")
-                    logger.error(f"   This bot should have been detected in bot_routes.py or start_bot()")
-                    logger.error("=" * 80)
-                    # Stop the bot - don't try to use Jupiter
-                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                    if bot:
-                        bot.status = "error"
-                        bot.error = f"Routing error: CEX bot incorrectly routed to Jupiter runner"
-                        db.commit()
-                    return  # Exit - don't initialize Jupiter
+                # Route to CEX volume bot
+                await self._run_cex_volume_bot(bot_id, db)
+                return  # Exit - don't initialize Jupiter
         except Exception as check_error:
-            logger.warning(f"Could not check exchange/chain for bot {bot_id}: {check_error}")
+            logger.error(f"Error checking exchange/chain for bot {bot_id}: {check_error}")
+            import traceback
+            logger.error(traceback.format_exc())
         finally:
             db.close()
         
