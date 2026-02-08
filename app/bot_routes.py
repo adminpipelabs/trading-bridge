@@ -893,9 +893,19 @@ async def start_bot(
         return {"status": "started", "bot_id": bot_id}
     except Exception as e:
         logger.error(f"Failed to start bot {bot_id}: {e}")
-        bot.status = "error"
-        bot.error = str(e)
-        db.commit()
+        logger.exception(e)  # Log full traceback
+        # Rollback database session if transaction failed
+        try:
+            db.rollback()
+        except Exception as rollback_error:
+            logger.error(f"Failed to rollback database session: {rollback_error}")
+        # Try to update bot status, but don't fail if session is broken
+        try:
+            bot.status = "error"
+            bot.error = str(e)
+            db.commit()
+        except Exception as commit_error:
+            logger.error(f"Failed to update bot error status: {commit_error}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -959,6 +969,12 @@ async def stop_bot(
         return {"status": "stopped", "bot_id": bot_id}
     except Exception as e:
         logger.error(f"Failed to stop bot {bot_id}: {e}")
+        logger.exception(e)  # Log full traceback
+        # Rollback database session if transaction failed
+        try:
+            db.rollback()
+        except Exception as rollback_error:
+            logger.error(f"Failed to rollback database session: {rollback_error}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
