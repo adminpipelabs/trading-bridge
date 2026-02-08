@@ -216,6 +216,9 @@ class CEXBotRunner:
                     
                     if result:
                         # Update database
+                        # Convert timezone-aware datetime to naive UTC for PostgreSQL
+                        now_utc = datetime.now(timezone.utc)
+                        now_naive = now_utc.replace(tzinfo=None)
                         await conn.execute("""
                             UPDATE bots SET 
                                 last_trade_time = $1,
@@ -224,7 +227,7 @@ class CEXBotRunner:
                                 status_updated_at = $1
                             WHERE id = $3
                         """, 
-                            datetime.now(timezone.utc),
+                            now_naive,
                             f"Trade executed: {result['side']} ${result['cost_usd']:.2f} | Daily: ${result['daily_volume_total']:.2f}/{result['daily_target']}",
                             bot_id
                         )
@@ -237,7 +240,7 @@ class CEXBotRunner:
                             """,
                                 bot_id, result["side"], result["amount"],
                                 result["price"], result["cost_usd"], result.get("order_id"),
-                                datetime.now(timezone.utc)
+                                now_naive
                             )
                         except Exception as e:
                             # Table might not exist yet - log but don't fail
@@ -246,6 +249,9 @@ class CEXBotRunner:
                         logger.info(f"Bot {bot_id} trade: {result['side']} ${result['cost_usd']:.2f}")
                     else:
                         # Check if daily target reached
+                        # Convert timezone-aware datetime to naive UTC for PostgreSQL
+                        now_utc = datetime.now(timezone.utc)
+                        now_naive = now_utc.replace(tzinfo=None)
                         if not bot.should_continue():
                             await conn.execute("""
                                 UPDATE bots SET 
@@ -253,7 +259,7 @@ class CEXBotRunner:
                                     health_message = 'Daily volume target reached',
                                     status_updated_at = $1
                                 WHERE id = $2
-                            """, datetime.now(timezone.utc), bot_id)
+                            """, now_naive, bot_id)
                         else:
                             await conn.execute("""
                                 UPDATE bots SET 
@@ -261,7 +267,7 @@ class CEXBotRunner:
                                     health_message = 'Trade skipped — check balance',
                                     status_updated_at = $1
                                 WHERE id = $2
-                            """, datetime.now(timezone.utc), bot_id)
+                            """, now_naive, bot_id)
             
             # Clean up stopped bots
             stopped_ids = set(self.active_bots.keys()) - active_bot_ids

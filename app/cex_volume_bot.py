@@ -44,6 +44,9 @@ class CEXVolumeBot:
         proxy_url: Optional[str] = None,
     ):
         self.bot_id = bot_id
+        # Ensure exchange_name is never None
+        if not exchange_name or not isinstance(exchange_name, str):
+            exchange_name = "bitmart"
         self.exchange_name = exchange_name.lower()
         self.symbol = symbol
         self.api_key = api_key
