@@ -66,24 +66,51 @@ class CEXBotRunner:
         async with self.db_pool.acquire() as conn:
             # Get all running CEX volume bots
             # Use connectors table (where BitMart API keys are stored)
+            # NOTE: exchange column may not exist, so detect CEX from bot name as fallback
             try:
-                bots = await conn.fetch("""
-                    SELECT b.*, 
-                           c.api_key,
-                           c.api_secret,
-                           c.memo
-                    FROM bots b
-                    JOIN clients cl ON cl.account_identifier = b.account
-                    JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(b.exchange)
-                    WHERE b.status = 'running'
-                      AND b.bot_type = 'volume'
-                      AND b.exchange IS NOT NULL
-                      AND b.exchange != 'jupiter'
-                      AND (b.chain IS NULL OR b.chain != 'solana')
-                """)
+                # Try query with exchange column first
+                try:
+                    bots = await conn.fetch("""
+                        SELECT b.*, 
+                               c.api_key,
+                               c.api_secret,
+                               c.memo
+                        FROM bots b
+                        JOIN clients cl ON cl.account_identifier = b.account
+                        JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.exchange, 'bitmart'))
+                        WHERE b.status = 'running'
+                          AND b.bot_type = 'volume'
+                          AND (b.exchange IS NULL OR (b.exchange IS NOT NULL AND b.exchange != 'jupiter'))
+                          AND (b.chain IS NULL OR b.chain != 'solana')
+                    """)
+                except Exception as exchange_col_error:
+                    # Exchange column doesn't exist - use bot name fallback
+                    logger.warning(f"exchange column doesn't exist, using bot name fallback: {exchange_col_error}")
+                    # Get all volume bots and filter by name
+                    all_bots = await conn.fetch("""
+                        SELECT b.*, 
+                               c.api_key,
+                               c.api_secret,
+                               c.memo
+                        FROM bots b
+                        JOIN clients cl ON cl.account_identifier = b.account
+                        LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = 'bitmart'
+                        WHERE b.status = 'running'
+                          AND b.bot_type = 'volume'
+                    """)
+                    # Filter for CEX bots (name contains bitmart, binance, etc.)
+                    cex_keywords = ['bitmart', 'binance', 'kucoin', 'coinstore', 'gateio', 'mexc', 'bybit', 'okx']
+                    bots = [
+                        bot for bot in all_bots 
+                        if bot.get("name") and any(kw in bot["name"].lower() for kw in cex_keywords)
+                        and bot.get("api_key") and bot.get("api_secret")  # Must have API keys
+                    ]
+                    logger.info(f"Found {len(bots)} CEX bots using name fallback")
             except Exception as e:
-                # If query fails, log and skip
-                logger.debug(f"Could not fetch CEX bots: {e}")
+                # If query fails completely, log and skip
+                logger.error(f"❌ Could not fetch CEX bots: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return
             
             active_bot_ids = set()
