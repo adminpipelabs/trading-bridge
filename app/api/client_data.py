@@ -19,6 +19,10 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
     """
     Load connectors from database into exchange_manager for an account.
     This ensures exchange_manager has the API keys needed to query exchanges.
+    
+    Checks BOTH tables:
+    1. `connectors` table (plaintext) - preferred
+    2. `exchange_credentials` table (encrypted) - fallback if connectors empty
     """
     logger.info(f"🔄 Syncing connectors for account: {account_identifier}")
     
@@ -36,17 +40,71 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
     # Get or create account in exchange_manager
     account = exchange_manager.get_or_create_account(account_identifier)
     
-    # Load connectors from database
+    # Load connectors from database (plaintext table)
     connectors = db.query(Connector).filter(
         Connector.client_id == client.id
     ).all()
     
+    # If no connectors in plaintext table, check encrypted exchange_credentials table
     if not connectors:
+        logger.info(f"⚠️  No connectors in 'connectors' table, checking 'exchange_credentials' table...")
+        from sqlalchemy import text
+        from app.cex_volume_bot import decrypt_credential
+        
+        try:
+            # Query exchange_credentials table (encrypted)
+            creds_result = db.execute(text("""
+                SELECT exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+                FROM exchange_credentials
+                WHERE client_id = :client_id
+            """), {"client_id": client.id}).fetchall()
+            
+            if creds_result:
+                logger.info(f"✅ Found {len(creds_result)} credential(s) in 'exchange_credentials' table")
+                # Decrypt and add to exchange_manager
+                for cred_row in creds_result:
+                    exchange_name = cred_row.exchange
+                    try:
+                        api_key = decrypt_credential(cred_row.api_key_encrypted)
+                        api_secret = decrypt_credential(cred_row.api_secret_encrypted)
+                        memo = None
+                        if cred_row.passphrase_encrypted:
+                            memo = decrypt_credential(cred_row.passphrase_encrypted)
+                        
+                        # Skip if already loaded
+                        if exchange_name.lower() in account.connectors:
+                            logger.debug(f"⏭️  Connector {exchange_name} already loaded")
+                            continue
+                        
+                        await account.add_connector(
+                            connector_name=exchange_name,
+                            api_key=api_key,
+                            api_secret=api_secret,
+                            memo=memo
+                        )
+                        logger.info(f"✅ Synced connector {exchange_name} from exchange_credentials to exchange_manager")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to decrypt/sync credential for {exchange_name}: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
+                        continue
+                
+                # Check if we successfully synced any
+                if len(account.connectors) > 0:
+                    logger.info(f"✅ Successfully synced {len(account.connectors)} connector(s) from exchange_credentials")
+                    return True
+            else:
+                logger.error(f"❌ No credentials found in 'exchange_credentials' table either")
+        except Exception as e:
+            logger.error(f"❌ Failed to query exchange_credentials table: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
         logger.error(f"❌ No connectors found for account: {account_identifier} (client_id: {client.id})")
         logger.error(f"   Client needs to add API keys via admin dashboard")
         return False
     
-    logger.info(f"✅ Found {len(connectors)} connector(s) for {account_identifier}")
+    logger.info(f"✅ Found {len(connectors)} connector(s) in 'connectors' table for {account_identifier}")
     
     # Add each connector to exchange_manager
     synced_count = 0
@@ -167,8 +225,14 @@ async def get_client_portfolio(
                     if isinstance(balance_data, dict):
                         total = balance_data.get("total", 0)
                         free = balance_data.get("free", 0)
-                        # Calculate USD value (USDT = 1:1, others = 0 for now)
-                        usd_value = total if asset == "USDT" else 0
+                        
+                        # Only include tokens with non-zero balance
+                        if total <= 0 and free <= 0:
+                            continue
+                        
+                        # Calculate USD value (USDT/USDC = 1:1, others = 0 for now)
+                        # Frontend can fetch prices for other tokens if needed
+                        usd_value = total if asset in ["USDT", "USDC"] else 0
                         total_usd += usd_value
                         
                         balances_array.append({
@@ -179,7 +243,7 @@ async def get_client_portfolio(
                             "used": balance_data.get("used", 0),
                             "usd_value": usd_value
                         })
-                        logger.info(f"  💰 {exchange_name} {asset}: {total} (free: {free})")
+                        logger.info(f"  💰 {exchange_name} {asset}: {total} (free: {free}, USD: ${usd_value:.2f})")
         
         if not balances_array:
             logger.warning(f"⚠️  No balances found for {account_identifier}")
