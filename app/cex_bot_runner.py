@@ -119,11 +119,24 @@ class CEXBotRunner:
                         logger.info(f"🔍 DEBUG: Bot {bot.get('id')} - is_cex={is_cex_bot}, has_keys={has_keys}, connector_name={connector_name}")
                         
                         if is_cex_bot and has_keys:
-                            # Also check connector name matches
-                            if connector_name == 'bitmart' or not connector_name:
+                            # Check connector name matches expected exchange
+                            # Extract expected exchange from bot name or use connector name
+                            expected_exchange = None
+                            for kw in cex_keywords:
+                                if kw in bot_name_lower:
+                                    expected_exchange = kw
+                                    break
+                            
+                            # Accept if connector matches expected exchange, or if no connector name (will use bot name)
+                            if not connector_name or connector_name == expected_exchange or expected_exchange in connector_name:
                                 bots.append(bot)
+                                logger.info(f"✅ Added bot {bot.get('id')} - connector '{connector_name}' matches exchange '{expected_exchange}'")
                             else:
-                                logger.warning(f"⚠️  Bot {bot.get('id')} has connector '{connector_name}' but expected 'bitmart'")
+                                logger.warning(f"⚠️  Bot {bot.get('id')} has connector '{connector_name}' but expected '{expected_exchange}' - checking if connector exists...")
+                                # Still add if it's a valid CEX connector (might be in exchange_credentials instead)
+                                if connector_name in cex_keywords:
+                                    bots.append(bot)
+                                    logger.info(f"✅ Added bot {bot.get('id')} - connector '{connector_name}' is valid CEX exchange")
                     
                     logger.info(f"Found {len(bots)} CEX bots using name fallback")
             except Exception as e:
@@ -182,9 +195,19 @@ class CEXBotRunner:
                         config = json.loads(config)
                     
                     # Ensure exchange_name is never None
-                    exchange_name = bot_record.get("exchange") or bot_record.get("connector") or "bitmart"
+                    # Try to detect from bot name if exchange column doesn't exist
+                    exchange_name = bot_record.get("exchange") or bot_record.get("connector")
                     if not exchange_name or not isinstance(exchange_name, str):
-                        exchange_name = "bitmart"
+                        # Fallback: detect from bot name
+                        bot_name_lower = (bot_record.get("name") or "").lower()
+                        cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+                        exchange_name = "bitmart"  # default
+                        for kw in cex_keywords:
+                            if kw in bot_name_lower:
+                                exchange_name = kw
+                                break
+                    
+                    exchange_name = exchange_name.lower()
                     
                     # Proxy URL is read from environment (QUOTAGUARDSTATIC_URL) for IP whitelisting
                     # Uses dedicated IP 3.222.129.4 via QuotaGuard

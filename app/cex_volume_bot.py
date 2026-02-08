@@ -231,16 +231,11 @@ class CEXVolumeBot:
             # Add proxy if configured (for QuotaGuard static IP - dedicated IP: 3.222.129.4)
             # ccxt async uses aiohttp, which requires 'aiohttp_proxy' parameter (not 'proxies' dict)
             if self.proxy_url:
-                # Use aiohttp_proxy for ccxt async (aiohttp-specific parameter)
+                # Use ONLY aiohttp_proxy for ccxt async (aiohttp-specific parameter)
+                # This is the correct way for ccxt.async_support
                 exchange_params["aiohttp_proxy"] = self.proxy_url
-                # Also try 'proxy' and 'proxies' for backward compatibility
-                exchange_params["proxy"] = self.proxy_url
-                exchange_params["proxies"] = {
-                    "http": self.proxy_url,
-                    "https": self.proxy_url,
-                }
                 logger.info(f"✅ Using QuotaGuard proxy for {self.exchange_name} (dedicated IP: 3.222.129.4)")
-                logger.info(f"✅ Proxy configured (aiohttp_proxy, proxy, and proxies): {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]}...")
+                logger.info(f"✅ Proxy configured (aiohttp_proxy): {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]}...")
             else:
                 logger.error(f"❌ CRITICAL: No proxy URL set for {self.exchange_name}! BitMart will reject requests.")
                 logger.error(f"❌ Check Railway env vars: QUOTAGUARDSTATIC_URL or QUOTAGUARD_PROXY_URL must be set!")
