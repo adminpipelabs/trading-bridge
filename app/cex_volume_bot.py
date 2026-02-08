@@ -117,11 +117,18 @@ class CEXVolumeBot:
                 exchange_params["password"] = self.passphrase
             
             # BitMart uses memo/uid if provided (optional - not all BitMart accounts need it)
-            if self.exchange_name == "bitmart" and self.memo:
-                exchange_params["uid"] = self.memo
-                logger.info(f"BitMart UID set: {self.memo[:4]}...")
-            elif self.exchange_name == "bitmart" and not self.memo:
-                logger.debug(f"BitMart memo/UID not provided - using API keys only")
+            # Note: BitMart requires uid parameter, but it might be causing issues
+            if self.exchange_name == "bitmart":
+                if self.memo:
+                    # Ensure memo is a string and not empty
+                    memo_str = str(self.memo).strip() if self.memo else None
+                    if memo_str:
+                        exchange_params["uid"] = memo_str
+                        logger.info(f"BitMart UID set: {memo_str[:4]}...")
+                    else:
+                        logger.warning(f"⚠️  BitMart memo is empty or invalid: {self.memo}")
+                else:
+                    logger.debug(f"BitMart memo/UID not provided - using API keys only")
             
             # Add proxy if configured (for QuotaGuard static IP)
             if self.proxy_url:
