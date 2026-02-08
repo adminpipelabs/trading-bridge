@@ -21,6 +21,13 @@ from app.cex_exchanges import get_exchange_config, EXCHANGE_CONFIGS
 
 logger = logging.getLogger("cex_volume_bot")
 
+# Log ccxt version at module load
+try:
+    import ccxt
+    logger.info(f"ccxt version: {ccxt.__version__}")
+except Exception as e:
+    logger.warning(f"Could not get ccxt version: {e}")
+
 # Log ccxt version for debugging
 try:
     import ccxt as ccxt_sync
@@ -257,8 +264,10 @@ class CEXVolumeBot:
                 error_msg = str(attr_err)
                 logger.error(f"❌ AttributeError in ccxt error handler: {error_msg}")
                 logger.error(f"This means BitMart API returned an error, but error message was None")
-                logger.error(f"Likely causes: Authentication failure, IP not whitelisted, or API key invalid")
-                logger.error(f"Exchange config: apiKey present={bool(self.api_key)}, uid={self.memo}, options={getattr(self.exchange, 'options', {})}")
+                
+                # Log ccxt version
+                import ccxt
+                logger.error(f"🔍 ccxt version: {ccxt.__version__}")
                 
                 # Log actual BitMart response body
                 if hasattr(self.exchange, 'last_http_response'):
@@ -272,21 +281,28 @@ class CEXVolumeBot:
                 if hasattr(self.exchange, 'last_response'):
                     logger.error(f"🔍 BitMart last_response: {self.exchange.last_response}")
                 
-                # Try to get response from exception if available
-                if hasattr(attr_err, '__cause__') and attr_err.__cause__:
-                    logger.error(f"🔍 Exception cause: {attr_err.__cause__}")
-                if hasattr(attr_err, '__context__') and attr_err.__context__:
-                    logger.error(f"🔍 Exception context: {attr_err.__context__}")
-                
+                logger.error(f"Exchange config: apiKey present={bool(self.api_key)}, uid={self.memo}, options={getattr(self.exchange, 'options', {})}")
                 raise
             except Exception as e:
                 # Catch any other API errors
                 error_msg = str(e)
                 logger.error(f"❌ Error fetching balance from {self.exchange_name}: {error_msg}")
                 
+                # Log ccxt version
+                import ccxt
+                logger.error(f"🔍 ccxt version: {ccxt.__version__}")
+                
                 # Log actual BitMart response body for any exception
                 if self.exchange_name == "bitmart":
                     if hasattr(self.exchange, 'last_http_response'):
+                        logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
+                    if hasattr(self.exchange, 'last_json_response'):
+                        logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
+                    if hasattr(self.exchange, 'last_response_body'):
+                        logger.error(f"🔍 BitMart response body: {self.exchange.last_response_body}")
+                
+                logger.error(f"Full traceback:", exc_info=True)
+                raise
                         logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
                     if hasattr(self.exchange, 'last_json_response'):
                         logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
@@ -433,10 +449,16 @@ class CEXVolumeBot:
         try:
             logger.info(f"Executing {side} {amount} {self.symbol}")
             
+            # BitMart requires type parameter for orders too
+            order_params = {}
+            if self.exchange_name == "bitmart":
+                order_params['type'] = 'spot'
+            
             order = await self.exchange.create_market_order(
                 symbol=self.symbol,
                 side=side,
                 amount=amount,
+                params=order_params,
             )
             
             # Extract fill info
