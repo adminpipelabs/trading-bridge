@@ -506,12 +506,28 @@ async def get_client_trades(
     # Apply limit
     all_trades = all_trades[:limit]
     
+    # Format timestamps for better readability (add human-readable date)
+    for trade in all_trades:
+        timestamp = trade.get("timestamp", 0)
+        if timestamp:
+            try:
+                dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+                trade["date"] = dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+                trade["date_short"] = dt.strftime("%m/%d %H:%M")
+            except:
+                trade["date"] = None
+                trade["date_short"] = None
+    
     logger.info(f"✅ Returning {len(all_trades)} total trade(s) for {account_identifier}")
     
+    # Return format that frontend expects - array of trades with summary
     return {
         "account": account_identifier,
         "trades": all_trades,
-        "count": len(all_trades)
+        "count": len(all_trades),
+        "total_volume_usd": round(sum(float(t.get("cost", 0)) for t in all_trades), 2),
+        "buy_count": sum(1 for t in all_trades if t.get("side", "").lower() == "buy"),
+        "sell_count": sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
     }
 
 
