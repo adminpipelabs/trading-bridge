@@ -27,10 +27,8 @@ class CoinstoreConnector:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
         if self.session is None or self.session.closed:
-            connector_kwargs = {}
-            if self.proxy_url:
-                connector_kwargs['proxy'] = self.proxy_url
-            self.session = aiohttp.ClientSession(connector_kwargs=connector_kwargs)
+            # Proxy is passed per-request, not at session level
+            self.session = aiohttp.ClientSession()
         return self.session
     
     async def close(self):
@@ -76,11 +74,16 @@ class CoinstoreConnector:
             headers['X-API-KEY'] = self.api_key
         
         try:
+            # Pass proxy per-request if configured
+            request_kwargs = {'headers': headers}
+            if self.proxy_url:
+                request_kwargs['proxy'] = self.proxy_url
+            
             if method.upper() == 'GET':
-                async with session.get(url, params=params, headers=headers) as response:
+                async with session.get(url, params=params, **request_kwargs) as response:
                     return await response.json()
             elif method.upper() == 'POST':
-                async with session.post(url, json=params, headers=headers) as response:
+                async with session.post(url, json=params, **request_kwargs) as response:
                     return await response.json()
             else:
                 raise ValueError(f"Unsupported method: {method}")

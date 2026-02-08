@@ -549,6 +549,8 @@ class CEXVolumeBot:
         # Round to appropriate precision
         market = self.exchange.markets.get(self.symbol, {})
         precision = market.get("precision", {}).get("amount", 8)
+        # Ensure precision is an integer (ccxt may return float or Decimal)
+        precision = int(float(precision))
         base_amount = float(Decimal(str(base_amount)).quantize(
             Decimal(10) ** -precision, rounding=ROUND_DOWN
         ))
