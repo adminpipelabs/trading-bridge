@@ -231,10 +231,52 @@ class BotRunner:
                 logger.error(f"Failed to update bot status in DB: {db_error}")
     
     async def _run_volume_bot(self, bot_id: str):
-        """Run Solana volume generation bot"""
+        """Run Solana volume generation bot - ONLY for DEX bots, NOT CEX"""
         logger.info(f"📊 Volume bot {bot_id} starting main loop...")
         
-        # Create Jupiter client and signer for this bot
+        # CRITICAL: Check if this is a CEX bot BEFORE initializing Jupiter
+        # CEX bots should NEVER reach this function - they're handled by CEXBotRunner
+        db = get_db_session()
+        try:
+            from sqlalchemy import text
+            bot_check = db.execute(text("""
+                SELECT exchange, chain FROM bots WHERE id = :bot_id
+            """), {"bot_id": bot_id}).first()
+            
+            if bot_check:
+                exchange = bot_check[0] if len(bot_check) > 0 else None
+                chain = bot_check[1] if len(bot_check) > 1 else None
+                
+                # CEX exchanges list
+                CEX_EXCHANGES = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+                
+                # Check if this is a CEX bot
+                is_cex_bot = (
+                    exchange and 
+                    exchange.lower() in CEX_EXCHANGES and
+                    (not chain or chain.lower() != 'solana')
+                )
+                
+                if is_cex_bot:
+                    logger.error("=" * 80)
+                    logger.error(f"❌ CRITICAL ERROR: CEX bot {bot_id} reached _run_volume_bot!")
+                    logger.error(f"   Exchange: {exchange}, Chain: {chain}")
+                    logger.error(f"   CEX bots should be handled by CEXBotRunner, NOT bot_runner")
+                    logger.error(f"   This bot should have been detected in bot_routes.py or start_bot()")
+                    logger.error("=" * 80)
+                    # Stop the bot - don't try to use Jupiter
+                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                    if bot:
+                        bot.status = "error"
+                        bot.error = f"Routing error: CEX bot incorrectly routed to Jupiter runner"
+                        db.commit()
+                    return  # Exit - don't initialize Jupiter
+        except Exception as check_error:
+            logger.warning(f"Could not check exchange/chain for bot {bot_id}: {check_error}")
+        finally:
+            db.close()
+        
+        # Create Jupiter client and signer for this bot (only for DEX bots)
         import os
         rpc_url = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
         logger.info(f"  Initializing Jupiter client with RPC: {rpc_url}")
