@@ -217,13 +217,16 @@ class CEXVolumeBot:
                     logger.warning(f"🔍 DEBUG: ⚠️  Proxy URL doesn't contain '@' - may be missing auth credentials")
             
             # Add proxy if configured (for QuotaGuard static IP - dedicated IP: 3.222.129.4)
+            # ccxt async supports both 'proxy' (single string) and 'proxies' (dict) formats
             if self.proxy_url:
+                # Try both formats for maximum compatibility
+                exchange_params["proxy"] = self.proxy_url  # Single string format (preferred by some ccxt versions)
                 exchange_params["proxies"] = {
                     "http": self.proxy_url,
                     "https": self.proxy_url,
                 }
                 logger.info(f"✅ Using QuotaGuard proxy for {self.exchange_name} (dedicated IP: 3.222.129.4)")
-                logger.info(f"✅ Proxy configured: {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]}...")
+                logger.info(f"✅ Proxy configured (both 'proxy' and 'proxies'): {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]}...")
             else:
                 logger.error(f"❌ CRITICAL: No proxy URL set for {self.exchange_name}! BitMart will reject requests.")
                 logger.error(f"❌ Check Railway env vars: QUOTAGUARDSTATIC_URL or QUOTAGUARD_PROXY_URL must be set!")
