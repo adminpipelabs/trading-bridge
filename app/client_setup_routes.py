@@ -659,6 +659,11 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         # Don't wait for startup to complete - return response immediately
         logger.info(f"Scheduling bot {bot_id} to start for client {client_id} (CEX: {is_cex})")
         try:
+            # Re-query bot to ensure it's attached to the session (after previous commits)
+            bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            if not bot:
+                raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
+            
             bot.status = "running"
             db.commit()
         except Exception as status_error:
@@ -666,10 +671,14 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
             logger.warning(f"Failed to update bot status (transaction may be aborted): {status_error}")
             try:
                 db.rollback()
-                # Retry after rollback
-                bot.status = "running"
-                db.commit()
-                logger.info(f"✅ Retried and succeeded updating bot status after rollback")
+                # Re-query bot after rollback
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bot.status = "running"
+                    db.commit()
+                    logger.info(f"✅ Retried and succeeded updating bot status after rollback")
+                else:
+                    raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found after rollback")
             except Exception as retry_error:
                 logger.error(f"Failed to update bot status even after rollback: {retry_error}")
                 db.rollback()
