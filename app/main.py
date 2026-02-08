@@ -89,9 +89,14 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+# Store Railway IP globally so it can be accessed via health endpoint
+railway_outbound_ip = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database tables on startup - FAIL FAST if database init fails."""
+    global railway_outbound_ip
+    
     logger.info("=" * 80)
     logger.info("STARTING DATABASE INITIALIZATION")
     logger.info("=" * 80)
@@ -102,14 +107,16 @@ async def lifespan(app: FastAPI):
     print("FETCHING RAILWAY OUTBOUND IP FOR BITMART WHITELISTING...")
     print("=" * 80)
     try:
-        ip = requests.get('https://api.ipify.org', timeout=5).text
+        railway_outbound_ip = requests.get('https://api.ipify.org', timeout=5).text
         print("=" * 80)
-        print(f"🌐 Railway outbound IP: {ip}")
+        print(f"🌐 Railway outbound IP: {railway_outbound_ip}")
         print("=" * 80)
         print("⚠️  IMPORTANT: Add this IP to BitMart API key whitelist!")
         print("=" * 80)
+        print(f"💡 You can also get this IP by calling: GET /health")
+        print("=" * 80)
         logger.info("=" * 80)
-        logger.info(f"🌐 RAILWAY OUTBOUND IP: {ip}")
+        logger.info(f"🌐 RAILWAY OUTBOUND IP: {railway_outbound_ip}")
         logger.info("=" * 80)
         logger.info("⚠️  IMPORTANT: Add this IP to BitMart API key whitelist!")
         logger.info("=" * 80)
@@ -418,7 +425,8 @@ async def health_check(request: Request):
         bot_runner_status = f"error: {str(e)[:50]}"
     
     database_status = "postgresql" if (os.getenv("DATABASE_URL") and engine and SessionLocal) else "unavailable"
-    return {
+    
+    response = {
         "status": "healthy",
         "service": "Trading Bridge",
         "database": database_status,
@@ -428,6 +436,13 @@ async def health_check(request: Request):
         },
         "timestamp": datetime.utcnow().isoformat(),
     }
+    
+    # Include Railway IP if available (for BitMart whitelisting)
+    if railway_outbound_ip:
+        response["railway_outbound_ip"] = railway_outbound_ip
+        response["bitmart_whitelist_note"] = "Add this IP to BitMart API key whitelist"
+    
+    return response
 
 
 @app.get("/health/bot-runner")
