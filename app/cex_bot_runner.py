@@ -119,6 +119,13 @@ class CEXBotRunner:
                 bot_id = bot_record["id"]
                 active_bot_ids.add(bot_id)
                 
+                # DEBUG: Log connector retrieval
+                logger.info(f"🔍 DEBUG: Bot {bot_id} - account = {bot_record.get('account')}")
+                logger.info(f"🔍 DEBUG: Bot {bot_id} - api_key present = {bool(bot_record.get('api_key'))}")
+                logger.info(f"🔍 DEBUG: Bot {bot_id} - api_secret present = {bool(bot_record.get('api_secret'))}")
+                logger.info(f"🔍 DEBUG: Bot {bot_id} - memo = {bot_record.get('memo')}")
+                logger.info(f"🔍 DEBUG: Bot {bot_id} - connector name = {bot_record.get('name')}")
+                
                 # Initialize new bots
                 if bot_id not in self.active_bots:
                     # Use connectors table (API keys are plaintext in connectors, not encrypted)

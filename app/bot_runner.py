@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 from sqlalchemy.orm import Session
 
-from app.database import get_db_session, Bot, BotWallet, BotTrade
+from app.database import get_db_session, Bot, BotWallet, BotTrade, Client, Connector
 from app.wallet_encryption import decrypt_private_key
 from app.solana.jupiter_client import JupiterClient
 from app.solana.transaction_signer import SolanaTransactionSigner
@@ -295,9 +295,27 @@ class BotRunner:
                 logger.error(f"Bot {bot_id} not found")
                 return
             
+            # DEBUG: Log connector retrieval
+            bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            if bot:
+                logger.info(f"🔍 DEBUG: bot.account = {bot.account}")
+                client = db.query(Client).filter(Client.account_identifier == bot.account).first()
+                logger.info(f"🔍 DEBUG: Looking for client with account_identifier = {bot.account}")
+                logger.info(f"🔍 DEBUG: Found client = {client}, client.id = {client.id if client else None}")
+                if client:
+                    from app.database import Connector
+                    connector = db.query(Connector).filter(
+                        Connector.client_id == client.id,
+                        Connector.name == 'bitmart'
+                    ).first()
+                    logger.info(f"🔍 DEBUG: Found connector = {connector}, connector.name = {connector.name if connector else None}")
+            
             # Check if API keys exist
             api_key = bot_record.api_key if hasattr(bot_record, 'api_key') else None
             api_secret = bot_record.api_secret if hasattr(bot_record, 'api_secret') else None
+            
+            logger.info(f"🔍 DEBUG: bot_record.api_key present = {bool(api_key)}")
+            logger.info(f"🔍 DEBUG: bot_record.api_secret present = {bool(api_secret)}")
             
             if not api_key or not api_secret:
                 logger.error(f"Bot {bot_id} missing API keys in connectors table")
