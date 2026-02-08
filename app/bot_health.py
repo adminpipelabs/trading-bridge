@@ -627,6 +627,13 @@ class BotHealthMonitor:
             'enableRateLimit': True,
         }
         
+        # BitMart requires defaultType option (spot, margin, futures)
+        # Without this, ccxt calls .lower() on None account type → crash
+        if connector_name == 'bitmart':
+            config['options'] = {
+                'defaultType': 'spot'  # REQUIRED - prevents NoneType.lower() error
+            }
+        
         # Add proxy if configured (for QuotaGuard static IP)
         import os
         proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")

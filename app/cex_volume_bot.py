@@ -116,9 +116,12 @@ class CEXVolumeBot:
             if self.passphrase and exchange_config.get("requires_passphrase"):
                 exchange_params["password"] = self.passphrase
             
-            # BitMart uses memo/uid if provided (optional - not all BitMart accounts need it)
-            # Note: BitMart requires uid parameter, but it might be causing issues
+            # BitMart requires defaultType option (spot, margin, futures)
+            # Without this, ccxt calls .lower() on None account type → crash
             if self.exchange_name == "bitmart":
+                exchange_params["options"] = {
+                    "defaultType": "spot"  # REQUIRED - prevents NoneType.lower() error
+                }
                 if self.memo:
                     # Ensure memo is a string and not empty
                     memo_str = str(self.memo).strip() if self.memo else None
