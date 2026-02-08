@@ -840,7 +840,8 @@ async def start_bot(
                 exchange = bot_check[0] if len(bot_check) > 0 else None
                 chain = bot_check[1] if len(bot_check) > 1 else None
         except Exception as sql_error:
-            # Columns might not exist yet - log but don't fail
+            # Columns might not exist yet - rollback transaction and continue
+            db.rollback()
             logger.warning(f"Could not check exchange/chain columns (may not exist yet): {sql_error}")
             # Default to None - will be treated as non-CEX bot
         
