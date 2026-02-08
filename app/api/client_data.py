@@ -20,14 +20,18 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
     Load connectors from database into exchange_manager for an account.
     This ensures exchange_manager has the API keys needed to query exchanges.
     """
+    logger.info(f"🔄 Syncing connectors for account: {account_identifier}")
+    
     # Get client by account_identifier
     client = db.query(Client).filter(
         Client.account_identifier == account_identifier
     ).first()
     
     if not client:
-        logger.warning(f"Client not found for account: {account_identifier}")
+        logger.error(f"❌ Client not found for account: {account_identifier}")
         return False
+    
+    logger.info(f"✅ Found client: {client.name} (ID: {client.id})")
     
     # Get or create account in exchange_manager
     account = exchange_manager.get_or_create_account(account_identifier)
@@ -38,16 +42,26 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
     ).all()
     
     if not connectors:
-        logger.warning(f"No connectors found for account: {account_identifier}")
+        logger.error(f"❌ No connectors found for account: {account_identifier} (client_id: {client.id})")
+        logger.error(f"   Client needs to add API keys via admin dashboard")
         return False
     
+    logger.info(f"✅ Found {len(connectors)} connector(s) for {account_identifier}")
+    
     # Add each connector to exchange_manager
+    synced_count = 0
     for connector in connectors:
         connector_name = connector.name.lower()
         
         # Skip if already loaded (avoid re-adding)
         if connector_name in account.connectors:
-            logger.debug(f"Connector {connector_name} already loaded for {account_identifier}")
+            logger.debug(f"⏭️  Connector {connector_name} already loaded for {account_identifier}")
+            synced_count += 1
+            continue
+        
+        # Validate connector has required fields
+        if not connector.api_key or not connector.api_secret:
+            logger.warning(f"⚠️  Connector {connector.name} missing API key or secret - skipping")
             continue
         
         try:
@@ -58,10 +72,18 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
                 memo=connector.memo
             )
             logger.info(f"✅ Synced connector {connector.name} to exchange_manager for {account_identifier}")
+            synced_count += 1
         except Exception as e:
-            logger.error(f"Failed to sync connector {connector.name}: {e}")
+            logger.error(f"❌ Failed to sync connector {connector.name}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             # Continue with other connectors
     
+    if synced_count == 0:
+        logger.error(f"❌ No connectors successfully synced for {account_identifier}")
+        return False
+    
+    logger.info(f"✅ Successfully synced {synced_count}/{len(connectors)} connector(s) for {account_identifier}")
     return True
 
 
@@ -74,11 +96,14 @@ async def get_client_portfolio(
     Get portfolio balances for a client by wallet address.
     Syncs connectors from DB to exchange_manager, then queries exchanges.
     """
+    logger.info(f"📊 Portfolio request for wallet: {wallet_address}")
+    
     # Look up client by wallet
     wallet_lower = wallet_address.lower()
     wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
     
     if not wallet:
+        logger.error(f"❌ No wallet found for address: {wallet_address}")
         raise HTTPException(
             status_code=404,
             detail=f"No client found for wallet address {wallet_address}"
@@ -86,53 +111,91 @@ async def get_client_portfolio(
     
     client = wallet.client
     account_identifier = client.account_identifier
+    logger.info(f"✅ Found client: {client.name} (account: {account_identifier})")
     
     # Sync connectors to exchange_manager
     synced = await sync_connectors_to_exchange_manager(account_identifier, db)
     if not synced:
-        return {
-            "account": account_identifier,
-            "balances": {},
-            "message": "No connectors configured. Add API keys in admin dashboard."
-        }
+        logger.error(f"❌ Failed to sync connectors for {account_identifier}")
+        # Check if connectors exist in DB
+        connectors_check = db.query(Connector).filter(
+            Connector.client_id == client.id
+        ).all()
+        
+        if not connectors_check:
+            return {
+                "account": account_identifier,
+                "balances": [],
+                "total_usd": 0,
+                "error": "NO_CONNECTORS",
+                "message": "No API keys configured. Please add BitMart API keys via admin dashboard."
+            }
+        else:
+            return {
+                "account": account_identifier,
+                "balances": [],
+                "total_usd": 0,
+                "error": "SYNC_FAILED",
+                "message": f"Found {len(connectors_check)} connector(s) but failed to sync. Check API keys are valid."
+            }
     
     # Get account from exchange_manager
     account = exchange_manager.get_account(account_identifier)
     if not account:
+        logger.error(f"❌ Failed to get account from exchange_manager for {account_identifier}")
         raise HTTPException(
             status_code=500,
             detail="Failed to create account in exchange_manager"
         )
     
     try:
+        logger.info(f"🔍 Fetching balances for {account_identifier}...")
         balances_raw = await account.get_balances()
+        logger.info(f"✅ Received balance data: {balances_raw}")
         
         # Transform nested balances to flat array format expected by frontend
         balances_array = []
         total_usd = 0.0
         
         for exchange_name, exchange_balances in balances_raw.items():
-            if isinstance(exchange_balances, dict) and "error" not in exchange_balances:
+            if isinstance(exchange_balances, dict):
+                if "error" in exchange_balances:
+                    logger.error(f"❌ Exchange {exchange_name} returned error: {exchange_balances['error']}")
+                    continue
+                
                 for asset, balance_data in exchange_balances.items():
                     if isinstance(balance_data, dict):
+                        total = balance_data.get("total", 0)
+                        free = balance_data.get("free", 0)
+                        # Calculate USD value (USDT = 1:1, others = 0 for now)
+                        usd_value = total if asset == "USDT" else 0
+                        total_usd += usd_value
+                        
                         balances_array.append({
                             "exchange": exchange_name,
                             "asset": asset,
-                            "free": balance_data.get("free", 0),
-                            "total": balance_data.get("total", 0),
+                            "free": free,
+                            "total": total,
                             "used": balance_data.get("used", 0),
-                            "usd_value": 0  # TODO: Calculate from prices
+                            "usd_value": usd_value
                         })
+                        logger.info(f"  💰 {exchange_name} {asset}: {total} (free: {free})")
+        
+        if not balances_array:
+            logger.warning(f"⚠️  No balances found for {account_identifier}")
         
         # Get bot counts for portfolio (query database directly)
         try:
             bots = db.query(Bot).filter(Bot.account == account_identifier).all()
             active_bots = sum(1 for b in bots if b.status == "running")
             total_bots = len(bots)
+            logger.info(f"📊 Bot counts: {active_bots}/{total_bots} active")
         except Exception as e:
             logger.warning(f"Failed to get bot counts: {e}")
             active_bots = 0
             total_bots = 0
+        
+        logger.info(f"✅ Returning portfolio data: {len(balances_array)} balances, ${total_usd:.2f} total USD")
         
         return {
             "account": account_identifier,
@@ -143,7 +206,9 @@ async def get_client_portfolio(
             "total_bots": total_bots
         }
     except Exception as e:
-        logger.error(f"Failed to get balances: {e}")
+        logger.error(f"❌ Failed to get balances for {account_identifier}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Failed to fetch balances: {str(e)}")
 
 
@@ -158,6 +223,57 @@ async def get_client_balances(
     """
     portfolio = await get_client_portfolio(wallet_address, db)
     return portfolio["balances"]  # Return array directly
+
+
+@router.get("/debug")
+async def debug_client_setup(
+    wallet_address: str = Query(..., description="Client wallet address"),
+    db: Session = Depends(get_db)
+):
+    """
+    Debug endpoint to check client setup status.
+    Returns detailed information about connectors, sync status, etc.
+    """
+    wallet_lower = wallet_address.lower()
+    wallet = db.query(Wallet).filter(Wallet.address == wallet_lower).first()
+    
+    if not wallet:
+        return {
+            "error": "WALLET_NOT_FOUND",
+            "message": f"No client found for wallet address {wallet_address}"
+        }
+    
+    client = wallet.client
+    connectors = db.query(Connector).filter(
+        Connector.client_id == client.id
+    ).all()
+    
+    connector_info = []
+    for conn in connectors:
+        connector_info.append({
+            "name": conn.name,
+            "has_api_key": bool(conn.api_key),
+            "has_api_secret": bool(conn.api_secret),
+            "has_memo": bool(conn.memo),
+            "created_at": conn.created_at.isoformat() if conn.created_at else None
+        })
+    
+    # Check if synced to exchange_manager
+    account = exchange_manager.get_account(client.account_identifier)
+    synced_connectors = list(account.connectors.keys()) if account else []
+    
+    return {
+        "client": {
+            "id": client.id,
+            "name": client.name,
+            "account_identifier": client.account_identifier
+        },
+        "connectors_in_db": len(connectors),
+        "connectors_detail": connector_info,
+        "synced_to_exchange_manager": len(synced_connectors),
+        "synced_connectors": synced_connectors,
+        "wallet_address": wallet_address
+    }
 
 
 @router.get("/trades")
@@ -204,38 +320,19 @@ async def get_client_trades(
     
     try:
         # Format trading_pair if provided (SHARP-USDT -> SHARP/USDT for ccxt)
-        formatted_pair = trading_pair.replace("-", "/") if trading_pair else None
+        formatted_pair = None
+        if trading_pair:
+            formatted_pair = trading_pair.replace("-", "/").replace("_", "/")
+        
         trades = await account.get_trades(trading_pair=formatted_pair, limit=limit)
-        
-        # Filter by days if needed (exchange_manager may not support this)
-        # For now, return all trades (exchanges typically return recent trades)
-        # Transform trades to frontend format
-        trades_transformed = []
-        for trade in trades:
-            # Convert symbol format: SHARP/USDT -> SHARP-USDT
-            symbol = trade.get("symbol", "")
-            trading_pair = symbol.replace("/", "-") if "/" in symbol else symbol
-            
-            trades_transformed.append({
-                "trading_pair": trading_pair,
-                "side": trade.get("side", "").lower(),
-                "amount": float(trade.get("amount", 0)),
-                "price": float(trade.get("price", 0)),
-                "timestamp": trade.get("timestamp", 0),
-                "exchange": trade.get("connector", "unknown"),  # Rename connector -> exchange
-                "id": trade.get("id"),
-                "order_id": trade.get("order_id"),
-                "cost": trade.get("cost", 0),
-                "fee": trade.get("fee", {})
-            })
-        
-        # Sort by timestamp descending (most recent first)
-        trades_sorted = sorted(trades_transformed, key=lambda t: t.get("timestamp", 0), reverse=True)
-        
-        return trades_sorted  # Return array directly (frontend expects array, not object)
+        return {
+            "account": account_identifier,
+            "trades": trades,
+            "count": len(trades)
+        }
     except Exception as e:
         logger.error(f"Failed to get trades: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch trades: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/volume")
@@ -246,27 +343,18 @@ async def get_client_volume(
 ):
     """
     Get trading volume for a client.
+    Calculated from trade history.
     """
     # Get trades first
-    trades = await get_client_trades(wallet_address, limit=1000, days=days, db=db)
+    trades_data = await get_client_trades(wallet_address, limit=1000, days=days, db=db)
+    trades = trades_data.get("trades", [])
     
-    # Calculate volume
-    total_volume = 0.0
-    volume_by_pair = {}
-    
-    for trade in trades:
-        pair = trade.get("trading_pair", "unknown")
-        amount = float(trade.get("amount", 0))
-        price = float(trade.get("price", 0))
-        volume = amount * price
-        
-        total_volume += volume
-        volume_by_pair[pair] = volume_by_pair.get(pair, 0) + volume
+    total_volume = sum(float(t.get("cost", 0)) for t in trades)
     
     return {
-        "total_volume": total_volume,  # Rename total_volume_usd -> total_volume
-        "trade_count": len(trades),    # Add trade_count
-        "volume_by_pair": volume_by_pair,
+        "account": trades_data.get("account"),
+        "total_volume": total_volume,
+        "trade_count": len(trades),
         "days": days
     }
 
@@ -278,54 +366,18 @@ async def get_client_pnl(
     db: Session = Depends(get_db)
 ):
     """
-    Get P&L (profit and loss) for a client.
+    Get profit & loss for a client.
     Calculated from trade history.
     """
     # Get trades
     trades_data = await get_client_trades(wallet_address, limit=1000, days=days, db=db)
     trades = trades_data.get("trades", [])
     
-    # Calculate P&L
-    # Simple calculation: sum of (sell_price - buy_price) * amount
-    # This is simplified - real P&L needs to track positions
-    
-    total_pnl = 0.0
-    pnl_by_pair = {}
-    
-    # Group trades by pair and calculate P&L
-    positions = {}  # {pair: {amount, avg_price}}
-    
-    for trade in sorted(trades, key=lambda t: t.get("timestamp", 0)):
-        pair = trade.get("symbol", trade.get("pair", "unknown"))
-        side = trade.get("side", "").lower()
-        amount = float(trade.get("amount", 0))
-        price = float(trade.get("price", 0))
-        
-        if pair not in positions:
-            positions[pair] = {"amount": 0, "avg_price": 0, "cost": 0}
-        
-        pos = positions[pair]
-        
-        if side == "buy":
-            # Add to position
-            total_cost = pos["cost"] + (amount * price)
-            pos["amount"] += amount
-            pos["cost"] = total_cost
-            pos["avg_price"] = total_cost / pos["amount"] if pos["amount"] > 0 else 0
-        elif side == "sell":
-            # Realize P&L
-            if pos["amount"] > 0:
-                realized_pnl = (price - pos["avg_price"]) * min(amount, pos["amount"])
-                total_pnl += realized_pnl
-                pnl_by_pair[pair] = pnl_by_pair.get(pair, 0) + realized_pnl
-                pos["amount"] -= min(amount, pos["amount"])
-                if pos["amount"] == 0:
-                    pos["cost"] = 0
-                    pos["avg_price"] = 0
-    
+    # TODO: Calculate P&L from trades
+    # For now, return 0
     return {
         "account": trades_data.get("account"),
-        "total_pnl_usd": total_pnl,
-        "pnl_by_pair": pnl_by_pair,
+        "total_pnl": 0,
+        "trade_count": len(trades),
         "days": days
     }
