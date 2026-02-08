@@ -16,6 +16,7 @@ PROXY_URL = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.g
 
 
 # Supported exchanges and their ccxt class names
+# Note: Coinstore is handled specially (not in ccxt)
 EXCHANGE_MAP = {
     "bitmart": ccxt.bitmart,
     "binance": ccxt.binance,
@@ -29,6 +30,7 @@ EXCHANGE_MAP = {
     "huobi": ccxt.htx,
     "coinbase": ccxt.coinbase,
     "kraken": ccxt.kraken,
+    # Coinstore handled via custom adapter in add_connector
 }
 
 
@@ -52,8 +54,25 @@ class Account:
         
         connector_lower = connector_name.lower()
         
+        # Handle Coinstore specially (custom adapter)
+        if connector_lower == "coinstore":
+            from app.coinstore_adapter import create_coinstore_exchange
+            proxy_url = PROXY_URL
+            exchange = await create_coinstore_exchange(
+                api_key=api_key,
+                api_secret=api_secret,
+                proxy_url=proxy_url
+            )
+            self.connectors[connector_lower] = exchange
+            logger.info(f"Added Coinstore connector to account {self.name}")
+            return {
+                "success": True,
+                "connector": connector_name,
+                "markets_loaded": len(exchange.markets)
+            }
+        
         if connector_lower not in EXCHANGE_MAP:
-            raise ValueError(f"Unsupported exchange: {connector_name}. Supported: {list(EXCHANGE_MAP.keys())}")
+            raise ValueError(f"Unsupported exchange: {connector_name}. Supported: {list(EXCHANGE_MAP.keys())} + coinstore")
         
         exchange_class = EXCHANGE_MAP[connector_lower]
         
@@ -121,6 +140,9 @@ class Account:
                 # BitMart requires type parameter - pass it explicitly
                 if connector_name.lower() == 'bitmart':
                     balance = await exchange.fetch_balance({'type': 'spot'})
+                elif connector_name.lower() == 'coinstore':
+                    # Coinstore uses custom adapter
+                    balance = await exchange.fetch_balance()
                 else:
                     balance = await exchange.fetch_balance()
                 

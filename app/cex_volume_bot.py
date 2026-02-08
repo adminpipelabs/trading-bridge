@@ -160,6 +160,18 @@ class CEXVolumeBot:
             
             logger.info(f"Using ccxt exchange ID: {ccxt_id}")
             
+            # Handle Coinstore specially (not in ccxt)
+            if self.exchange_name == "coinstore":
+                from app.coinstore_adapter import create_coinstore_exchange
+                logger.info("Using custom Coinstore adapter (not in ccxt)")
+                self.exchange = await create_coinstore_exchange(
+                    api_key=self.api_key,
+                    api_secret=self.api_secret,
+                    proxy_url=self.proxy_url
+                )
+                logger.info(f"✅ Coinstore exchange initialized successfully")
+                return True
+            
             # Get exchange class from ccxt
             exchange_class = getattr(ccxt, ccxt_id, None)
             if exchange_class is None:
