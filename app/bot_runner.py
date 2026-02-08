@@ -352,6 +352,10 @@ class BotRunner:
                     config = bot_record.config
             
             # Create CEX bot instance
+            # Proxy URL is read from environment (QUOTAGUARD_PROXY_URL) for IP whitelisting
+            import os
+            proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+            
             cex_bot = CEXVolumeBot(
                 bot_id=bot_id,
                 exchange_name=exchange_name,
@@ -361,7 +365,13 @@ class BotRunner:
                 passphrase=None,
                 memo=bot_record.memo if hasattr(bot_record, 'memo') else None,
                 config=config,
+                proxy_url=proxy_url,  # Explicitly pass proxy for IP whitelisting
             )
+            
+            if proxy_url:
+                logger.info(f"Bot {bot_id} will use proxy for IP whitelisting: {proxy_url.split('@')[0]}@...")
+            else:
+                logger.warning(f"⚠️  No proxy URL configured for bot {bot_id} - IP whitelisting may not work")
             
             # Initialize exchange connection
             if not await cex_bot.initialize():

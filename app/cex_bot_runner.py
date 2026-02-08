@@ -159,6 +159,10 @@ class CEXBotRunner:
                     if not exchange_name or not isinstance(exchange_name, str):
                         exchange_name = "bitmart"
                     
+                    # Proxy URL is read from environment (QUOTAGUARD_PROXY_URL) for IP whitelisting
+                    import os
+                    proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+                    
                     bot = CEXVolumeBot(
                         bot_id=bot_record["id"],
                         exchange_name=exchange_name.lower(),  # Ensure lowercase
@@ -168,7 +172,13 @@ class CEXBotRunner:
                         passphrase=None,  # BitMart doesn't use passphrase
                         memo=bot_record.get("memo"),  # BitMart memo/uid from connectors table
                         config=config,
+                        proxy_url=proxy_url,  # Explicitly pass proxy for IP whitelisting
                     )
+                    
+                    if proxy_url:
+                        logger.info(f"Bot {bot_record['id']} will use proxy for IP whitelisting: {proxy_url.split('@')[0]}@...")
+                    else:
+                        logger.warning(f"⚠️  No proxy URL configured for bot {bot_record['id']} - IP whitelisting may not work")
                     
                     if await bot.initialize():
                         self.active_bots[bot_id] = bot
