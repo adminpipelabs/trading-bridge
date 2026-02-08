@@ -105,13 +105,19 @@ class BotRunner:
             except Exception as sql_error:
                 logger.warning(f"Could not check exchange/chain columns: {sql_error}")
             
-            # CEX bot check - if exchange is set and not Jupiter, it's a CEX bot
+            # CEX bot check - check explicit CEX exchanges list
+            cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit']
             is_cex_bot = (
                 bot.bot_type == 'volume' and 
                 exchange and 
                 exchange.lower() not in ['jupiter', ''] and
-                chain and chain.lower() != 'solana'
+                exchange.lower() in cex_exchanges
             )
+            
+            # Fallback: If exchange is set and chain is explicitly NOT solana
+            if not is_cex_bot and exchange and chain and chain.lower() not in ['solana', '']:
+                if exchange.lower() not in ['jupiter', 'uniswap', 'pancakeswap']:
+                    is_cex_bot = True
             
             if is_cex_bot:
                 logger.error(f"❌ Bot {bot_id} is a CEX bot (exchange={exchange}) - should NOT be handled by bot_runner!")

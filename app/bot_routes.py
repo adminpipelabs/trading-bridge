@@ -855,10 +855,13 @@ async def start_bot(
             exchange.lower() in cex_exchanges
         )
         
-        # Also check chain - if chain is NOT solana and exchange is set, it's likely CEX
-        if not is_cex_bot and exchange and chain and chain.lower() != 'solana':
-            is_cex_bot = True
-            logger.info(f"Detected CEX bot: exchange={exchange}, chain={chain}")
+        # Fallback: If exchange is set and chain is explicitly NOT solana, treat as CEX
+        # Only use fallback if exchange exists and chain is explicitly set to non-solana
+        if not is_cex_bot and exchange and chain and chain.lower() not in ['solana', '']:
+            # Additional check: exchange should not be a known DEX
+            if exchange.lower() not in ['jupiter', 'uniswap', 'pancakeswap']:
+                is_cex_bot = True
+                logger.info(f"Detected CEX bot via fallback: exchange={exchange}, chain={chain}")
         
         # For Solana/EVM bots, start via bot runner
         if bot.bot_type in ['volume', 'spread'] and not is_cex_bot:
