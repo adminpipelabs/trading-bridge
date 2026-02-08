@@ -153,6 +153,27 @@ class CEXVolumeBot:
                 else:
                     logger.debug(f"BitMart memo/UID not provided - using API keys only")
             
+            # DEBUG: Check environment variable directly before using proxy
+            import os
+            quotaguard_static_url = os.getenv('QUOTAGUARDSTATIC_URL')
+            quotaguard_proxy_url = os.getenv('QUOTAGUARD_PROXY_URL')
+            logger.info(f"🔍 DEBUG: QUOTAGUARDSTATIC_URL present: {bool(quotaguard_static_url)}")
+            if quotaguard_static_url:
+                # Show format without exposing credentials
+                proxy_preview = quotaguard_static_url.split('@')[0] if '@' in quotaguard_static_url else quotaguard_static_url[:30]
+                logger.info(f"🔍 DEBUG: QUOTAGUARDSTATIC_URL format: {proxy_preview}...")
+            logger.info(f"🔍 DEBUG: QUOTAGUARD_PROXY_URL present: {bool(quotaguard_proxy_url)}")
+            logger.info(f"🔍 DEBUG: self.proxy_url value: {bool(self.proxy_url)}")
+            if self.proxy_url:
+                # Obfuscate proxy URL for logging (show first 30 chars)
+                proxy_preview = self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]
+                logger.info(f"🔍 DEBUG: Proxy URL preview: {proxy_preview}...")
+                # Verify proxy URL format
+                if not self.proxy_url.startswith(('http://', 'https://')):
+                    logger.error(f"🔍 DEBUG: ❌ Proxy URL doesn't start with http:// or https:// - format may be wrong!")
+                if '@' not in self.proxy_url:
+                    logger.warning(f"🔍 DEBUG: ⚠️  Proxy URL doesn't contain '@' - may be missing auth credentials")
+            
             # Add proxy if configured (for QuotaGuard static IP - dedicated IP: 3.222.129.4)
             if self.proxy_url:
                 exchange_params["proxies"] = {
@@ -165,11 +186,25 @@ class CEXVolumeBot:
                 logger.error(f"❌ CRITICAL: No proxy URL set for {self.exchange_name}! BitMart will reject requests.")
                 logger.error(f"❌ Check Railway env vars: QUOTAGUARDSTATIC_URL or QUOTAGUARD_PROXY_URL must be set!")
             
+            # DEBUG: Log exchange_params right before creating exchange
+            logger.info(f"🔍 DEBUG: Exchange params keys before creation: {list(exchange_params.keys())}")
+            if "proxies" in exchange_params:
+                proxies_dict = exchange_params["proxies"]
+                logger.info(f"🔍 DEBUG: ✅ Proxies dict IS in exchange_params!")
+                logger.info(f"🔍 DEBUG: Proxies keys: {list(proxies_dict.keys())}")
+                # Obfuscate proxy URLs
+                for key, value in proxies_dict.items():
+                    proxy_preview = value.split('@')[0] if '@' in str(value) else str(value)[:30]
+                    logger.info(f"🔍 DEBUG:   proxies['{key}'] = {proxy_preview}...")
+            else:
+                logger.error(f"🔍 DEBUG: ❌ Proxies dict NOT in exchange_params!")
+            
+            if "options" in exchange_params:
+                logger.info(f"🔍 DEBUG: Exchange options: {exchange_params['options']}")
+            
             # Create exchange instance
             logger.info(f"Creating {ccxt_id} exchange instance...")
             logger.debug(f"Exchange params keys: {list(exchange_params.keys())}")
-            if "options" in exchange_params:
-                logger.debug(f"Exchange options: {exchange_params['options']}")
             
             # Verify we're using async ccxt
             if not hasattr(exchange_class, '__call__'):
@@ -177,7 +212,16 @@ class CEXVolumeBot:
                 return False
             
             # Create exchange instance (from async_support, so it's async)
+            logger.info(f"🔍 DEBUG: About to create exchange with params containing: {list(exchange_params.keys())}")
             self.exchange = exchange_class(exchange_params)
+            
+            # DEBUG: Verify proxy was set on exchange instance
+            if hasattr(self.exchange, 'proxies'):
+                logger.info(f"🔍 DEBUG: ✅ Exchange instance has 'proxies' attribute: {bool(self.exchange.proxies)}")
+                if self.exchange.proxies:
+                    logger.info(f"🔍 DEBUG: Exchange.proxies = {self.exchange.proxies}")
+            else:
+                logger.warning(f"🔍 DEBUG: ⚠️  Exchange instance does NOT have 'proxies' attribute")
             
             # Verify exchange is async (has coroutine methods)
             if not hasattr(self.exchange, 'load_markets') or not asyncio.iscoroutinefunction(self.exchange.load_markets):
