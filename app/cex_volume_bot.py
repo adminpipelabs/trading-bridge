@@ -239,16 +239,23 @@ class CEXVolumeBot:
                 else:
                     balance = await self.exchange.fetch_balance()
             except AttributeError as attr_err:
-                # This is the specific error we're seeing - it's coming from INSIDE ccxt
+                # This error is from ccxt's error handler - BitMart API returned error with None message
                 error_msg = str(attr_err)
-                logger.error(f"❌ AttributeError in ccxt.fetch_balance(): {error_msg}")
+                logger.error(f"❌ AttributeError in ccxt error handler: {error_msg}")
+                logger.error(f"This means BitMart API returned an error, but error message was None")
+                logger.error(f"Likely causes: Authentication failure, IP not whitelisted, or API key invalid")
+                logger.error(f"Exchange config: apiKey present={bool(self.api_key)}, uid={self.memo}, options={getattr(self.exchange, 'options', {})}")
+                # Try to get more info from the exchange object
+                if hasattr(self.exchange, 'last_response_headers'):
+                    logger.error(f"Last response headers: {getattr(self.exchange, 'last_response_headers', None)}")
+                if hasattr(self.exchange, 'last_response_body'):
+                    logger.error(f"Last response body: {getattr(self.exchange, 'last_response_body', None)}")
+                raise
+            except Exception as e:
+                # Catch any other API errors
+                error_msg = str(e)
+                logger.error(f"❌ Error fetching balance from {self.exchange_name}: {error_msg}")
                 logger.error(f"Full traceback:", exc_info=True)
-                # Check if it's the .lower() error
-                if "'NoneType' object has no attribute 'lower'" in error_msg:
-                    logger.error(f"⚠️  This error is coming from INSIDE ccxt library, not our code.")
-                    logger.error(f"Exchange object state: type={type(self.exchange)}, apiKey={hasattr(self.exchange, 'apiKey')}, uid={getattr(self.exchange, 'uid', None)}")
-                    logger.error(f"This suggests ccxt bitmart is calling .lower() on a None value internally.")
-                    logger.error(f"Possible causes: missing uid parameter, or ccxt version issue")
                 raise
             
             if not balance:
