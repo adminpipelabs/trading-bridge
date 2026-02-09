@@ -1415,16 +1415,44 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                         else:
                             # Fetch balance
                             try:
-                                logger.info(f"Fetching balance from {connector_name} for pair {pair}")
+                                logger.info(f"🔍 Fetching balance from {connector_name} for pair {pair}")
+                                
+                                # Log exchange instance details before API call
+                                exchange_type = type(exchange).__name__
+                                logger.info(f"   Exchange instance: {exchange_type}")
+                                if hasattr(exchange, 'apiKey'):
+                                    api_key_preview = f"{exchange.apiKey[:4]}...{exchange.apiKey[-4:]}" if exchange.apiKey else "None"
+                                    logger.info(f"   Exchange apiKey: {api_key_preview}")
+                                if hasattr(exchange, 'secret'):
+                                    secret_preview = f"{exchange.secret[:4]}...{exchange.secret[-4:]}" if exchange.secret else "None"
+                                    logger.info(f"   Exchange secret: {secret_preview}")
+                                if hasattr(exchange, 'uid'):
+                                    logger.info(f"   Exchange uid: {exchange.uid}")
+                                if hasattr(exchange, 'options'):
+                                    logger.info(f"   Exchange options: {exchange.options}")
+                                
+                                # Ensure markets are loaded for ccxt exchanges (not needed for Coinstore custom adapter)
+                                if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
+                                    try:
+                                        if not hasattr(exchange, 'markets') or not exchange.markets:
+                                            logger.info(f"   Markets not loaded, loading now...")
+                                            await exchange.load_markets()
+                                            logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
+                                    except Exception as market_err:
+                                        logger.warning(f"   ⚠️  Could not load markets (may still work): {market_err}")
                                 
                                 # Wrap in try-except to handle ccxt AttributeError bug
                                 try:
                                     if connector_name.lower() == 'bitmart':
+                                        logger.debug(f"   Calling: exchange.fetch_balance({{'type': 'spot'}})")
                                         balance = await exchange.fetch_balance({'type': 'spot'})
                                     elif connector_name.lower() == 'coinstore':
+                                        logger.debug(f"   Calling: exchange.fetch_balance()")
                                         balance = await exchange.fetch_balance()
                                     else:
+                                        logger.debug(f"   Calling: exchange.fetch_balance()")
                                         balance = await exchange.fetch_balance()
+                                    logger.info(f"✅ Balance fetch successful for {connector_name}")
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
@@ -1434,29 +1462,34 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     else:
                                         raise
                                 
-                                logger.info(f"Balance response keys: {list(balance.keys()) if balance else 'None'}")
-                                logger.info(f"Looking for base={base}, quote={quote} in balance")
-                                
-                                # Extract available (free) and locked (used) balances
-                                # Handle both dict format and direct access
-                                base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
-                                quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
-                                
-                                base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
-                                quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
-                                
-                                logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
-                                
-                                result["available"] = {
-                                    base: round(base_available, 4),
-                                    quote: round(quote_available, 2)
-                                }
-                                result["locked"] = {
-                                    base: round(base_locked, 4),
-                                    quote: round(quote_locked, 2)
-                                }
+                                # Extract balances - check if balance is None first
+                                if balance is None:
+                                    logger.warning(f"Balance is None for bot {bot_id} - returning default values")
+                                    # Default values are already 0, so no need to set them again
+                                else:
+                                    logger.info(f"Balance response keys: {list(balance.keys()) if balance else 'None'}")
+                                    logger.info(f"Looking for base={base}, quote={quote} in balance")
+                                    
+                                    # Extract available (free) and locked (used) balances
+                                    # Handle both dict format and direct access
+                                    base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
+                                    quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
+                                    
+                                    base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                    quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                    base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                    quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                    
+                                    logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
+                                    
+                                    result["available"] = {
+                                        base: round(base_available, 4),
+                                        quote: round(quote_available, 2)
+                                    }
+                                    result["locked"] = {
+                                        base: round(base_locked, 4),
+                                        quote: round(quote_locked, 2)
+                                    }
                                 
                                 # Fetch open orders to get more accurate locked balance
                                 try:
@@ -1481,7 +1514,18 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     # Don't expose error - return default values
                             except Exception as e:
                                 error_msg = str(e)
-                                logger.error(f"Error fetching balance from exchange: {e}", exc_info=True)
+                                logger.error(f"Error fetching balance from {connector_name} for bot {bot_id}: {e}", exc_info=True)
+                                
+                                # Log exchange instance details for debugging
+                                if exchange:
+                                    logger.error(f"   Exchange type: {type(exchange).__name__}")
+                                    if hasattr(exchange, 'apiKey'):
+                                        api_key_preview = f"{exchange.apiKey[:4]}...{exchange.apiKey[-4:]}" if exchange.apiKey else "None"
+                                        logger.error(f"   Exchange apiKey: {api_key_preview}")
+                                    if hasattr(exchange, 'secret'):
+                                        secret_preview = f"{exchange.secret[:4]}...{exchange.secret[-4:]}" if exchange.secret else "None"
+                                        logger.error(f"   Exchange secret: {secret_preview}")
+                                
                                 # Log error but don't expose to client - return default values (already 0)
                                 # Client will see 0 balances instead of error message
                 
@@ -1642,17 +1686,33 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 logger.info(f"🔍 Fetching balance for {connector_name} bot {bot_id}: exchange_type={exchange_type}, api_key={api_key_preview}")
                                 
                                 # Fetch balance (works regardless of bot status)
+                                # Log exchange instance details before API call
+                                exchange_type = type(exchange).__name__
+                                api_key_preview = f"{exchange.apiKey[:4]}...{exchange.apiKey[-4:]}" if hasattr(exchange, 'apiKey') and exchange.apiKey else "None"
+                                logger.info(f"🔍 Fetching balance for {connector_name} bot {bot_id}: exchange_type={exchange_type}, api_key={api_key_preview}")
+                                
+                                # Ensure markets are loaded for ccxt exchanges (not needed for Coinstore custom adapter)
+                                if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
+                                    try:
+                                        if not hasattr(exchange, 'markets') or not exchange.markets:
+                                            logger.info(f"   Markets not loaded, loading now...")
+                                            await exchange.load_markets()
+                                            logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
+                                    except Exception as market_err:
+                                        logger.warning(f"   ⚠️  Could not load markets (may still work): {market_err}")
+                                
                                 # Wrap in try-except to handle ccxt AttributeError bug
                                 try:
                                     if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"Calling exchange.fetch_balance({{'type': 'spot'}}) for BitMart")
+                                        logger.debug(f"   Calling: exchange.fetch_balance({{'type': 'spot'}}) for BitMart")
                                         balance = await exchange.fetch_balance({'type': 'spot'})
                                     elif connector_name.lower() == 'coinstore':
-                                        logger.debug(f"Calling exchange.fetch_balance() for Coinstore")
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for Coinstore")
                                         balance = await exchange.fetch_balance()
                                     else:
-                                        logger.debug(f"Calling exchange.fetch_balance() for {connector_name}")
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for {connector_name}")
                                         balance = await exchange.fetch_balance()
+                                    logger.info(f"✅ Balance fetch successful for {connector_name}")
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):

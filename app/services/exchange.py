@@ -132,7 +132,7 @@ class Account:
             return {
                 "success": True,
                 "connector": connector_name,
-                "markets_loaded": len(exchange.markets) if hasattr(exchange, 'markets') else 0
+                "markets_loaded": len(exchange.markets) if hasattr(exchange, 'markets') and exchange.markets is not None else 0
             }
             
         except Exception as e:
