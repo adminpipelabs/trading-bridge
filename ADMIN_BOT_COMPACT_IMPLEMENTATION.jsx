@@ -92,7 +92,44 @@ const AlertBanner = ({ bots, onFilterChange }) => {
 // ============================================
 // COMPACT BOT ROW COMPONENT
 // ============================================
-const CompactBotRow = ({ bot, onStart, onStop, onEdit, onDelete, theme }) => {
+const CompactBotRow = ({ bot, onStart, onStop, onEdit, onDelete, onRefreshBalance, theme }) => {
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balance, setBalance] = useState(null);
+  
+  // Fetch balance on mount
+  useEffect(() => {
+    const fetchBalance = async () => {
+      setBalanceLoading(true);
+      try {
+        const response = await fetch(`/api/bots/${bot.id}/stats`);
+        const data = await response.json();
+        setBalance(data);
+      } catch (error) {
+        console.error('Failed to load balance:', error);
+      } finally {
+        setBalanceLoading(false);
+      }
+    };
+    fetchBalance();
+  }, [bot.id]);
+  
+  // Refresh balance handler
+  const handleRefreshBalance = async () => {
+    setBalanceLoading(true);
+    try {
+      const response = await fetch(`/api/bots/${bot.id}/stats`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setBalance(data);
+      if (onRefreshBalance) onRefreshBalance(bot.id, data);
+    } catch (error) {
+      console.error('Failed to refresh balance:', error);
+      alert('Failed to refresh balance. Please try again.');
+    } finally {
+      setBalanceLoading(false);
+    }
+  };
+  
   const getStatusInfo = (bot) => {
     const status = (bot.status || bot.health_status || '').toLowerCase();
     if (status === 'running') return { color: '#10b981', label: 'Running' };
@@ -108,6 +145,10 @@ const CompactBotRow = ({ bot, onStart, onStop, onEdit, onDelete, theme }) => {
   const hoverBg = theme === 'dark' ? '#374151' : '#f9fafb';
   const textColor = theme === 'dark' ? '#f3f4f6' : '#111827';
   const mutedColor = theme === 'dark' ? '#9ca3af' : '#6b7280';
+  
+  // Use balance from state if available, otherwise fallback to bot prop
+  const available = balance?.available || bot.available || bot.balance?.available || {};
+  const locked = balance?.locked || bot.locked || bot.balance?.locked || {};
   
   return (
     <tr 

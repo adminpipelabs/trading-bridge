@@ -1,0 +1,19 @@
+🚨 URGENT: Coinstore IP Whitelist Change Required
+
+Railway is using IP: 3.222.129.4
+Coinstore API key is whitelisted for: 54.205.35.75 (WRONG)
+
+ACTION NEEDED:
+Change Coinstore API key IP whitelist from 54.205.35.75 → 3.222.129.4
+
+Steps:
+1. Log into Coinstore dashboard → API Key Management
+2. Find API key: 42b5c7c4...6ed0
+3. Edit IP whitelist: Remove 54.205.35.75, Add 3.222.129.4
+4. Save and wait 1-2 minutes
+
+After change:
+- Railway logs will show: ✅ Coinstore balance API response: code=0
+- Dashboard will display actual balances instead of zeros
+
+See: URGENT_COINSTORE_IP_FIX.md for full details

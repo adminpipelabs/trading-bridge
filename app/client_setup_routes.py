@@ -368,6 +368,10 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                         'bitget', 'bitstamp', 'bitrue', 'bingx', 'btcmarkets', 'ndax', 'vertex', 'ascendex']
         is_cex = request.exchange and request.exchange.lower() in cex_exchanges
         
+        # CRITICAL: CEX bots don't require wallet addresses - only API credentials
+        # Skip any wallet validation for CEX bots
+        logger.info(f"Bot type check: is_cex={is_cex}, exchange={request.exchange}, bot_type={request.bot_type}")
+        
         wallet_address = None
         chain = None
         
@@ -447,9 +451,9 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                     logger.error(f"Client {client_id} attempted to create {exchange_lower} bot but no credentials found")
                     raise HTTPException(
                         status_code=400,
-                        detail=f"{request.exchange} API keys not connected. Please provide API credentials when creating the bot."
+                        detail=f"{request.exchange} API keys not connected. Please provide API credentials (api_key, api_secret) when creating the bot. CEX bots require API credentials, not wallet addresses."
                     )
-                logger.info(f"Verified exchange credentials exist for {exchange_lower} bot")
+                logger.info(f"✅ Verified exchange credentials exist for {exchange_lower} bot (CEX bot - no wallet required)")
         
         # For DEX bots, require private key
         if not is_cex:

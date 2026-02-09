@@ -55,14 +55,6 @@ class CoinstoreConnector:
         # Step 1: Calculate expires_key
         expires_key = str(math.floor(expires / 30000))
         
-        # DEBUG: Log signature generation steps
-        logger.info(f"🔐 SIGNATURE GENERATION:")
-        logger.info(f"   api_secret (first 20): '{self.api_secret[:20]}...' (length={len(self.api_secret)})")
-        logger.info(f"   expires_key: '{expires_key}'")
-        logger.info(f"   expires_key (bytes): {expires_key.encode('utf-8')}")
-        logger.info(f"   payload: '{payload}'")
-        logger.info(f"   payload (bytes): {payload.encode('utf-8')}")
-        
         # Step 2: First HMAC to get derived key
         # Use api_secret as key, expires_key as message
         secret_bytes = self.api_secret.encode('utf-8')
@@ -72,7 +64,6 @@ class CoinstoreConnector:
             expires_key_bytes,
             hashlib.sha256
         ).hexdigest()
-        logger.info(f"   Step 1 - derived_key: {key}")
         
         # Step 3: Second HMAC to get signature
         # Use derived key as key, payload as message
@@ -83,7 +74,8 @@ class CoinstoreConnector:
             payload_bytes,
             hashlib.sha256
         ).hexdigest()
-        logger.info(f"   Step 2 - signature: {signature}")
+        
+        logger.debug(f"Coinstore signature generated for endpoint")
         
         return signature
     
@@ -123,30 +115,7 @@ class CoinstoreConnector:
             headers['X-CS-EXPIRES'] = str(expires)
             headers['exch-language'] = 'en_US'
             
-            # CRITICAL DEBUGGING: Log EXACT request details for comparison
-            logger.info("=" * 80)
-            logger.info("🔐 COINSTORE REQUEST DEBUG - EXACT DETAILS")
-            logger.info("=" * 80)
-            logger.info(f"FULL API KEY: '{self.api_key}'")
-            logger.info(f"FULL SECRET (first 20 chars): '{self.api_secret[:20]}...' (length={len(self.api_secret)})")
-            logger.info(f"METHOD: {method}")
-            logger.info(f"ENDPOINT: {endpoint}")
-            logger.info(f"URL: {url}")
-            logger.info(f"EXPIRES (ms): {expires}")
-            logger.info(f"EXPIRES_KEY: {math.floor(expires / 30000)}")
-            logger.info(f"PAYLOAD (exact): '{payload}'")
-            logger.info(f"PAYLOAD (repr): {repr(payload)}")
-            logger.info(f"PAYLOAD (bytes): {payload.encode('utf-8')}")
-            logger.info(f"SIGNATURE: {signature}")
-            logger.info(f"EXACT HEADERS:")
-            for k, v in headers.items():
-                if k == 'X-CS-APIKEY':
-                    logger.info(f"   {k}: '{v}' (full key)")
-                elif k == 'X-CS-SIGN':
-                    logger.info(f"   {k}: '{v}' (full signature)")
-                else:
-                    logger.info(f"   {k}: '{v}'")
-            logger.info("=" * 80)
+            logger.debug(f"Coinstore authenticated request: {method} {endpoint}")
         
         try:
             # Pass proxy per-request if configured
@@ -173,24 +142,9 @@ class CoinstoreConnector:
                 # Don't let aiohttp re-serialize - use raw bytes to ensure exact match
                 body_bytes = payload.encode('utf-8') if payload else b'{}'
                 
-                # DEBUG: Log exact body being sent
-                logger.info(f"📤 REQUEST BODY:")
-                logger.info(f"   payload (string): '{payload}'")
-                logger.info(f"   body_bytes: {body_bytes}")
-                logger.info(f"   body_bytes (repr): {repr(body_bytes)}")
-                
                 async with session.post(url, data=body_bytes, **request_kwargs) as response:
                     response_text = await response.text()
-                    logger.info("=" * 80)
-                    logger.info(f"📡 Coinstore API POST {endpoint} RESPONSE")
-                    logger.info("=" * 80)
-                    logger.info(f"HTTP Status: {response.status}")
-                    logger.info(f"Response Headers:")
-                    for k, v in response.headers.items():
-                        logger.info(f"   {k}: {v}")
-                    logger.info(f"Response Length: {len(response_text)} bytes")
-                    logger.info(f"Response (FULL): {response_text}")
-                    logger.info("=" * 80)
+                    logger.debug(f"Coinstore API POST {endpoint} response status={response.status}")
                     
                     if response.status != 200:
                         error_text = response_text[:500]
