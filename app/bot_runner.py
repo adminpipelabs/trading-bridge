@@ -1276,15 +1276,18 @@ class BotRunner:
                 logger.info(f"Bot {bot_id} stopped or not found")
                 return
             
-            # Determine exchange name
-            connector_name = (bot_record.connector or "").lower()
-            bot_name_lower = (bot_record.name or "").lower()
+            # Access bot_record fields (can be Row object or tuple)
+            # Query returns: id, name, connector, account, pair, config, api_key_encrypted, api_secret_encrypted, memo
+            connector_name = (getattr(bot_record, 'connector', None) or bot_record[2] if len(bot_record) > 2 else None) or ""
+            bot_name = (getattr(bot_record, 'name', None) or bot_record[1] if len(bot_record) > 1 else None) or ""
+            bot_name_lower = bot_name.lower()
             
             cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
             exchange_name = None
             
-            if connector_name and connector_name in cex_keywords:
-                exchange_name = connector_name
+            connector_name_lower = connector_name.lower()
+            if connector_name_lower and connector_name_lower in cex_keywords:
+                exchange_name = connector_name_lower
             else:
                 for kw in cex_keywords:
                     if kw in bot_name_lower:
@@ -1298,8 +1301,11 @@ class BotRunner:
                 db.commit()
                 return
             
-            # Get API keys
-            if not bot_record.api_key_encrypted or not bot_record.api_secret_encrypted:
+            # Get API keys (indices: 6=api_key_encrypted, 7=api_secret_encrypted)
+            api_key_encrypted = getattr(bot_record, 'api_key_encrypted', None) or (bot_record[6] if len(bot_record) > 6 else None)
+            api_secret_encrypted = getattr(bot_record, 'api_secret_encrypted', None) or (bot_record[7] if len(bot_record) > 7 else None)
+            
+            if not api_key_encrypted or not api_secret_encrypted:
                 logger.error(f"Bot {bot_id} missing API keys")
                 bot.status = "error"
                 bot.error = "Missing API keys - add exchange credentials"
@@ -1307,12 +1313,13 @@ class BotRunner:
                 return
             
             from app.security import decrypt_credential
-            api_key = decrypt_credential(bot_record.api_key_encrypted)
-            api_secret = decrypt_credential(bot_record.api_secret_encrypted)
+            api_key = decrypt_credential(api_key_encrypted)
+            api_secret = decrypt_credential(api_secret_encrypted)
             
-            # Get symbol from pair column
-            if bot_record.pair:
-                symbol = bot_record.pair.replace("_", "/").replace("-", "/")
+            # Get symbol from pair column (index: 4)
+            pair_value = getattr(bot_record, 'pair', None) or (bot_record[4] if len(bot_record) > 4 else None)
+            if pair_value:
+                symbol = pair_value.replace("_", "/").replace("-", "/")
             else:
                 logger.error(f"Bot {bot_id} missing trading pair")
                 bot.status = "error"
@@ -1320,13 +1327,14 @@ class BotRunner:
                 db.commit()
                 return
             
-            # Parse config
+            # Parse config (index: 5)
+            config_raw = getattr(bot_record, 'config', None) or (bot_record[5] if len(bot_record) > 5 else None)
             config = {}
-            if bot_record.config:
-                if isinstance(bot_record.config, str):
-                    config = json.loads(bot_record.config)
+            if config_raw:
+                if isinstance(config_raw, str):
+                    config = json.loads(config_raw)
                 else:
-                    config = bot_record.config
+                    config = config_raw
             
             # Set defaults
             config.setdefault('spread_bps', 200)  # 2% spread
