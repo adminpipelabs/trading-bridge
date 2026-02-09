@@ -108,6 +108,16 @@ If getting 401 errors, verify signature matches Coinstore's requirements:
 - `app/services/exchange.py` - Added BitMart error handler workaround
 - `app/bot_routes.py` - Added better logging for connector debugging
 
+## 🔧 **BitMart Proxy Fix (Already Applied ✅)**
+
+### **Status:**
+✅ BitMart proxy is already using `aiohttp_proxy` correctly in `app/cex_volume_bot.py` (line 236).
+
+### **If BitMart Still Has Issues:**
+The proxy fix is in place, but BitMart API is currently returning "Internal Server Error" (code 59002). This is a BitMart server-side issue, not our code. However, if you see "IP forbidden" errors (error 30010), verify:
+- ✅ Railway IP `3.222.129.4` is whitelisted on BitMart API key
+- ✅ Proxy is being used correctly (check logs for `✅ Proxy configured (aiohttp_proxy)`)
+
 ## 🚨 **Known Issues (Not Related to Coinstore)**
 - BitMart API returning "Internal Server Error" (code 59002) - This is BitMart's server issue, not our code
 - Some bots failing to start due to database transaction errors (separate issue)
@@ -127,8 +137,55 @@ If getting 401 errors, verify signature matches Coinstore's requirements:
    - Can you share a sample Coinstore balance API response?
    - Does the response format match what we're expecting (list with AVAILABLE/FROZEN types)?
 
+## ✅ **Quick Test Checklist After Deploy**
+
+| Check | Expected Log | What It Means |
+|-------|-------------|---------------|
+| **Coinstore auth** | `Coinstore API POST /spot/accountList response status=200` | ✅ Authentication successful |
+| **Coinstore balance** | `Available: X SHARP \| Y USDT` | ✅ Balance parsing works |
+| **BitMart auth** | No `error 30010` (IP forbidden) | ✅ Proxy working correctly |
+| **BitMart balance** | Successful balance fetch | ✅ BitMart connection works |
+
+### **If Coinstore Still Fails with Auth Errors:**
+
+The two-step signature might need debugging. Add logging to `app/coinstore_connector.py` in `_generate_signature` method:
+
+```python
+def _generate_signature(self, expires: int, payload: str) -> str:
+    import math
+    
+    # Step 1: Calculate expires_key
+    expires_key = str(math.floor(expires / 30000))
+    logger.info(f"🔍 Coinstore signature debug - expires: {expires}, expires_key: {expires_key}")
+    
+    # Step 2: First HMAC to get key
+    key = hmac.new(
+        self.api_secret.encode('utf-8'),
+        expires_key.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    logger.info(f"🔍 Coinstore signature debug - key: {key[:20]}...")
+    
+    # Step 3: Second HMAC to get signature
+    signature = hmac.new(
+        key.encode('utf-8'),
+        payload.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    logger.info(f"🔍 Coinstore signature debug - signature: {signature[:20]}...")
+    logger.info(f"🔍 Coinstore signature debug - payload length: {len(payload)}")
+    
+    return signature
+```
+
+This will help verify:
+- ✅ `expires_key` calculation is correct (should be `floor(expires/30000)`)
+- ✅ Signature generation matches Coinstore's expected format
+- ✅ Payload is being signed correctly
+
 ## ✅ **Next Steps**
 1. Wait for Railway deployment to complete
 2. Test Coinstore balance fetching from client dashboard
-3. Check Railway logs for Coinstore API calls
-4. If errors persist, share logs with Dev for further debugging
+3. Test BitMart balance fetching (should work after proxy fix)
+4. Check Railway logs using the test checklist above
+5. If errors persist, add signature debugging logs and share with Dev
