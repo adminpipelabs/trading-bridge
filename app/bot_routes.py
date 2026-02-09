@@ -1477,9 +1477,25 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                 except Exception as e:
                                     logger.debug(f"Could not fetch open orders: {e}")
                                     # Use balance.used as fallback (already set above)
+                            except AttributeError as attr_err:
+                                # Handle ccxt AttributeError bug when error message is None
+                                if "'NoneType' object has no attribute 'lower'" in str(attr_err):
+                                    error_msg = "BitMart API error - check IP whitelist (add 3.222.129.4 and 54.205.35.75) and API key permissions"
+                                    logger.error(f"BitMart ccxt AttributeError bug: {attr_err}")
+                                    result["error"] = error_msg
+                                else:
+                                    logger.error(f"AttributeError fetching balance: {attr_err}", exc_info=True)
+                                    result["error"] = f"Could not fetch balance: {str(attr_err)[:100]}"
                             except Exception as e:
+                                error_msg = str(e)
                                 logger.error(f"Error fetching balance from exchange: {e}", exc_info=True)
-                                result["error"] = f"Could not fetch balance: {str(e)[:100]}"
+                                # Provide user-friendly error messages
+                                if "IP is forbidden" in error_msg or "30010" in error_msg:
+                                    result["error"] = "IP whitelist required - add Railway IPs (3.222.129.4, 54.205.35.75) to BitMart API settings"
+                                elif "Unauthorized" in error_msg or "1401" in error_msg:
+                                    result["error"] = "API authentication failed - check API keys and permissions"
+                                else:
+                                    result["error"] = f"Could not fetch balance: {error_msg[:100]}"
                 
         except Exception as e:
             logger.error(f"Error fetching balance for bot {bot_id}: {e}", exc_info=True)
