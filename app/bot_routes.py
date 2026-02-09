@@ -1699,16 +1699,11 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     
                                     # Extract available (free) and locked (used) balances
                                     # Handle both dict format and direct access
-                                    # ccxt returns balance in format: {"free": {"SHARP": 8381807.12}, "used": {"SHARP": 0}, "total": {"SHARP": 8381807.12}}
-                                    # Access directly from free/used dictionaries
-                                    free_dict = balance.get('free', {}) if isinstance(balance.get('free'), dict) else {}
-                                    used_dict = balance.get('used', {}) if isinstance(balance.get('used'), dict) else {}
-                                    
-                                    # Extract balances directly from free/used dicts (ccxt format)
-                                    base_available = float(free_dict.get(base, 0) or 0)
-                                    quote_available = float(free_dict.get(quote, 0) or 0)
-                                    base_locked = float(used_dict.get(base, 0) or 0)
-                                    quote_locked = float(used_dict.get(quote, 0) or 0)
+                                    # SIMPLE: balance.get("free", {}).get(currency, 0) - exactly like Hummingbot
+                                    base_available = float(balance.get("free", {}).get(base, 0) or 0)
+                                    quote_available = float(balance.get("free", {}).get(quote, 0) or 0)
+                                    base_locked = float(balance.get("used", {}).get(base, 0) or 0)
+                                    quote_locked = float(balance.get("used", {}).get(quote, 0) or 0)
                                     
                                     logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
                                     
@@ -1932,47 +1927,20 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 api_key_preview = f"{exchange.apiKey[:4]}...{exchange.apiKey[-4:]}" if hasattr(exchange, 'apiKey') and exchange.apiKey else "None"
                                 logger.info(f"🔍 Fetching balance for {connector_name} bot {bot_id}: exchange_type={exchange_type}, api_key={api_key_preview}")
                                 
-                                # Ensure markets are loaded for ccxt exchanges (not needed for Coinstore custom adapter)
-                                # This is REQUIRED before fetching balance - ccxt needs markets loaded
-                                if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
-                                    try:
-                                        if not hasattr(exchange, 'markets') or not exchange.markets:
-                                            logger.info(f"   Markets not loaded, loading now...")
-                                            # Add timeout to prevent hanging
-                                            import asyncio
-                                            await asyncio.wait_for(exchange.load_markets(), timeout=30.0)
-                                            logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
-                                        else:
-                                            logger.debug(f"   Markets already loaded: {len(exchange.markets)} markets")
-                                    except asyncio.TimeoutError:
-                                        logger.error(f"   ❌ Timeout loading markets for {connector_name} (30s)")
-                                        raise Exception(f"Timeout loading markets for {connector_name}")
-                                    except Exception as market_err:
-                                        logger.warning(f"   ⚠️  Could not load markets: {market_err}")
-                                        # Don't fail completely - might still work
+                                # SIMPLE: Just like Hummingbot - load markets, fetch balance, done
+                                import asyncio
                                 
-                                # Wrap in try-except to handle ccxt AttributeError bug and timeouts
                                 try:
-                                    # Fetch balance with timeout to prevent dashboard hanging
-                                    import asyncio
+                                    # Load markets if needed (ccxt requirement)
+                                    if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
+                                        if not hasattr(exchange, 'markets') or not exchange.markets:
+                                            await asyncio.wait_for(exchange.load_markets(), timeout=10.0)
                                     
-                                    if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart")
-                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
-                                    elif connector_name.lower() == 'coinstore':
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for Coinstore")
-                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
-                                    else:
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for {connector_name}")
-                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
-                                    
-                                    logger.info(f"✅ Balance fetch successful for {connector_name}")
-                                    logger.debug(f"   Balance keys: {list(balance.keys()) if isinstance(balance, dict) else 'not a dict'}")
-                                    if isinstance(balance, dict) and 'total' in balance:
-                                        total_keys = list(balance.get('total', {}).keys())[:10]
-                                        logger.debug(f"   Balance currencies (first 10): {total_keys}")
+                                    # Fetch balance - SIMPLE, no special cases
+                                    balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=10.0)
+                                    logger.info(f"✅ Balance fetched: {len(balance.get('free', {}))} currencies")
                                 except asyncio.TimeoutError:
-                                    logger.error(f"   ❌ Timeout fetching balance for {connector_name} (15s) - returning default values")
+                                    logger.error(f"❌ Timeout fetching balance (10s)")
                                     balance = None
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
@@ -1989,29 +1957,17 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 base_locked = 0.0
                                 quote_locked = 0.0
                                 
-                                # Extract balances - check if balance is None first
+                                # Extract balances - SIMPLE like Hummingbot: balance['free'][currency]
                                 if balance is None:
                                     logger.warning(f"Balance is None for bot {bot_id} - returning default values")
                                 else:
-                                    logger.info(f"✅ Balance fetch successful for {connector_name}: keys={list(balance.keys()) if balance else 'None'}, looking for base={base}, quote={quote}")
+                                    # Hummingbot pattern: balance.get("free", {}).get(currency, 0)
+                                    base_available = float(balance.get("free", {}).get(base, 0) or 0)
+                                    quote_available = float(balance.get("free", {}).get(quote, 0) or 0)
+                                    base_locked = float(balance.get("used", {}).get(base, 0) or 0)
+                                    quote_locked = float(balance.get("used", {}).get(quote, 0) or 0)
                                     
-                                    # ccxt returns balance in format: {"free": {"SHARP": 8381807.12}, "used": {"SHARP": 0}, "total": {"SHARP": 8381807.12}}
-                                    # Access directly from free/used dictionaries
-                                    free_dict = balance.get('free', {}) if isinstance(balance.get('free'), dict) else {}
-                                    used_dict = balance.get('used', {}) if isinstance(balance.get('used'), dict) else {}
-                                    total_dict = balance.get('total', {}) if isinstance(balance.get('total'), dict) else {}
-                                    
-                                    if isinstance(balance, dict):
-                                        free_keys = list(free_dict.keys())[:10]
-                                        logger.info(f"   Available currencies: {free_keys}")
-                                    
-                                    # Extract balances directly from free/used dicts (ccxt format)
-                                    base_available = float(free_dict.get(base, 0) or 0)
-                                    quote_available = float(free_dict.get(quote, 0) or 0)
-                                    base_locked = float(used_dict.get(base, 0) or 0)
-                                    quote_locked = float(used_dict.get(quote, 0) or 0)
-                                    
-                                    logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
+                                    logger.info(f"✅ Balance: {base}={base_available} free, {base_locked} locked; {quote}={quote_available} free, {quote_locked} locked")
                                 
                                 # Set result balances (use initialized/default values)
                                 result["available"] = {
