@@ -1244,38 +1244,171 @@ class BotRunner:
         db.commit()
     
     async def _run_spread_bot(self, bot_id: str):
-        """Run spread/market making bot"""
-        logger.info(f"📈 Spread bot {bot_id} starting main loop...")
+        """Run spread/market making bot for CEX exchanges"""
+        logger.info(f"📈 Spread bot {bot_id} starting...")
         
-        while not self.shutdown_event.is_set():
-            try:
-                db = get_db_session()
-                try:
-                    bot = db.query(Bot).filter(Bot.id == bot_id).first()
-                    if not bot or bot.status != "running":
-                        logger.info(f"Bot {bot_id} stopped or not found - exiting loop")
+        db = get_db_session()
+        spread_bot = None
+        
+        try:
+            from sqlalchemy import text
+            from app.spread_bot import SpreadBot
+            import json
+            import os
+            
+            # Get bot record with connector info
+            bot_record = db.execute(text("""
+                SELECT b.id, b.name, b.connector, b.account, b.base_asset, b.quote_asset, b.pair, b.config,
+                       ec.api_key_encrypted, ec.api_secret_encrypted, ec.memo
+                FROM bots b
+                LEFT JOIN clients cl ON cl.account_identifier = b.account
+                LEFT JOIN exchange_credentials ec ON ec.client_id = cl.id AND ec.exchange = LOWER(b.connector)
+                WHERE b.id = :bot_id
+            """), {'bot_id': bot_id}).fetchone()
+            
+            if not bot_record:
+                logger.error(f"Bot {bot_id} not found")
+                return
+            
+            # Check if bot is still running
+            bot = db.query(Bot).filter(Bot.id == bot_id).first()
+            if not bot or bot.status != "running":
+                logger.info(f"Bot {bot_id} stopped or not found")
+                return
+            
+            # Determine exchange name
+            connector_name = (bot_record.connector or "").lower()
+            bot_name_lower = (bot_record.name or "").lower()
+            
+            cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+            exchange_name = None
+            
+            if connector_name and connector_name in cex_keywords:
+                exchange_name = connector_name
+            else:
+                for kw in cex_keywords:
+                    if kw in bot_name_lower:
+                        exchange_name = kw
                         break
-                    
-                    config = bot.config or {}
-                    logger.info(f"📈 Spread bot {bot_id} - Refreshing orders...")
-                    
-                    # TODO: Implement spread bot logic
-                    logger.warning(f"  ⚠️  Spread bot logic not yet implemented")
-                    
-                    # Sleep for refresh interval
-                    refresh_seconds = config.get('refresh_seconds', 30)
-                    await asyncio.sleep(refresh_seconds)
-                    
-                finally:
-                    db.close()
-                    
-            except asyncio.CancelledError:
-                logger.info(f"Spread bot {bot_id} cancelled")
-                break
-            except Exception as e:
-                logger.error(f"❌ Error in spread bot {bot_id} loop: {e}")
-                logger.exception(e)
-                await asyncio.sleep(60)
+            
+            if not exchange_name:
+                logger.error(f"Could not determine exchange for bot {bot_id}")
+                bot.status = "error"
+                bot.error = "Could not determine exchange - check connector field"
+                db.commit()
+                return
+            
+            # Get API keys
+            if not bot_record.api_key_encrypted or not bot_record.api_secret_encrypted:
+                logger.error(f"Bot {bot_id} missing API keys")
+                bot.status = "error"
+                bot.error = "Missing API keys - add exchange credentials"
+                db.commit()
+                return
+            
+            from app.security import decrypt_credential
+            api_key = decrypt_credential(bot_record.api_key_encrypted)
+            api_secret = decrypt_credential(bot_record.api_secret_encrypted)
+            
+            # Get symbol
+            if bot_record.base_asset and bot_record.quote_asset:
+                symbol = f"{bot_record.base_asset}/{bot_record.quote_asset}"
+            elif bot_record.pair:
+                symbol = bot_record.pair.replace("_", "/").replace("-", "/")
+            else:
+                logger.error(f"Bot {bot_id} missing trading pair")
+                bot.status = "error"
+                bot.error = "Missing trading pair - set base_asset and quote_asset"
+                db.commit()
+                return
+            
+            # Parse config
+            config = {}
+            if bot_record.config:
+                if isinstance(bot_record.config, str):
+                    config = json.loads(bot_record.config)
+                else:
+                    config = bot_record.config
+            
+            # Set defaults
+            config.setdefault('spread_bps', 200)  # 2% spread
+            config.setdefault('order_size', 1000)
+            config.setdefault('refresh_interval', 30)
+            config.setdefault('price_decimals', 8)
+            config.setdefault('amount_decimals', 2)
+            
+            # Get proxy URL
+            proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+            
+            # Create exchange instance (same way as CEXVolumeBot)
+            from app.cex_volume_bot import get_exchange_config
+            import ccxt
+            
+            exchange_config = get_exchange_config(exchange_name)
+            if not exchange_config:
+                logger.error(f"No config found for exchange: {exchange_name}")
+                return
+            
+            # Handle Coinstore specially
+            if exchange_name == "coinstore":
+                from app.coinstore_adapter import create_coinstore_exchange
+                exchange = await create_coinstore_exchange(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    proxy_url=proxy_url
+                )
+            else:
+                # Use ccxt for other exchanges
+                ccxt_id = exchange_config.get("ccxt_id")
+                exchange_class = getattr(ccxt, ccxt_id)
+                
+                exchange_params = {
+                    'apiKey': api_key,
+                    'secret': api_secret,
+                    'enableRateLimit': True,
+                    'options': exchange_config.get('options', {})
+                }
+                
+                if proxy_url:
+                    exchange_params['proxies'] = {
+                        'http': proxy_url,
+                        'https': proxy_url
+                    }
+                
+                exchange = exchange_class(exchange_params)
+            
+            logger.info(f"✅ Exchange initialized: {exchange_name}")
+            
+            # Create spread bot instance
+            spread_bot = SpreadBot(
+                bot_id=bot_id,
+                exchange=exchange,
+                symbol=symbol,
+                config=config,
+                db_session=db
+            )
+            
+            # Run the bot (this blocks until bot stops)
+            await spread_bot.start()
+            
+        except asyncio.CancelledError:
+            logger.info(f"Spread bot {bot_id} cancelled")
+        except Exception as e:
+            logger.error(f"❌ Error in spread bot {bot_id}: {e}", exc_info=True)
+            # Mark bot as error
+            try:
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    bot.status = "error"
+                    bot.error = str(e)[:200]
+                    db.commit()
+            except:
+                pass
+        finally:
+            # Clean up
+            if spread_bot:
+                await spread_bot.stop()
+            db.close()
     
     async def _run_spread_bot_with_error_handling(self, bot_id: str):
         """Wrapper to handle errors in spread bot"""
