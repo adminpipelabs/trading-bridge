@@ -1930,8 +1930,10 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     # Fetch balances for CEX bots (works even when bot is stopped)
     connector_lower = (bot.connector or '').lower() if bot.connector else ''
     logger.info(f"🔍 Balance fetch request for bot {bot_id}: name={bot.name}, type={bot.bot_type}, connector={bot.connector}, account={bot.account}")
+    logger.info(f"🔍 Bot details: connector_lower={connector_lower}, bot_type={bot.bot_type}, pair={pair}")
     
     if bot.bot_type in ['volume', 'spread'] or (connector_lower and connector_lower not in ['jupiter', 'solana']):
+        logger.info(f"✅ Bot {bot_id} identified as CEX bot - proceeding with balance fetch")
         try:
             # Sync connectors for this account WITH TIMEOUT
             logger.info(f"🔄 Syncing connectors for account {bot.account} (bot: {bot.name})")
@@ -1958,13 +1960,19 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 connector_name = kw
                                 break
                     
+                    logger.info(f"🔍 Looking for connector '{connector_name}' in account '{bot.account}'")
+                    logger.info(f"🔍 Available connectors: {list(account.connectors.keys())}")
+                    
                     if connector_name:
                         exchange = account.connectors.get(connector_name)
                         if not exchange:
                             # Try case-insensitive lookup
+                            logger.info(f"🔍 Direct lookup failed, trying case-insensitive match...")
                             for key, val in account.connectors.items():
                                 if key.lower() == connector_name.lower():
+                                    logger.info(f"✅ Found case-insensitive match: '{key}' matches '{connector_name}'")
                                     exchange = val
+                                    connector_name = key  # Use the actual key name
                                     break
                         
                         if exchange:
@@ -1972,6 +1980,7 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                         else:
                             available_connectors = list(account.connectors.keys())
                             logger.warning(f"❌ Exchange connector '{connector_name}' not found in account '{bot.account}'. Available: {available_connectors}")
+                            logger.warning(f"❌ Bot connector field: '{bot.connector}', normalized: '{connector_name}'")
                         
                         if exchange:
                             try:
@@ -2247,6 +2256,8 @@ async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
     """
     from app.api.client_data import sync_connectors_to_exchange_manager
     from app.services.exchange import exchange_manager
+    from sqlalchemy import text
+    from app.cex_volume_bot import decrypt_credential
     
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
@@ -2258,15 +2269,84 @@ async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
     # Get connectors from database
     connectors = db.query(Connector).filter(Connector.client_id == bot.client_id).all()
     
+    # Check exchange_credentials table
+    exchange_creds = []
+    if client:
+        creds_result = db.execute(text("""
+            SELECT exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+            FROM exchange_credentials
+            WHERE client_id = :client_id
+        """), {"client_id": client.id}).fetchall()
+        
+        for cred in creds_result:
+            try:
+                api_key = decrypt_credential(cred.api_key_encrypted) if cred.api_key_encrypted else None
+                api_secret = decrypt_credential(cred.api_secret_encrypted) if cred.api_secret_encrypted else None
+                exchange_creds.append({
+                    "exchange": cred.exchange,
+                    "exchange_lower": cred.exchange.lower() if cred.exchange else None,
+                    "has_api_key": bool(api_key),
+                    "has_api_secret": bool(api_secret),
+                    "has_passphrase": bool(cred.passphrase_encrypted)
+                })
+            except Exception as e:
+                exchange_creds.append({
+                    "exchange": cred.exchange,
+                    "error": str(e)
+                })
+    
     # Try to sync
     synced = await sync_connectors_to_exchange_manager(bot.account, db)
     account = exchange_manager.get_account(bot.account) if synced else None
     
-    # Check connector match
+    # Determine expected connector name
     bot_connector_lower = (bot.connector or '').lower()
+    if not bot_connector_lower:
+        bot_name_lower = (bot.name or '').lower()
+        cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+        for kw in cex_keywords:
+            if kw in bot_name_lower:
+                bot_connector_lower = kw
+                break
+    
+    # Check connector match
     connector_match = False
+    matched_connector_key = None
     if account:
-        connector_match = bot_connector_lower in [k.lower() for k in account.connectors.keys()]
+        for key in account.connectors.keys():
+            if key.lower() == bot_connector_lower:
+                connector_match = True
+                matched_connector_key = key
+                break
+    
+    # Try to actually fetch balance if connector found
+    balance_test = None
+    if connector_match and account:
+        exchange = account.connectors[matched_connector_key]
+        try:
+            import asyncio
+            if bot_connector_lower == 'bitmart':
+                balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=10.0)
+            else:
+                balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=10.0)
+            
+            if balance:
+                base, quote = (bot.pair or "SHARP/USDT").split("/")
+                base_available = float(balance.get("free", {}).get(base, 0) or 0)
+                quote_available = float(balance.get("free", {}).get(quote, 0) or 0)
+                balance_test = {
+                    "success": True,
+                    "base_available": base_available,
+                    "quote_available": quote_available,
+                    "total_currencies": len(balance.get("free", {})),
+                    "sample_currencies": list(balance.get("free", {}).keys())[:5]
+                }
+        except Exception as e:
+            balance_test = {
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__
+            }
     
     return {
         "bot": {
@@ -2274,6 +2354,7 @@ async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
             "name": bot.name,
             "account": bot.account,
             "connector": bot.connector,
+            "connector_lower": bot_connector_lower,
             "bot_type": bot.bot_type,
             "pair": bot.pair,
             "client_id": bot.client_id
@@ -2293,17 +2374,22 @@ async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
                 "has_memo": bool(c.memo)
             } for c in connectors
         ],
+        "exchange_credentials_in_db": exchange_creds,
         "sync_result": synced,
         "account_in_manager": account is not None,
         "connectors_in_manager": list(account.connectors.keys()) if account else [],
         "bot_connector_lower": bot_connector_lower,
         "connector_match": connector_match,
+        "matched_connector_key": matched_connector_key,
+        "balance_test": balance_test,
         "diagnosis": {
             "has_client": client is not None,
             "has_connectors_in_db": len(connectors) > 0,
+            "has_exchange_credentials": len(exchange_creds) > 0,
             "sync_succeeded": synced,
             "account_exists": account is not None,
-            "connector_found": connector_match
+            "connector_found": connector_match,
+            "balance_fetch_works": balance_test.get("success") if balance_test else None
         }
     }
 
