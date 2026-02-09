@@ -504,7 +504,21 @@ def list_bots(
                 return await asyncio.gather(*tasks, return_exceptions=True)
             
             try:
-                balances = asyncio.run(fetch_all_balances())
+                # Handle event loop - check if one exists
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Event loop is running - can't use asyncio.run()
+                        # Fall back to creating a new loop in a thread
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as executor:
+                            future = executor.submit(asyncio.run, fetch_all_balances())
+                            balances = future.result(timeout=30)
+                    else:
+                        balances = loop.run_until_complete(fetch_all_balances())
+                except RuntimeError:
+                    # No event loop - create one
+                    balances = asyncio.run(fetch_all_balances())
                 for bot_dict, balance_data in zip(bot_dicts, balances):
                     if isinstance(balance_data, Exception):
                         bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
@@ -583,7 +597,21 @@ def list_bots(
             return await asyncio.gather(*tasks, return_exceptions=True)
         
         try:
-            balances = asyncio.run(fetch_all_balances())
+            # Handle event loop - check if one exists
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Event loop is running - can't use asyncio.run()
+                    # Fall back to creating a new loop in a thread
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, fetch_all_balances())
+                        balances = future.result(timeout=30)
+                else:
+                    balances = loop.run_until_complete(fetch_all_balances())
+            except RuntimeError:
+                # No event loop - create one
+                balances = asyncio.run(fetch_all_balances())
             for bot_dict, balance_data in zip(bot_dicts, balances):
                 if isinstance(balance_data, Exception):
                     bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
