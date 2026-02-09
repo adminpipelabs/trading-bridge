@@ -481,27 +481,38 @@ def list_bots(
         
         bot_dicts = [bot.to_dict() for bot in bots]
         
-        # Include balances if requested
+        # Include balances if requested - BUT DON'T BLOCK THE RESPONSE
         if include_balances:
             import asyncio
             from app.database import SessionLocal
             
             async def fetch_balance_for_bot(bot_id: str):
-                """Helper to fetch balance for a single bot"""
+                """Helper to fetch balance for a single bot with timeout"""
                 try:
                     async_db = SessionLocal()
                     try:
-                        balance_data = await get_bot_stats(bot_id, async_db)
+                        # Add timeout per bot - don't wait more than 5 seconds per bot
+                        balance_data = await asyncio.wait_for(
+                            get_bot_stats(bot_id, async_db),
+                            timeout=5.0
+                        )
                         return balance_data
                     finally:
                         async_db.close()
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout fetching balance for bot {bot_id} (5s)")
+                    return None
                 except Exception as e:
                     logger.warning(f"Could not fetch balance for bot {bot_id}: {e}")
                     return None
             
             async def fetch_all_balances():
                 tasks = [fetch_balance_for_bot(bot.id) for bot in bots]
-                return await asyncio.gather(*tasks, return_exceptions=True)
+                # Overall timeout - don't wait more than 8 seconds total
+                return await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=8.0
+                )
             
             try:
                 # Handle event loop - check if one exists
@@ -513,26 +524,29 @@ def list_bots(
                         import concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             future = executor.submit(asyncio.run, fetch_all_balances())
-                            balances = future.result(timeout=30)
+                            balances = future.result(timeout=10)  # Overall timeout
                     else:
                         balances = loop.run_until_complete(fetch_all_balances())
-                except RuntimeError:
-                    # No event loop - create one
-                    balances = asyncio.run(fetch_all_balances())
+                except (RuntimeError, asyncio.TimeoutError, concurrent.futures.TimeoutError):
+                    # Timeout or no event loop - return bots without balances
+                    logger.warning(f"Timeout or error fetching balances - returning bots without balances")
+                    balances = [None] * len(bots)
+                
                 for bot_dict, balance_data in zip(bot_dicts, balances):
-                    if isinstance(balance_data, Exception):
+                    if isinstance(balance_data, Exception) or balance_data is None:
                         bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
-                    elif balance_data:
+                    else:
                         bot_dict["balance"] = {
                             "available": balance_data.get("available", {}),
                             "locked": balance_data.get("locked", {}),
                             "volume_24h": balance_data.get("volume_24h", 0),
                             "trades_24h": balance_data.get("trades_24h", {"buys": 0, "sells": 0})
                         }
-                    else:
-                        bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
             except Exception as e:
-                logger.error(f"Error fetching balances: {e}")
+                logger.error(f"Error fetching balances: {e} - returning bots without balances")
+                # Don't fail - just return bots without balances
+                for bot_dict in bot_dicts:
+                    bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
         
         return {"bots": bot_dicts}
     
@@ -675,9 +689,17 @@ async def list_bots_with_balances(
                 "trades_24h": {"buys": 0, "sells": 0}
             }
     
-    # Fetch balances for all bots in parallel
+    # Fetch balances for all bots in parallel WITH TIMEOUT to prevent hanging
     balance_tasks = [fetch_balance_for_bot(bot["id"]) for bot in bots]
-    balances = await asyncio.gather(*balance_tasks, return_exceptions=True)
+    try:
+        # Set overall timeout - don't wait more than 10 seconds total for all balances
+        balances = await asyncio.wait_for(
+            asyncio.gather(*balance_tasks, return_exceptions=True),
+            timeout=10.0
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"⚠️  Timeout fetching balances for {len(bots)} bots - returning bots without balances")
+        balances = [None] * len(bots)
     
     # Add balances to each bot dict
     for bot_dict, balance_data in zip(bots, balances):
@@ -1621,27 +1643,43 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     logger.info(f"   Exchange options: {exchange.options}")
                                 
                                 # Ensure markets are loaded for ccxt exchanges (not needed for Coinstore custom adapter)
+                                # This is REQUIRED before fetching balance - ccxt needs markets loaded
                                 if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
                                     try:
                                         if not hasattr(exchange, 'markets') or not exchange.markets:
                                             logger.info(f"   Markets not loaded, loading now...")
-                                            await exchange.load_markets()
+                                            # Add timeout to prevent hanging
+                                            import asyncio
+                                            await asyncio.wait_for(exchange.load_markets(), timeout=30.0)
                                             logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
+                                        else:
+                                            logger.debug(f"   Markets already loaded: {len(exchange.markets)} markets")
+                                    except asyncio.TimeoutError:
+                                        logger.error(f"   ❌ Timeout loading markets for {connector_name} (30s)")
+                                        raise Exception(f"Timeout loading markets for {connector_name}")
                                     except Exception as market_err:
-                                        logger.warning(f"   ⚠️  Could not load markets (may still work): {market_err}")
+                                        logger.warning(f"   ⚠️  Could not load markets: {market_err}")
+                                        # Don't fail completely - might still work
                                 
-                                # Wrap in try-except to handle ccxt AttributeError bug
+                                # Wrap in try-except to handle ccxt AttributeError bug and timeouts
                                 try:
+                                    # Fetch balance with timeout to prevent dashboard hanging
+                                    import asyncio
+                                    
                                     if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart (markets loaded)")
-                                        balance = await exchange.fetch_balance()
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart")
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     elif connector_name.lower() == 'coinstore':
-                                        logger.debug(f"   Calling: exchange.fetch_balance()")
-                                        balance = await exchange.fetch_balance()
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for Coinstore")
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     else:
-                                        logger.debug(f"   Calling: exchange.fetch_balance()")
-                                        balance = await exchange.fetch_balance()
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for {connector_name}")
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                    
                                     logger.info(f"✅ Balance fetch successful for {connector_name}")
+                                except asyncio.TimeoutError:
+                                    logger.error(f"   ❌ Timeout fetching balance for {connector_name} (15s) - returning default values")
+                                    balance = None
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
@@ -1884,40 +1922,47 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 logger.info(f"🔍 Fetching balance for {connector_name} bot {bot_id}: exchange_type={exchange_type}, api_key={api_key_preview}")
                                 
                                 # Ensure markets are loaded for ccxt exchanges (not needed for Coinstore custom adapter)
+                                # This is REQUIRED before fetching balance - ccxt needs markets loaded
                                 if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
                                     try:
                                         if not hasattr(exchange, 'markets') or not exchange.markets:
                                             logger.info(f"   Markets not loaded, loading now...")
-                                            await exchange.load_markets()
+                                            # Add timeout to prevent hanging
+                                            import asyncio
+                                            await asyncio.wait_for(exchange.load_markets(), timeout=30.0)
                                             logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
+                                        else:
+                                            logger.debug(f"   Markets already loaded: {len(exchange.markets)} markets")
+                                    except asyncio.TimeoutError:
+                                        logger.error(f"   ❌ Timeout loading markets for {connector_name} (30s)")
+                                        raise Exception(f"Timeout loading markets for {connector_name}")
                                     except Exception as market_err:
-                                        logger.warning(f"   ⚠️  Could not load markets (may still work): {market_err}")
+                                        logger.warning(f"   ⚠️  Could not load markets: {market_err}")
+                                        # Don't fail completely - might still work
                                 
-                                # Wrap in try-except to handle ccxt AttributeError bug
+                                # Wrap in try-except to handle ccxt AttributeError bug and timeouts
                                 try:
-                                    # Ensure markets are loaded before fetching balance (required for ccxt)
-                                    if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
-                                        if not hasattr(exchange, 'markets') or not exchange.markets:
-                                            logger.info(f"   Markets not loaded, loading now...")
-                                            await exchange.load_markets()
-                                            logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
+                                    # Fetch balance with timeout to prevent dashboard hanging
+                                    import asyncio
                                     
-                                    # Fetch balance - BitMart works without type parameter when markets are loaded
                                     if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart (markets loaded)")
-                                        balance = await exchange.fetch_balance()
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart")
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     elif connector_name.lower() == 'coinstore':
                                         logger.debug(f"   Calling: exchange.fetch_balance() for Coinstore")
-                                        balance = await exchange.fetch_balance()
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     else:
                                         logger.debug(f"   Calling: exchange.fetch_balance() for {connector_name}")
-                                        balance = await exchange.fetch_balance()
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     
                                     logger.info(f"✅ Balance fetch successful for {connector_name}")
                                     logger.debug(f"   Balance keys: {list(balance.keys()) if isinstance(balance, dict) else 'not a dict'}")
                                     if isinstance(balance, dict) and 'total' in balance:
                                         total_keys = list(balance.get('total', {}).keys())[:10]
                                         logger.debug(f"   Balance currencies (first 10): {total_keys}")
+                                except asyncio.TimeoutError:
+                                    logger.error(f"   ❌ Timeout fetching balance for {connector_name} (15s) - returning default values")
+                                    balance = None
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
