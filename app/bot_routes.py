@@ -2072,6 +2072,7 @@ async def test_balance_direct(
     from app.api.client_data import sync_connectors_to_exchange_manager
     from app.services.exchange import exchange_manager
     from app.cex_volume_bot import decrypt_credential
+    from app.database import Client
     from sqlalchemy import text
     
     try:
