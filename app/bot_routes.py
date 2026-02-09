@@ -1329,7 +1329,9 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
     }
     
     # For CEX bots, fetch balance from exchange
-    if bot.bot_type == 'volume' or bot.bot_type == 'spread' or (bot.connector and bot.connector.lower() not in ['jupiter', 'solana']):
+    # Safely check connector (could be None)
+    connector_lower = (bot.connector or '').lower() if bot.connector else ''
+    if bot.bot_type == 'volume' or bot.bot_type == 'spread' or (connector_lower and connector_lower not in ['jupiter', 'solana']):
         try:
             # Sync connectors for this account
             synced = await sync_connectors_to_exchange_manager(bot.account, db)
@@ -1447,21 +1449,22 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
         
         # Calculate volume based on bot type
         if bot.bot_type == 'spread':
-            # Spread Bot: Total value traded
-            total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
-            result["volume"] = {
-                "type": "value_traded",
-                "value_usd": round(total_volume, 2),
-                "total_trades": len(all_trades)
-            }
-        else:  # volume bot
-            # Volume Bot: Buy/sell count
+            # Spread Bot: Buy/sell orders done
             buy_count = sum(1 for t in all_trades if t.get("side", "").lower() == "buy")
             sell_count = sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
             result["volume"] = {
-                "type": "trade_count",
+                "type": "buy_sell_count",
                 "buy_count": buy_count,
                 "sell_count": sell_count,
+                "total_trades": len(all_trades)
+            }
+        else:  # volume bot
+            # Volume Bot: Total volume traded (USD)
+            total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
+            result["volume"] = {
+                "type": "volume_traded",
+                "value_usd": round(total_volume, 2),
+                "total_volume_usd": round(total_volume, 2),  # Alias for consistency
                 "total_trades": len(all_trades)
             }
     except Exception as e:
