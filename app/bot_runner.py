@@ -51,7 +51,17 @@ class BotRunner:
                 for bot in running_bots:
                     logger.info(f"  - Bot ID: {bot.id}, Name: {bot.name}, Type: {bot.bot_type}")
                     if bot.bot_type in ['volume', 'spread']:
-                        await self.start_bot(bot.id, db)
+                        try:
+                            await self.start_bot(bot.id, db)
+                        except Exception as bot_start_error:
+                            # If transaction is aborted, rollback and continue with next bot
+                            logger.error(f"❌ Failed to start bot {bot.id}: {bot_start_error}")
+                            try:
+                                db.rollback()
+                            except Exception as rollback_error:
+                                logger.error(f"Failed to rollback after bot start error: {rollback_error}")
+                            # Continue with next bot instead of crashing entire startup
+                            continue
                     else:
                         logger.warning(f"  ⚠️  Skipping bot {bot.id} - unknown bot_type: {bot.bot_type}")
                 
@@ -103,6 +113,8 @@ class BotRunner:
                     exchange = bot_check[0] if len(bot_check) > 0 else None
                     chain = bot_check[1] if len(bot_check) > 1 else None
             except Exception as sql_error:
+                # Columns might not exist yet - rollback transaction and continue
+                db.rollback()
                 logger.warning(f"Could not check exchange/chain columns: {sql_error}")
             
             # CEX bot check - check explicit CEX exchanges list
