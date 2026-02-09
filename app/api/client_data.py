@@ -81,63 +81,58 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
     
     # ALWAYS check encrypted exchange_credentials table (clients add keys here)
     # Don't skip even if connectors table had entries - clients may have their own keys
-        logger.info(f"⚠️  No connectors in 'connectors' table, checking 'exchange_credentials' table...")
-        from sqlalchemy import text
-        from app.cex_volume_bot import decrypt_credential
+    logger.info(f"🔄 Checking 'exchange_credentials' table for additional credentials...")
+    from sqlalchemy import text
+    from app.cex_volume_bot import decrypt_credential
+    
+    try:
+        # Query exchange_credentials table (encrypted)
+        creds_result = db.execute(text("""
+            SELECT exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+            FROM exchange_credentials
+            WHERE client_id = :client_id
+        """), {"client_id": client.id}).fetchall()
         
-        try:
-            # Query exchange_credentials table (encrypted)
-            creds_result = db.execute(text("""
-                SELECT exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted
-                FROM exchange_credentials
-                WHERE client_id = :client_id
-            """), {"client_id": client.id}).fetchall()
-            
-            if creds_result:
-                logger.info(f"✅ Found {len(creds_result)} credential(s) in 'exchange_credentials' table")
-                logger.info(f"   Exchange names: {[c.exchange for c in creds_result]}")
-                # Decrypt and add to exchange_manager
-                for cred_row in creds_result:
-                    exchange_name = cred_row.exchange
-                    logger.info(f"   Processing exchange: {exchange_name} (lowercase: {exchange_name.lower()})")
-                    try:
-                        api_key = decrypt_credential(cred_row.api_key_encrypted)
-                        api_secret = decrypt_credential(cred_row.api_secret_encrypted)
-                        memo = None
-                        if cred_row.passphrase_encrypted:
-                            memo = decrypt_credential(cred_row.passphrase_encrypted)
-                        
-                        logger.info(f"   Decrypted keys for {exchange_name}: api_key={'✅' if api_key else '❌'}, api_secret={'✅' if api_secret else '❌'}")
-                        
-                        # Skip if already loaded
-                        if exchange_name.lower() in account.connectors:
-                            logger.debug(f"⏭️  Connector {exchange_name} already loaded")
-                            continue
-                        
-                        logger.info(f"   Adding connector {exchange_name} to exchange_manager...")
-                        await account.add_connector(
-                            connector_name=exchange_name,
-                            api_key=api_key,
-                            api_secret=api_secret,
-                            memo=memo
-                        )
-                        logger.info(f"✅ Synced connector {exchange_name} from exchange_credentials to exchange_manager")
-                    except Exception as e:
-                        logger.error(f"❌ Failed to decrypt/sync credential for {exchange_name}: {e}")
-                        import traceback
-                        logger.error(traceback.format_exc())
+        if creds_result:
+            logger.info(f"✅ Found {len(creds_result)} credential(s) in 'exchange_credentials' table")
+            logger.info(f"   Exchange names: {[c.exchange for c in creds_result]}")
+            # Decrypt and add to exchange_manager
+            for cred_row in creds_result:
+                exchange_name = cred_row.exchange
+                logger.info(f"   Processing exchange: {exchange_name} (lowercase: {exchange_name.lower()})")
+                try:
+                    api_key = decrypt_credential(cred_row.api_key_encrypted)
+                    api_secret = decrypt_credential(cred_row.api_secret_encrypted)
+                    memo = None
+                    if cred_row.passphrase_encrypted:
+                        memo = decrypt_credential(cred_row.passphrase_encrypted)
+                    
+                    logger.info(f"   Decrypted keys for {exchange_name}: api_key={'✅' if api_key else '❌'}, api_secret={'✅' if api_secret else '❌'}")
+                    
+                    # Skip if already loaded
+                    if exchange_name.lower() in account.connectors:
+                        logger.debug(f"⏭️  Connector {exchange_name} already loaded")
                         continue
-                
-                # Check if we successfully synced any
-                if len(account.connectors) > 0:
-                    logger.info(f"✅ Successfully synced {len(account.connectors)} connector(s) from exchange_credentials")
-                    return True
-            else:
-                logger.debug(f"ℹ️  No credentials found in 'exchange_credentials' table")
-        except Exception as e:
-            logger.error(f"❌ Failed to query exchange_credentials table: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+                    
+                    logger.info(f"   Adding connector {exchange_name} to exchange_manager...")
+                    await account.add_connector(
+                        connector_name=exchange_name,
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        memo=memo
+                    )
+                    logger.info(f"✅ Synced connector {exchange_name} from exchange_credentials to exchange_manager")
+                except Exception as e:
+                    logger.error(f"❌ Failed to decrypt/sync credential for {exchange_name}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    continue
+        else:
+            logger.debug(f"ℹ️  No credentials found in 'exchange_credentials' table")
+    except Exception as e:
+        logger.error(f"❌ Failed to query exchange_credentials table: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
     
     # Final check: Did we sync any connectors at all?
     if len(account.connectors) > 0:

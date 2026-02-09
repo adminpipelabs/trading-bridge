@@ -1998,22 +1998,52 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     # Load markets if needed (ccxt requirement)
                                     if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
                                         if not hasattr(exchange, 'markets') or not exchange.markets:
+                                            logger.info(f"📊 Loading markets for {connector_name}...")
                                             await asyncio.wait_for(exchange.load_markets(), timeout=10.0)
+                                            logger.info(f"✅ Markets loaded: {len(exchange.markets) if hasattr(exchange, 'markets') else 0} pairs")
                                     
-                                    # Fetch balance - SIMPLE, no special cases
-                                    balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=10.0)
-                                    logger.info(f"✅ Balance fetched: {len(balance.get('free', {}))} currencies")
+                                    # Fetch balance - BitMart requires type parameter
+                                    logger.info(f"💰 Fetching balance from {connector_name}...")
+                                    if connector_name.lower() == 'bitmart':
+                                        balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
+                                    else:
+                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                    
+                                    if balance:
+                                        free_count = len(balance.get('free', {}))
+                                        used_count = len(balance.get('used', {}))
+                                        total_count = len(balance.get('total', {}))
+                                        logger.info(f"✅ Balance fetched: {free_count} free currencies, {used_count} used, {total_count} total")
+                                        
+                                        # Log sample balances (non-zero only)
+                                        sample_balances = []
+                                        for currency, amount in balance.get('free', {}).items():
+                                            if float(amount or 0) > 0:
+                                                sample_balances.append(f"{currency}: {amount}")
+                                        if sample_balances:
+                                            logger.info(f"   Sample balances: {', '.join(sample_balances[:5])}")
+                                    else:
+                                        logger.warning(f"⚠️  Balance response is None or empty")
+                                        balance = None
                                 except asyncio.TimeoutError:
-                                    logger.error(f"❌ Timeout fetching balance (10s)")
+                                    logger.error(f"❌ Timeout fetching balance from {connector_name} (15s) - exchange may be slow or unreachable")
                                     balance = None
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
-                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message) - returning default balances")
-                                        # Don't expose error - return default values (already 0)
-                                        balance = None
+                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message) - trying with type parameter...")
+                                        try:
+                                            balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
+                                            logger.info(f"✅ Retry with type='spot' succeeded")
+                                        except Exception as retry_err:
+                                            logger.error(f"❌ Retry also failed: {retry_err}")
+                                            balance = None
                                     else:
-                                        raise
+                                        logger.error(f"❌ AttributeError fetching balance: {attr_err}", exc_info=True)
+                                        balance = None
+                                except Exception as balance_fetch_err:
+                                    logger.error(f"❌ Exception fetching balance from {connector_name}: {balance_fetch_err}", exc_info=True)
+                                    balance = None
                                 
                                 # Initialize balance variables to 0 (default values)
                                 base_available = 0.0
