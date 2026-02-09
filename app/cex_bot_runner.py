@@ -227,6 +227,15 @@ class CEXBotRunner:
                                         bot_record["api_key"] = api_key
                                         bot_record["api_secret"] = api_secret
                                         bot_record["memo"] = memo
+                                        # Clear health error status since we found credentials
+                                        await conn.execute("""
+                                            UPDATE bots SET 
+                                                health_status = NULL,
+                                                health_message = NULL,
+                                                error = NULL
+                                            WHERE id = $1
+                                        """, bot_id)
+                                        logger.info(f"✅ Cleared health error for bot {bot_id} - credentials found")
                                     except Exception as decrypt_err:
                                         logger.error(f"❌ Failed to decrypt credentials: {decrypt_err}")
                                         api_key = None
