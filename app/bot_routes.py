@@ -2056,6 +2056,93 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/test-balance-direct")
+async def test_balance_direct(
+    account: str = Query(..., description="Account identifier"),
+    exchange_name: str = Query("bitmart", description="Exchange name"),
+    db: Session = Depends(get_db)
+):
+    """
+    DIRECT TEST: Fetch balance exactly like Hummingbot does.
+    Use this to verify balance fetching works independently of bot logic.
+    
+    This creates exchange directly, loads markets, fetches balance - 3 lines like Hummingbot.
+    """
+    import ccxt.async_support as ccxt
+    from app.api.client_data import sync_connectors_to_exchange_manager
+    from app.services.exchange import exchange_manager
+    from app.cex_volume_bot import decrypt_credential
+    from sqlalchemy import text
+    
+    try:
+        # Get client
+        client = db.query(Client).filter(Client.account_identifier == account).first()
+        if not client:
+            return {"error": f"Client not found for account: {account}"}
+        
+        # Try to get API keys from exchange_credentials
+        creds = db.execute(text("""
+            SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+            FROM exchange_credentials
+            WHERE client_id = :client_id AND exchange = :exchange
+        """), {"client_id": client.id, "exchange": exchange_name}).first()
+        
+        if not creds:
+            return {"error": f"No credentials found for {exchange_name}"}
+        
+        # Decrypt keys
+        api_key = decrypt_credential(creds.api_key_encrypted)
+        api_secret = decrypt_credential(creds.api_secret_encrypted)
+        memo = decrypt_credential(creds.passphrase_encrypted) if creds.passphrase_encrypted else None
+        
+        # Create exchange EXACTLY like Hummingbot
+        config = {
+            'apiKey': api_key,
+            'secret': api_secret,
+            'enableRateLimit': True,
+        }
+        if memo:
+            config['uid'] = memo
+        if exchange_name.lower() == 'bitmart':
+            config['options'] = {'defaultType': 'spot'}
+        
+        exchange = ccxt.bitmart(config) if exchange_name.lower() == 'bitmart' else getattr(ccxt, exchange_name.lower())(config)
+        
+        # Load markets
+        await exchange.load_markets()
+        
+        # Fetch balance
+        balance = await exchange.fetch_balance()
+        
+        # Extract balances
+        free_balances = {}
+        for currency, amount in balance.get("free", {}).items():
+            if float(amount or 0) > 0:
+                free_balances[currency] = float(amount)
+        
+        await exchange.close()
+        
+        return {
+            "success": True,
+            "exchange": exchange_name,
+            "account": account,
+            "balance": {
+                "free": free_balances,
+                "total_currencies": len(balance.get("free", {})),
+                "non_zero_currencies": len(free_balances)
+            },
+            "raw_balance_keys": list(balance.keys()),
+            "sample_free_keys": list(balance.get("free", {}).keys())[:10]
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }
+
+
 @router.get("/{bot_id}/balance-debug")
 async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
     """
