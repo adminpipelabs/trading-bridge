@@ -95,9 +95,11 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
             
             if creds_result:
                 logger.info(f"✅ Found {len(creds_result)} credential(s) in 'exchange_credentials' table")
+                logger.info(f"   Exchange names: {[c.exchange for c in creds_result]}")
                 # Decrypt and add to exchange_manager
                 for cred_row in creds_result:
                     exchange_name = cred_row.exchange
+                    logger.info(f"   Processing exchange: {exchange_name} (lowercase: {exchange_name.lower()})")
                     try:
                         api_key = decrypt_credential(cred_row.api_key_encrypted)
                         api_secret = decrypt_credential(cred_row.api_secret_encrypted)
@@ -105,11 +107,14 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
                         if cred_row.passphrase_encrypted:
                             memo = decrypt_credential(cred_row.passphrase_encrypted)
                         
+                        logger.info(f"   Decrypted keys for {exchange_name}: api_key={'✅' if api_key else '❌'}, api_secret={'✅' if api_secret else '❌'}")
+                        
                         # Skip if already loaded
                         if exchange_name.lower() in account.connectors:
                             logger.debug(f"⏭️  Connector {exchange_name} already loaded")
                             continue
                         
+                        logger.info(f"   Adding connector {exchange_name} to exchange_manager...")
                         await account.add_connector(
                             connector_name=exchange_name,
                             api_key=api_key,

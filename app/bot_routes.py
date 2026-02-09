@@ -1598,9 +1598,9 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     if bot.bot_type in ['volume', 'spread'] or (connector_lower and connector_lower not in ['jupiter', 'solana']):
         try:
             # Sync connectors for this account
-            logger.info(f"🔄 Syncing connectors for account {bot.account}")
+            logger.info(f"🔄 Syncing connectors for account {bot.account} (bot: {bot.name})")
             synced = await sync_connectors_to_exchange_manager(bot.account, db)
-            logger.info(f"✅ Sync result for {bot.account}: {synced}")
+            logger.info(f"✅ Sync result for {bot.account}: {synced}, connectors loaded: {list(exchange_manager.get_account(bot.account).connectors.keys()) if exchange_manager.get_account(bot.account) else 'No account'}")
             if synced:
                 account = exchange_manager.get_account(bot.account)
                 if account:
