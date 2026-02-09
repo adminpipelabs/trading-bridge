@@ -6,10 +6,10 @@
 
 | Bot | Exchange | Type | Blocker | Fix Status | Notes |
 |-----|----------|------|---------|------------|-------|
-| Sharp-SB-BitMart | BitMart | Spread | Error 59002 (BitMart server) | ⏳ Out of our control | BitMart internal server error |
+| Sharp-SB-BitMart | BitMart | Spread | ⚠️ Logic not implemented | 🔴 Blocked | "Spread bot logic not yet implemented" |
 | Sharp-VB-BitMart | BitMart | Volume | Error 59002 + Low USDT | ⏳ Out of our control | BitMart server error; Only 1.66 USDT (need $5+ for orders) |
-| SHARP-SB-Coinstore | Coinstore | Spread | ✅ Started | 🧪 Ready to test | Bot started successfully, balance fetch not triggered yet |
-| SHARP-VB-Coinstore | Coinstore | Volume | ❓ Status unknown | 🔍 Check DB | Not appearing in startup logs - check if status='running' |
+| SHARP-SB-Coinstore | Coinstore | Spread | ⚠️ Logic not implemented | 🔴 Blocked | "Spread bot logic not yet implemented" |
+| SHARP-VB-Coinstore | Coinstore | Volume | ❌ Not running | 🔍 **NEEDS START** | Not in running bots list - needs to be started |
 
 ## ✅ **Fixes Deployed**
 
@@ -119,7 +119,20 @@ Watch Railway logs for:
 - **Coinstore bots:** `SHARP-SB-Coinstore` started but no balance fetch attempts in logs yet
 
 **Action Items:**
-1. ✅ **Add USDT to BitMart** - Need at least $10-20 to enable buy orders
-2. ⏳ **Wait/retry BitMart** - 59002 is their internal error, may resolve itself
-3. 🧪 **Test Coinstore balance** - Click "Retry" on Coinstore bot in dashboard to trigger balance fetch
-4. 🔍 **Check SHARP-VB-Coinstore** - Not appearing in startup logs, verify status in database
+
+1. 🚀 **Start SHARP-VB-Coinstore** (CRITICAL - needed to test Coinstore fix):
+   ```sql
+   UPDATE bots SET status = 'running' WHERE name = 'SHARP-VB-Coinstore';
+   ```
+   OR start it from the dashboard UI
+   
+2. 🧪 **Test Coinstore balance** - Once `SHARP-VB-Coinstore` is running:
+   - Click "Retry" on `SHARP-VB-Coinstore` in dashboard to trigger balance fetch
+   - Check Railway logs for: `Coinstore API POST /spot/accountList response status=200`
+   - Verify balances show: `Available: X SHARP | Y USDT`
+
+3. ✅ **Add USDT to BitMart** - Need at least $10-20 to enable buy orders
+
+4. ⏳ **Wait/retry BitMart** - 59002 is their internal error, may resolve itself
+
+**Note:** Spread bots (`SHARP-SB-Coinstore`, `Sharp-SB-BitMart`) cannot test Coinstore because spread bot logic is not implemented yet. Only volume bots can test the Coinstore connector.
