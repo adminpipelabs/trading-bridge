@@ -2464,22 +2464,62 @@ def remove_bot_wallet(bot_id: str, wallet_address: str, db: Session = Depends(ge
 
 
 @router.delete("/{bot_id}")
-def delete_bot(bot_id: str, db: Session = Depends(get_db)):
-    """Delete a bot."""
+def delete_bot(
+    bot_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address")
+):
+    """
+    Delete a bot.
+    Clients can delete their own bots. Admins can delete any bot.
+    """
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
 
     if not bot:
         raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Authorization check - clients can delete their own bots
+    wallet_address = wallet_address or request.headers.get("X-Wallet-Address", None)
+    auth_header = request.headers.get("Authorization", "")
+    
+    if wallet_address:
+        try:
+            current_client = get_current_client(wallet_address=wallet_address, db=db)
+            check_bot_access(bot, current_client)
+        except HTTPException:
+            # Wallet auth failed - try token (admin)
+            if not auth_header.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="Authentication required")
+    elif auth_header.startswith("Bearer "):
+        # Token auth (admin) - allow
+        pass
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
     # Stop bot first if running
     if bot.status == "running":
         try:
-            # hummingbot.stop_bot(bot.instance_name)
-            pass
+            # For Solana/CEX bots, stop via bot runner
+            if bot.bot_type in ['volume', 'spread']:
+                import asyncio
+                from app.bot_runner import bot_runner
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If loop is running, schedule it
+                        asyncio.create_task(bot_runner.stop_bot(bot_id))
+                    else:
+                        asyncio.run(bot_runner.stop_bot(bot_id))
+                except Exception as e:
+                    logger.warning(f"Failed to stop bot before deletion: {e}")
+            # hummingbot.stop_bot(bot.instance_name)  # For Hummingbot bots
         except Exception as e:
             logger.warning(f"Failed to stop bot before deletion: {e}")
 
     db.delete(bot)
     db.commit()
+    
+    logger.info(f"Bot {bot_id} deleted by client")
 
     return {"status": "deleted", "bot_id": bot_id}
