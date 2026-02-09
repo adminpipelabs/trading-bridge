@@ -81,14 +81,36 @@ class CoinstoreConnector:
             
             if method.upper() == 'GET':
                 async with session.get(url, params=params, **request_kwargs) as response:
-                    return await response.json()
+                    response_text = await response.text()
+                    logger.debug(f"Coinstore API GET {endpoint} response status={response.status}, body={response_text[:200]}")
+                    
+                    if response.status != 200:
+                        error_text = response_text[:500]
+                        raise Exception(f"HTTP {response.status}: {error_text}")
+                    
+                    try:
+                        return await response.json()
+                    except Exception as json_err:
+                        logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
+                        raise Exception(f"Invalid JSON response: {response_text[:200]}")
             elif method.upper() == 'POST':
                 async with session.post(url, json=params, **request_kwargs) as response:
-                    return await response.json()
+                    response_text = await response.text()
+                    logger.debug(f"Coinstore API POST {endpoint} response status={response.status}, body={response_text[:200]}")
+                    
+                    if response.status != 200:
+                        error_text = response_text[:500]
+                        raise Exception(f"HTTP {response.status}: {error_text}")
+                    
+                    try:
+                        return await response.json()
+                    except Exception as json_err:
+                        logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
+                        raise Exception(f"Invalid JSON response: {response_text[:200]}")
             else:
                 raise ValueError(f"Unsupported method: {method}")
         except Exception as e:
-            logger.error(f"Coinstore API request failed: {e}")
+            logger.error(f"Coinstore API request failed for {endpoint}: {e}", exc_info=True)
             raise
     
     async def get_ticker(self, symbol: str) -> Dict[str, Any]:

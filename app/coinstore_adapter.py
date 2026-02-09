@@ -83,8 +83,18 @@ class CoinstoreExchange:
         """Fetch account balance."""
         try:
             data = await self.connector.get_balances()
+            
+            # Log full response for debugging
+            logger.debug(f"Coinstore balance API response: code={data.get('code')}, data keys={list(data.get('data', {}).keys()) if isinstance(data.get('data'), dict) else 'not dict'}")
+            
             if data.get('code') == 0:
                 balances_data = data.get('data', {})
+                
+                # Handle case where data might not be a dict
+                if not isinstance(balances_data, dict):
+                    logger.error(f"Coinstore balance data is not a dict: {type(balances_data)} = {balances_data}")
+                    raise Exception(f"Invalid balance response format: expected dict, got {type(balances_data)}")
+                
                 result = {
                     'free': {},
                     'used': {},
@@ -92,8 +102,12 @@ class CoinstoreExchange:
                 }
                 
                 for currency, amounts in balances_data.items():
-                    available = float(amounts.get('available', 0))
-                    frozen = float(amounts.get('frozen', 0))
+                    if not isinstance(amounts, dict):
+                        logger.warning(f"Balance entry for {currency} is not a dict: {amounts}")
+                        continue
+                    
+                    available = float(amounts.get('available', 0) or 0)
+                    frozen = float(amounts.get('frozen', 0) or 0)
                     total = available + frozen
                     
                     if total > 0:
@@ -103,9 +117,13 @@ class CoinstoreExchange:
                 
                 return result
             else:
-                raise Exception(f"API error: {data.get('msg')}")
+                # Better error message handling
+                error_msg = data.get('msg') or data.get('message') or str(data)
+                error_code = data.get('code', 'unknown')
+                logger.error(f"Coinstore API error: code={error_code}, msg={error_msg}, full response={data}")
+                raise Exception(f"Coinstore API error (code {error_code}): {error_msg}")
         except Exception as e:
-            logger.error(f"Error fetching balance: {e}")
+            logger.error(f"Error fetching balance from Coinstore: {e}", exc_info=True)
             raise
     
     async def fetch_open_orders(self, symbol: Optional[str] = None, since: Optional[int] = None, limit: Optional[int] = None, params: Optional[Dict] = None) -> list:
