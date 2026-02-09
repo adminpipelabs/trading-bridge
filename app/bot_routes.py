@@ -2319,7 +2319,121 @@ def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db
             "created_at": bot_wallet.created_at.isoformat() if bot_wallet.created_at else None
         }
     except Exception as e:
-        logger.error(f"Failed to add wallet to bot {bot_id}: {e}")
+        logger.error(f"Error adding wallet to bot {bot_id}: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error adding wallet: {str(e)}")
+
+
+@router.post("/{bot_id}/add-exchange-credentials")
+def add_exchange_credentials_to_bot(
+    bot_id: str,
+    api_key: str = Query(..., description="Exchange API key"),
+    api_secret: str = Query(..., description="Exchange API secret"),
+    passphrase: Optional[str] = Query(None, description="Exchange passphrase/memo (for BitMart, etc.)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Add exchange API credentials for an existing CEX volume bot.
+    This fixes bots that show "Missing API keys" error.
+    
+    The credentials are saved to exchange_credentials table for the bot's client.
+    """
+    from sqlalchemy import text
+    from app.cex_volume_bot import encrypt_credential
+    from datetime import datetime, timezone
+    
+    try:
+        # Get bot
+        bot = db.query(Bot).filter(Bot.id == bot_id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail=f"Bot {bot_id} not found")
+        
+        # Determine exchange from bot
+        exchange = None
+        if bot.connector:
+            exchange = bot.connector.lower()
+        elif bot.name:
+            bot_name_lower = bot.name.lower()
+            cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gate', 'gateio', 'mexc', 'bybit', 
+                           'okx', 'kraken', 'coinbase', 'dydx', 'hyperliquid', 'htx', 'huobi']
+            for kw in cex_keywords:
+                if kw in bot_name_lower:
+                    exchange = kw
+                    break
+        
+        if not exchange:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not determine exchange for bot {bot_id}. Please specify exchange name."
+            )
+        
+        # Encrypt credentials
+        api_key_enc = encrypt_credential(api_key.strip())
+        api_secret_enc = encrypt_credential(api_secret.strip())
+        passphrase_enc = encrypt_credential(passphrase.strip()) if passphrase else None
+        
+        # Ensure table exists
+        try:
+            db.execute(text("""
+                CREATE TABLE IF NOT EXISTS exchange_credentials (
+                    id SERIAL PRIMARY KEY,
+                    client_id VARCHAR(255) NOT NULL,
+                    exchange VARCHAR(50) NOT NULL,
+                    api_key_encrypted TEXT NOT NULL,
+                    api_secret_encrypted TEXT NOT NULL,
+                    passphrase_encrypted TEXT,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(client_id, exchange)
+                )
+            """))
+            db.execute(text("CREATE INDEX IF NOT EXISTS idx_exchange_creds_client ON exchange_credentials(client_id)"))
+            db.commit()
+        except Exception:
+            db.rollback()
+        
+        # Save credentials
+        db.execute(text("""
+            INSERT INTO exchange_credentials 
+                (client_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, updated_at)
+            VALUES (:client_id, :exchange, :api_key, :api_secret, :passphrase, :updated_at)
+            ON CONFLICT (client_id, exchange)
+            DO UPDATE SET 
+                api_key_encrypted = :api_key,
+                api_secret_encrypted = :api_secret,
+                passphrase_encrypted = :passphrase,
+                updated_at = :updated_at
+        """), {
+            "client_id": bot.client_id,
+            "exchange": exchange,
+            "api_key": api_key_enc,
+            "api_secret": api_secret_enc,
+            "passphrase": passphrase_enc,
+            "updated_at": datetime.now(timezone.utc)
+        })
+        
+        # Clear bot error status
+        bot.health_status = None
+        bot.health_message = None
+        bot.error = None
+        
+        db.commit()
+        
+        logger.info(f"✅ Added exchange credentials for bot {bot_id} (exchange: {exchange}, client_id: {bot.client_id})")
+        
+        return {
+            "success": True,
+            "message": f"Exchange credentials added for {exchange}",
+            "bot_id": bot_id,
+            "exchange": exchange,
+            "client_id": bot.client_id
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding exchange credentials to bot {bot_id}: {e}", exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")(f"Failed to add wallet to bot {bot_id}: {e}")
         db.rollback()
         raise HTTPException(
             status_code=400,
