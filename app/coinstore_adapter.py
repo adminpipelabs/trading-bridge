@@ -88,17 +88,25 @@ class CoinstoreExchange:
             data = await self.connector.get_balances()
             
             # Log full response for debugging
-            logger.debug(f"Coinstore balance API response: code={data.get('code')}, data type={type(data.get('data'))}")
+            logger.info(f"💰 Coinstore balance API response: code={data.get('code')}, data type={type(data.get('data'))}")
+            logger.info(f"   Full response keys: {list(data.keys())}")
             
             code = data.get('code')
             # Coinstore returns code as string "0" for success or int 0
             if code == 0 or code == "0":
                 balances_list = data.get('data', [])
+                logger.info(f"   ✅ Success! Found {len(balances_list)} account entries")
                 
                 # Coinstore returns balance as a list of account objects
                 if not isinstance(balances_list, list):
-                    logger.error(f"Coinstore balance data is not a list: {type(balances_list)} = {balances_list}")
+                    logger.error(f"❌ Coinstore balance data is not a list: {type(balances_list)} = {balances_list}")
                     raise Exception(f"Invalid balance response format: expected list, got {type(balances_list)}")
+                
+                # Log first few entries for debugging
+                if balances_list:
+                    logger.info(f"   Sample entries (first 3):")
+                    for i, entry in enumerate(balances_list[:3]):
+                        logger.info(f"      [{i}] currency={entry.get('currency')}, balance={entry.get('balance')}, type={entry.get('type')}, typeName={entry.get('typeName')}")
                 
                 result = {
                     'free': {},
