@@ -83,7 +83,7 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
     # Don't skip even if connectors table had entries - clients may have their own keys
     logger.info(f"🔄 Checking 'exchange_credentials' table for additional credentials...")
     from sqlalchemy import text
-    from app.cex_volume_bot import decrypt_credential
+    from app.security import decrypt_credential
     
     try:
         # Query exchange_credentials table (encrypted)

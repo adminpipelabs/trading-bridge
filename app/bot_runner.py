@@ -369,7 +369,7 @@ class BotRunner:
                 if bot:
                     client = db.query(Client).filter(Client.account_identifier == bot.account).first()
                     if client:
-                        from app.cex_volume_bot import decrypt_credential
+                        from app.security import decrypt_credential
                         from sqlalchemy import text
                         creds_result = db.execute(text("""
                             SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted

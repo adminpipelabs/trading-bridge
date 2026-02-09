@@ -2280,7 +2280,7 @@ async def test_balance_direct(
     import ccxt.async_support as ccxt
     from app.api.client_data import sync_connectors_to_exchange_manager
     from app.services.exchange import exchange_manager
-    from app.cex_volume_bot import decrypt_credential
+    from app.security import decrypt_credential
     from app.database import Client
     from sqlalchemy import text
     
@@ -2363,7 +2363,7 @@ async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
     from app.api.client_data import sync_connectors_to_exchange_manager
     from app.services.exchange import exchange_manager
     from sqlalchemy import text
-    from app.cex_volume_bot import decrypt_credential
+    from app.security import decrypt_credential
     
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:

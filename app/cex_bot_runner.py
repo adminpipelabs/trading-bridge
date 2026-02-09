@@ -218,7 +218,7 @@ class CEXBotRunner:
                                 
                                 if creds_result:
                                     try:
-                                        from app.cex_volume_bot import decrypt_credential
+                                        from app.security import decrypt_credential
                                         api_key = decrypt_credential(creds_result["api_key_encrypted"])
                                         api_secret = decrypt_credential(creds_result["api_secret_encrypted"])
                                         memo = decrypt_credential(creds_result["passphrase_encrypted"]) if creds_result.get("passphrase_encrypted") else None

@@ -15,9 +15,9 @@ from typing import Optional, Tuple
 from decimal import Decimal, ROUND_DOWN
 
 import ccxt.async_support as ccxt
-from cryptography.fernet import Fernet
 
 from app.cex_exchanges import get_exchange_config, EXCHANGE_CONFIGS
+from app.security import decrypt_credential, encrypt_credential
 
 logger = logging.getLogger("cex_volume_bot")
 
@@ -768,20 +768,8 @@ class CEXVolumeBot:
 # Helper Functions
 # ──────────────────────────────────────────────────────────────
 
-def decrypt_credential(encrypted: str) -> str:
-    """Decrypt an API key/secret."""
-    if not ENCRYPTION_KEY:
-        raise ValueError("ENCRYPTION_KEY not set")
-    fernet = Fernet(ENCRYPTION_KEY.encode())
-    return fernet.decrypt(encrypted.encode()).decode()
-
-
-def encrypt_credential(plaintext: str) -> str:
-    """Encrypt an API key/secret."""
-    if not ENCRYPTION_KEY:
-        raise ValueError("ENCRYPTION_KEY not set")
-    fernet = Fernet(ENCRYPTION_KEY.encode())
-    return fernet.encrypt(plaintext.encode()).decode()
+# decrypt_credential and encrypt_credential are now imported from app.security
+# Keeping these functions here for backward compatibility, but they redirect to security module
 
 
 async def create_bot_from_db(bot_record: dict, credentials: dict) -> Optional[CEXVolumeBot]:
