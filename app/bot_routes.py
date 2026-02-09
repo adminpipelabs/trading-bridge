@@ -1633,8 +1633,8 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                 # Wrap in try-except to handle ccxt AttributeError bug
                                 try:
                                     if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"   Calling: exchange.fetch_balance({{'type': 'spot'}})")
-                                        balance = await exchange.fetch_balance({'type': 'spot'})
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart (markets loaded)")
+                                        balance = await exchange.fetch_balance()
                                     elif connector_name.lower() == 'coinstore':
                                         logger.debug(f"   Calling: exchange.fetch_balance()")
                                         balance = await exchange.fetch_balance()
@@ -1661,13 +1661,16 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     
                                     # Extract available (free) and locked (used) balances
                                     # Handle both dict format and direct access
-                                    base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
-                                    quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
+                                    # ccxt returns balance in format: {"free": {"SHARP": 8381807.12}, "used": {"SHARP": 0}, "total": {"SHARP": 8381807.12}}
+                                    # Access directly from free/used dictionaries
+                                    free_dict = balance.get('free', {}) if isinstance(balance.get('free'), dict) else {}
+                                    used_dict = balance.get('used', {}) if isinstance(balance.get('used'), dict) else {}
                                     
-                                    base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                    quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                    base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
-                                    quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                    # Extract balances directly from free/used dicts (ccxt format)
+                                    base_available = float(free_dict.get(base, 0) or 0)
+                                    quote_available = float(free_dict.get(quote, 0) or 0)
+                                    base_locked = float(used_dict.get(base, 0) or 0)
+                                    quote_locked = float(used_dict.get(quote, 0) or 0)
                                     
                                     logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
                                     
@@ -1892,16 +1895,29 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 
                                 # Wrap in try-except to handle ccxt AttributeError bug
                                 try:
+                                    # Ensure markets are loaded before fetching balance (required for ccxt)
+                                    if connector_name.lower() != 'coinstore' and hasattr(exchange, 'load_markets'):
+                                        if not hasattr(exchange, 'markets') or not exchange.markets:
+                                            logger.info(f"   Markets not loaded, loading now...")
+                                            await exchange.load_markets()
+                                            logger.info(f"   ✅ Markets loaded: {len(exchange.markets) if exchange.markets else 0} markets")
+                                    
+                                    # Fetch balance - BitMart works without type parameter when markets are loaded
                                     if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"   Calling: exchange.fetch_balance({{'type': 'spot'}}) for BitMart")
-                                        balance = await exchange.fetch_balance({'type': 'spot'})
+                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart (markets loaded)")
+                                        balance = await exchange.fetch_balance()
                                     elif connector_name.lower() == 'coinstore':
                                         logger.debug(f"   Calling: exchange.fetch_balance() for Coinstore")
                                         balance = await exchange.fetch_balance()
                                     else:
                                         logger.debug(f"   Calling: exchange.fetch_balance() for {connector_name}")
                                         balance = await exchange.fetch_balance()
+                                    
                                     logger.info(f"✅ Balance fetch successful for {connector_name}")
+                                    logger.debug(f"   Balance keys: {list(balance.keys()) if isinstance(balance, dict) else 'not a dict'}")
+                                    if isinstance(balance, dict) and 'total' in balance:
+                                        total_keys = list(balance.get('total', {}).keys())[:10]
+                                        logger.debug(f"   Balance currencies (first 10): {total_keys}")
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
@@ -1922,17 +1938,22 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     logger.warning(f"Balance is None for bot {bot_id} - returning default values")
                                 else:
                                     logger.info(f"✅ Balance fetch successful for {connector_name}: keys={list(balance.keys()) if balance else 'None'}, looking for base={base}, quote={quote}")
+                                    
+                                    # ccxt returns balance in format: {"free": {"SHARP": 8381807.12}, "used": {"SHARP": 0}, "total": {"SHARP": 8381807.12}}
+                                    # Access directly from free/used dictionaries
+                                    free_dict = balance.get('free', {}) if isinstance(balance.get('free'), dict) else {}
+                                    used_dict = balance.get('used', {}) if isinstance(balance.get('used'), dict) else {}
+                                    total_dict = balance.get('total', {}) if isinstance(balance.get('total'), dict) else {}
+                                    
                                     if isinstance(balance, dict):
-                                        free_keys = list(balance.get('free', {}).keys()) if isinstance(balance.get('free'), dict) else []
-                                        logger.info(f"   Available currencies: {free_keys[:10]}")  # Show first 10
+                                        free_keys = list(free_dict.keys())[:10]
+                                        logger.info(f"   Available currencies: {free_keys}")
                                     
-                                    base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
-                                    quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
-                                    
-                                    base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                    quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                    base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
-                                    quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                    # Extract balances directly from free/used dicts (ccxt format)
+                                    base_available = float(free_dict.get(base, 0) or 0)
+                                    quote_available = float(free_dict.get(quote, 0) or 0)
+                                    base_locked = float(used_dict.get(base, 0) or 0)
+                                    quote_locked = float(used_dict.get(quote, 0) or 0)
                                     
                                     logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
                                 
