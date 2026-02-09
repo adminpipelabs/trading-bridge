@@ -1834,6 +1834,9 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     """
     Get bot statistics for dashboard display.
     Returns: available funds, locked funds, 24h volume, and 24h trade counts.
+    
+    IMPORTANT: This endpoint has timeouts to prevent dashboard hanging.
+    If balance fetch fails or times out, returns default values (0 balances).
     """
     from sqlalchemy import text
     from datetime import datetime, timedelta, timezone
@@ -1871,9 +1874,17 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     
     if bot.bot_type in ['volume', 'spread'] or (connector_lower and connector_lower not in ['jupiter', 'solana']):
         try:
-            # Sync connectors for this account
+            # Sync connectors for this account WITH TIMEOUT
             logger.info(f"🔄 Syncing connectors for account {bot.account} (bot: {bot.name})")
-            synced = await sync_connectors_to_exchange_manager(bot.account, db)
+            import asyncio
+            try:
+                synced = await asyncio.wait_for(
+                    sync_connectors_to_exchange_manager(bot.account, db),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Timeout syncing connectors for {bot.account} (5s) - returning default balances")
+                synced = False
             logger.info(f"✅ Sync result for {bot.account}: {synced}, connectors loaded: {list(exchange_manager.get_account(bot.account).connectors.keys()) if exchange_manager.get_account(bot.account) else 'No account'}")
             if synced:
                 account = exchange_manager.get_account(bot.account)
