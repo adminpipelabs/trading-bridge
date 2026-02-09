@@ -1758,7 +1758,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
             logger.error(f"Error fetching balance for bot {bot_id}: {e}", exc_info=True)
             # Don't expose error - return default values (already 0)
     
-    # Calculate Volume based on bot type (always calculate, even if balance fetch failed)
+    # Calculate Volume and P&L based on bot type (always calculate, even if balance fetch failed)
     try:
         # Get trades from trade_logs (CEX) and bot_trades (DEX)
         all_trades = []
@@ -1817,9 +1817,67 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                 "total_volume_usd": round(total_volume, 2),  # Alias for consistency
                 "total_trades": len(all_trades)
             }
+        
+        # Calculate P&L from trades (FIFO method)
+        try:
+            positions = []  # List of (amount, avg_price) for FIFO
+            total_pnl = 0.0
+            
+            # Sort trades by timestamp
+            sorted_trades = sorted(all_trades, key=lambda t: t.get("created_at", 0) or t.get("timestamp", 0))
+            
+            for trade in sorted_trades:
+                side = trade.get("side", "").lower()
+                amount = float(trade.get("amount") or trade.get("quantity") or 0)
+                price = float(trade.get("price") or 0)
+                
+                if side == "buy":
+                    # Add to position
+                    if amount > 0:
+                        positions.append((amount, price))
+                elif side == "sell":
+                    # Realize P&L using FIFO
+                    remaining_sell = amount
+                    while remaining_sell > 0 and positions:
+                        buy_amount, buy_price = positions.pop(0)
+                        sell_amount = min(remaining_sell, buy_amount)
+                        pnl = (price - buy_price) * sell_amount
+                        total_pnl += pnl
+                        remaining_sell -= sell_amount
+                        if buy_amount > sell_amount:
+                            # Put remaining back
+                            positions.insert(0, (buy_amount - sell_amount, buy_price))
+            
+            # Calculate unrealized P&L from remaining positions (if we have current price)
+            unrealized_pnl = 0.0
+            if positions and len(all_trades) > 0:
+                # Use last trade price as current price estimate
+                last_trade = sorted_trades[-1]
+                current_price = float(last_trade.get("price") or 0)
+                if current_price > 0:
+                    for pos_amount, pos_price in positions:
+                        unrealized_pnl += (current_price - pos_price) * pos_amount
+            
+            result["pnl"] = {
+                "total_usd": round(total_pnl, 2),
+                "unrealized_usd": round(unrealized_pnl, 2),
+                "trade_count": len(all_trades)
+            }
+        except Exception as pnl_error:
+            logger.warning(f"Failed to calculate P&L for bot {bot_id}: {pnl_error}")
+            result["pnl"] = {
+                "total_usd": 0,
+                "unrealized_usd": 0,
+                "trade_count": len(all_trades)
+            }
     except Exception as e:
         logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
         result["volume"] = None
+        result["pnl"] = {
+            "total_usd": 0,
+            "unrealized_usd": 0,
+            "trade_count": 0
+        }
     
     return result
 
