@@ -107,7 +107,15 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
                     if cred_row.passphrase_encrypted:
                         memo = decrypt_credential(cred_row.passphrase_encrypted)
                     
-                    logger.info(f"   Decrypted keys for {exchange_name}: api_key={'✅' if api_key else '❌'}, api_secret={'✅' if api_secret else '❌'}")
+                    # Strip whitespace (common issue with copy-paste)
+                    if api_key:
+                        api_key = api_key.strip()
+                    if api_secret:
+                        api_secret = api_secret.strip()
+                    if memo:
+                        memo = memo.strip()
+                    
+                    logger.info(f"   Decrypted keys for {exchange_name}: api_key={'✅' if api_key else '❌'} (length={len(api_key) if api_key else 0}), api_secret={'✅' if api_secret else '❌'} (length={len(api_secret) if api_secret else 0})")
                     
                     # Skip if already loaded
                     if exchange_name.lower() in account.connectors:

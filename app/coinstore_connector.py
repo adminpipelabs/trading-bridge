@@ -20,10 +20,14 @@ class CoinstoreConnector:
     """Direct API connector for Coinstore exchange."""
     
     def __init__(self, api_key: str, api_secret: str, proxy_url: Optional[str] = None):
-        self.api_key = api_key
-        self.api_secret = api_secret
+        # Strip whitespace (common issue with copy-paste)
+        self.api_key = api_key.strip() if api_key else ''
+        self.api_secret = api_secret.strip() if api_secret else ''
         self.proxy_url = proxy_url
         self.session: Optional[aiohttp.ClientSession] = None
+        
+        # Log key lengths for debugging (don't log full keys)
+        logger.debug(f"CoinstoreConnector initialized: api_key length={len(self.api_key)}, api_secret length={len(self.api_secret)}")
     
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""
