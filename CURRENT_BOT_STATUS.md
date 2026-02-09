@@ -6,10 +6,10 @@
 
 | Bot | Exchange | Type | Blocker | Fix Status | Notes |
 |-----|----------|------|---------|------------|-------|
-| Sharp-SB-BitMart | BitMart | Spread | Error 30010 (IP forbidden) | 🔴 **NEW ISSUE** | Railway IP changed to `54.205.35.75`, proxy not working |
-| Sharp-VB-BitMart | BitMart | Volume | Same | 🔴 **NEW ISSUE** | Proxy configured but BitMart sees direct Railway IP |
-| SHARP-VB-Coinstore | Coinstore | Volume | Balance fetch / auth | 🚀 Fix deployed, needs testing | Coinstore API implementation rewritten |
-| SHARP-SB-Coinstore | Coinstore | Spread | Database transaction error | 🔴 **NEW ISSUE** | Failed to start due to `InFailedSqlTransaction` |
+| Sharp-SB-BitMart | BitMart | Spread | Error 59002 (BitMart server) | ⏳ Out of our control | BitMart internal server error |
+| Sharp-VB-BitMart | BitMart | Volume | Error 59002 + Low USDT | ⏳ Out of our control | BitMart server error; Only 1.66 USDT (need $5+ for orders) |
+| SHARP-SB-Coinstore | Coinstore | Spread | ✅ Started | 🧪 Ready to test | Bot started successfully, balance fetch not triggered yet |
+| SHARP-VB-Coinstore | Coinstore | Volume | ❓ Status unknown | 🔍 Check DB | Not appearing in startup logs - check if status='running' |
 
 ## ✅ **Fixes Deployed**
 
@@ -102,4 +102,24 @@ Watch Railway logs for:
   - Added `db.rollback()` in `bot_runner.py` when exchange/chain query fails
   - Added try-except wrapper around each bot startup to isolate failures
   - Each bot startup is now isolated - one failure won't break others
-- **Status:** ✅ Fix deployed, should unblock bot startup
+- **Status:** ✅ Fix deployed - **All 3 bots started successfully!**
+
+### **Current Bot Status (From Latest Logs)**
+
+**✅ Working:**
+- Proxy working → Outbound IP: `3.222.129.4` (QuotaGuard)
+- BitMart auth working → Balance fetch successful
+- BitMart balance: `8,364,285 SHARP` | `1.66 USDT`
+- All bots started successfully (no more transaction errors)
+
+**❌ Issues:**
+- **BitMart orders:** Error 59002 "Internal Server Error" - BitMart server-side issue
+- **Low USDT:** Only 1.66 USDT (min order is 5 USDT) - can only sell, not buy
+- **Spread bots:** "⚠️ Spread bot logic not yet implemented"
+- **Coinstore bots:** `SHARP-SB-Coinstore` started but no balance fetch attempts in logs yet
+
+**Action Items:**
+1. ✅ **Add USDT to BitMart** - Need at least $10-20 to enable buy orders
+2. ⏳ **Wait/retry BitMart** - 59002 is their internal error, may resolve itself
+3. 🧪 **Test Coinstore balance** - Click "Retry" on Coinstore bot in dashboard to trigger balance fetch
+4. 🔍 **Check SHARP-VB-Coinstore** - Not appearing in startup logs, verify status in database
