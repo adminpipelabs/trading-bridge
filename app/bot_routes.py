@@ -1328,7 +1328,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
         "volume": None
     }
     
-    # For CEX bots, fetch balance from exchange
+    # For CEX bots, fetch balance from exchange (even if bot is stopped)
     # Safely check connector (could be None)
     connector_lower = (bot.connector or '').lower() if bot.connector else ''
     if bot.bot_type == 'volume' or bot.bot_type == 'spread' or (connector_lower and connector_lower not in ['jupiter', 'solana']):
@@ -1337,11 +1337,13 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
             synced = await sync_connectors_to_exchange_manager(bot.account, db)
             if not synced:
                 result["error"] = "No exchange credentials available"
+                logger.warning(f"No connectors synced for account {bot.account}")
             else:
                 # Get account from exchange_manager
                 account = exchange_manager.get_account(bot.account)
                 if not account:
                     result["error"] = "Account not found in exchange_manager"
+                    logger.warning(f"Account {bot.account} not found in exchange_manager")
                 else:
                     # Determine which connector/exchange this bot uses
                     # Bot model only has 'connector' field, not 'exchange'
@@ -1353,30 +1355,53 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                         for kw in cex_keywords:
                             if kw in bot_name_lower:
                                 connector_name = kw
+                                logger.info(f"Extracted connector '{connector_name}' from bot name '{bot.name}'")
                                 break
                     
                     if not connector_name:
                         result["error"] = "Could not determine exchange for bot"
+                        logger.warning(f"Could not determine connector for bot {bot_id} (name: {bot.name}, connector: {bot.connector})")
                     else:
-                        # Get exchange instance from account
+                        # Get exchange instance from account - check both exact match and case-insensitive
                         exchange = account.connectors.get(connector_name)
                         if not exchange:
-                            result["error"] = f"Exchange '{connector_name}' not found in account connectors"
+                            # Try case-insensitive lookup
+                            for key, val in account.connectors.items():
+                                if key.lower() == connector_name.lower():
+                                    exchange = val
+                                    connector_name = key  # Use actual key name
+                                    logger.info(f"Found connector via case-insensitive match: {key}")
+                                    break
+                        
+                        if not exchange:
+                            available_connectors = list(account.connectors.keys())
+                            result["error"] = f"Exchange '{connector_name}' not found. Available: {available_connectors}"
+                            logger.error(f"Exchange '{connector_name}' not found in account connectors. Available: {available_connectors}")
                         else:
                             # Fetch balance
                             try:
-                                if connector_name == 'bitmart':
+                                logger.info(f"Fetching balance from {connector_name} for pair {pair}")
+                                if connector_name.lower() == 'bitmart':
                                     balance = await exchange.fetch_balance({'type': 'spot'})
-                                elif connector_name == 'coinstore':
+                                elif connector_name.lower() == 'coinstore':
                                     balance = await exchange.fetch_balance()
                                 else:
                                     balance = await exchange.fetch_balance()
                                 
+                                logger.info(f"Balance response keys: {list(balance.keys()) if balance else 'None'}")
+                                logger.info(f"Looking for base={base}, quote={quote} in balance")
+                                
                                 # Extract available (free) and locked (used) balances
-                                base_available = float(balance.get(base, {}).get('free', 0) or 0)
-                                quote_available = float(balance.get(quote, {}).get('free', 0) or 0)
-                                base_locked = float(balance.get(base, {}).get('used', 0) or 0)
-                                quote_locked = float(balance.get(quote, {}).get('used', 0) or 0)
+                                # Handle both dict format and direct access
+                                base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
+                                quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
+                                
+                                base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                
+                                logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
                                 
                                 result["available"] = {
                                     base: round(base_available, 4),
