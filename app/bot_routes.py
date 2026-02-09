@@ -1648,7 +1648,8 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                             if not exchange:
                                 available_connectors_after = list(account.connectors.keys()) if account else []
                                 logger.error(f"Exchange '{connector_name}' still not found after re-sync. Available: {available_connectors_after}. Bot connector: '{bot.connector}', Client ID: {bot.client_id} - returning default balances")
-                        else:
+                        
+                        if exchange:
                             # Fetch balance
                             try:
                                 logger.info(f"🔍 Fetching balance from {connector_name} for pair {pair}")
