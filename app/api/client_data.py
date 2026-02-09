@@ -77,10 +77,10 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
         # Check if we successfully synced any
         if len(account.connectors) > 0:
             logger.info(f"✅ Successfully synced {len(account.connectors)} connector(s) from 'connectors' table")
-            return True
+            # Continue to also check exchange_credentials (clients may have added their own keys)
     
-    # If no connectors in plaintext table, check encrypted exchange_credentials table
-    if not connectors:
+    # ALWAYS check encrypted exchange_credentials table (clients add keys here)
+    # Don't skip even if connectors table had entries - clients may have their own keys
         logger.info(f"⚠️  No connectors in 'connectors' table, checking 'exchange_credentials' table...")
         from sqlalchemy import text
         from app.cex_volume_bot import decrypt_credential
@@ -128,15 +128,20 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
                     logger.info(f"✅ Successfully synced {len(account.connectors)} connector(s) from exchange_credentials")
                     return True
             else:
-                logger.error(f"❌ No credentials found in 'exchange_credentials' table either")
+                logger.debug(f"ℹ️  No credentials found in 'exchange_credentials' table")
         except Exception as e:
             logger.error(f"❌ Failed to query exchange_credentials table: {e}")
             import traceback
             logger.error(traceback.format_exc())
-        
-        logger.error(f"❌ No connectors found for account: {account_identifier} (client_id: {client.id})")
-        logger.error(f"   Client needs to add API keys via admin dashboard")
-        return False
+    
+    # Final check: Did we sync any connectors at all?
+    if len(account.connectors) > 0:
+        logger.info(f"✅ Successfully synced {len(account.connectors)} connector(s) total")
+        return True
+    
+    logger.error(f"❌ No connectors found for account: {account_identifier} (client_id: {client.id})")
+    logger.error(f"   Client needs to add API keys via bot setup wizard")
+    return False
     
     logger.info(f"✅ Found {len(connectors)} connector(s) in 'connectors' table for {account_identifier}")
     
