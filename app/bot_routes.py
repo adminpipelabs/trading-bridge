@@ -1699,8 +1699,14 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     
                                     logger.info(f"💰 Fetching balance from {connector_name}...")
                                     if connector_name.lower() == 'bitmart':
-                                        logger.info(f"   Calling: exchange.fetch_balance({{'type': 'spot'}}) for BitMart")
-                                        balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
+                                        # BitMart has defaultType='spot' in options, so try without parameter first
+                                        try:
+                                            logger.info(f"   Calling: exchange.fetch_balance() for BitMart (using defaultType from options)")
+                                            balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                        except Exception as e:
+                                            # If that fails, try with explicit type parameter
+                                            logger.warning(f"   First attempt failed: {e}, trying with explicit type parameter...")
+                                            balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
                                     elif connector_name.lower() == 'coinstore':
                                         logger.info(f"   Calling: exchange.fetch_balance() for Coinstore")
                                         balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
@@ -2074,10 +2080,16 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                             await asyncio.wait_for(exchange.load_markets(), timeout=10.0)
                                             logger.info(f"✅ Markets loaded: {len(exchange.markets) if hasattr(exchange, 'markets') else 0} pairs")
                                     
-                                    # Fetch balance - BitMart requires type parameter
+                                    # Fetch balance - BitMart has defaultType='spot' in options, try without parameter first
                                     logger.info(f"💰 Fetching balance from {connector_name}...")
                                     if connector_name.lower() == 'bitmart':
-                                        balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
+                                        try:
+                                            logger.info(f"   Calling: exchange.fetch_balance() for BitMart (using defaultType from options)")
+                                            balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                        except Exception as e:
+                                            # If that fails, try with explicit type parameter
+                                            logger.warning(f"   First attempt failed: {e}, trying with explicit type parameter...")
+                                            balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
                                     else:
                                         balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     
@@ -2103,15 +2115,30 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
-                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message) - trying with type parameter...")
+                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message) - trying without type parameter...")
                                         try:
-                                            balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
-                                            logger.info(f"✅ Retry with type='spot' succeeded")
+                                            # Try without type parameter - BitMart might have it in options already
+                                            balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                            logger.info(f"✅ Retry without type parameter succeeded")
                                         except Exception as retry_err:
                                             logger.error(f"❌ Retry also failed: {retry_err}")
                                             balance = None
                                     else:
                                         logger.error(f"❌ AttributeError fetching balance: {attr_err}", exc_info=True)
+                                        balance = None
+                                except ValueError as val_err:
+                                    # Handle format specifier errors (ccxt error message formatting issues)
+                                    if "format specifier" in str(val_err).lower():
+                                        logger.warning(f"⚠️  ccxt error formatting issue: {val_err} - trying without type parameter...")
+                                        try:
+                                            # Try without type parameter - BitMart might have it in options already
+                                            balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                            logger.info(f"✅ Balance fetch succeeded without type parameter")
+                                        except Exception as retry_err:
+                                            logger.error(f"❌ Retry also failed: {retry_err}")
+                                            balance = None
+                                    else:
+                                        logger.error(f"❌ ValueError fetching balance: {val_err}", exc_info=True)
                                         balance = None
                                 except Exception as balance_fetch_err:
                                     logger.error(f"❌ Exception fetching balance from {connector_name}: {balance_fetch_err}", exc_info=True)
