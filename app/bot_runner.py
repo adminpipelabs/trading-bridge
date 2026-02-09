@@ -260,6 +260,38 @@ class BotRunner:
             # Fetch bot with connector info (API keys)
             # Handle missing exchange column - use connector or bot name fallback
             try:
+                # First, get the bot to extract connector name from bot name if needed
+                bot_info = db.execute(text("""
+                    SELECT b.name, b.connector, b.account
+                    FROM bots b
+                    WHERE b.id = :bot_id
+                """), {"bot_id": bot_id}).first()
+                
+                if not bot_info:
+                    logger.error(f"Bot {bot_id} not found")
+                    return
+                
+                bot_name = bot_info[0] or ''
+                bot_connector = bot_info[1] or ''
+                bot_account = bot_info[2] or ''
+                
+                # Extract connector name from bot name if connector field is empty
+                connector_name = bot_connector.lower() if bot_connector else ''
+                if not connector_name:
+                    bot_name_lower = bot_name.lower()
+                    cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+                    for kw in cex_keywords:
+                        if kw in bot_name_lower:
+                            connector_name = kw
+                            logger.info(f"Extracted connector '{connector_name}' from bot name '{bot_name}'")
+                            break
+                
+                # Default to 'bitmart' only if we couldn't extract from name
+                if not connector_name:
+                    connector_name = 'bitmart'
+                    logger.warning(f"Could not determine connector for bot '{bot_name}', defaulting to 'bitmart'")
+                
+                # Now query with the determined connector name
                 bot_record = db.execute(text("""
                     SELECT b.*, 
                            c.api_key,
@@ -268,9 +300,9 @@ class BotRunner:
                     FROM bots b
                     JOIN clients cl ON cl.account_identifier = b.account
                     LEFT JOIN connectors c ON c.client_id = cl.id 
-                        AND LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector, 'bitmart'))
+                        AND LOWER(c.name) = LOWER(:connector_name)
                     WHERE b.id = :bot_id
-                """), {"bot_id": bot_id}).first()
+                """), {"bot_id": bot_id, "connector_name": connector_name}).first()
             except Exception as sql_error:
                 # Exchange column doesn't exist - use connector name or bot name fallback
                 db.rollback()
@@ -307,6 +339,42 @@ class BotRunner:
                 logger.error(f"Bot {bot_id} not found")
                 return
             
+            # Check if API keys were found - if not, try exchange_credentials table
+            api_key = getattr(bot_record, 'api_key', None) if hasattr(bot_record, 'api_key') else (bot_record[8] if len(bot_record) > 8 else None)
+            api_secret = getattr(bot_record, 'api_secret', None) if hasattr(bot_record, 'api_secret') else (bot_record[9] if len(bot_record) > 9 else None)
+            
+            if not api_key or not api_secret:
+                logger.warning(f"⚠️  No API keys found in connectors table for connector '{connector_name}', checking exchange_credentials table...")
+                # Try exchange_credentials table (encrypted)
+                bot = db.query(Bot).filter(Bot.id == bot_id).first()
+                if bot:
+                    client = db.query(Client).filter(Client.account_identifier == bot.account).first()
+                    if client:
+                        from app.security import decrypt_credential
+                        from sqlalchemy import text
+                        creds_result = db.execute(text("""
+                            SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+                            FROM exchange_credentials
+                            WHERE client_id = :client_id AND LOWER(exchange) = LOWER(:exchange_name)
+                        """), {"client_id": client.id, "exchange_name": connector_name}).first()
+                        
+                        if creds_result:
+                            try:
+                                api_key = decrypt_credential(creds_result[0])
+                                api_secret = decrypt_credential(creds_result[1])
+                                memo = decrypt_credential(creds_result[2]) if creds_result[2] else None
+                                logger.info(f"✅ Found API keys in exchange_credentials table for {connector_name}")
+                                # Update bot_record with decrypted keys
+                                if hasattr(bot_record, 'api_key'):
+                                    bot_record.api_key = api_key
+                                    bot_record.api_secret = api_secret
+                                    bot_record.memo = memo
+                                else:
+                                    # bot_record is a tuple/row - create a new one with updated values
+                                    bot_record = (*bot_record[:8], api_key, api_secret, memo)
+                            except Exception as decrypt_err:
+                                logger.error(f"❌ Failed to decrypt credentials: {decrypt_err}")
+            
             # DEBUG: Log connector retrieval
             bot = db.query(Bot).filter(Bot.id == bot_id).first()
             if bot:
@@ -318,23 +386,27 @@ class BotRunner:
                     from app.database import Connector
                     connector = db.query(Connector).filter(
                         Connector.client_id == client.id,
-                        Connector.name == 'bitmart'
+                        Connector.name == connector_name  # Use extracted connector_name instead of hardcoded 'bitmart'
                     ).first()
                     logger.info(f"🔍 DEBUG: Found connector = {connector}, connector.name = {connector.name if connector else None}")
             
-            # Check if API keys exist
-            api_key = bot_record.api_key if hasattr(bot_record, 'api_key') else None
-            api_secret = bot_record.api_secret if hasattr(bot_record, 'api_secret') else None
+            # Check if API keys exist (re-read after potential exchange_credentials lookup)
+            api_key = bot_record.api_key if hasattr(bot_record, 'api_key') else (bot_record[8] if len(bot_record) > 8 else None)
+            api_secret = bot_record.api_secret if hasattr(bot_record, 'api_secret') else (bot_record[9] if len(bot_record) > 9 else None)
             
             logger.info(f"🔍 DEBUG: bot_record.api_key present = {bool(api_key)}")
             logger.info(f"🔍 DEBUG: bot_record.api_secret present = {bool(api_secret)}")
+            logger.info(f"🔍 DEBUG: Using connector_name = '{connector_name}'")
             
             if not api_key or not api_secret:
-                logger.error(f"Bot {bot_id} missing API keys in connectors table")
+                logger.error(f"Bot {bot_id} missing API keys for connector '{connector_name}'")
+                logger.error(f"   Checked: connectors table AND exchange_credentials table")
+                logger.error(f"   Bot name: {bot.name if bot else 'unknown'}")
+                logger.error(f"   Client ID: {client.id if client else 'unknown'}")
                 bot = db.query(Bot).filter(Bot.id == bot_id).first()
                 if bot:
                     bot.status = "error"
-                    bot.error = "Missing API keys - add exchange connector"
+                    bot.error = f"Missing API keys for {connector_name} - add exchange connector or credentials"
                     db.commit()
                 return
             
