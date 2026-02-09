@@ -1259,7 +1259,7 @@ class BotRunner:
             # Get bot record with connector info
             bot_record = db.execute(text("""
                 SELECT b.id, b.name, b.connector, b.account, b.pair, b.config,
-                       ec.api_key_encrypted, ec.api_secret_encrypted, ec.memo
+                       ec.api_key_encrypted, ec.api_secret_encrypted
                 FROM bots b
                 LEFT JOIN clients cl ON cl.account_identifier = b.account
                 LEFT JOIN exchange_credentials ec ON ec.client_id = cl.id AND ec.exchange = LOWER(b.connector)
