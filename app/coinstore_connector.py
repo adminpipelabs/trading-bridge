@@ -169,19 +169,17 @@ class CoinstoreConnector:
                         logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
                         raise Exception(f"Invalid JSON response: {response_text[:200]}")
             elif method.upper() == 'POST':
-                # CRITICAL: Send body to match signature
-                # Payload is always JSON string (even if '{}' for empty params)
-                # For aiohttp, use json= parameter to ensure Content-Type: application/json
-                # Parse payload back to dict for json= parameter (signature already calculated on string)
-                body_dict = json.loads(payload) if payload else {}
+                # CRITICAL: Send exact payload bytes that signature was calculated on
+                # Don't let aiohttp re-serialize - use raw bytes to ensure exact match
+                body_bytes = payload.encode('utf-8') if payload else b'{}'
                 
                 # DEBUG: Log exact body being sent
                 logger.info(f"📤 REQUEST BODY:")
                 logger.info(f"   payload (string): '{payload}'")
-                logger.info(f"   body_dict: {body_dict}")
-                logger.info(f"   body_dict (repr): {repr(body_dict)}")
+                logger.info(f"   body_bytes: {body_bytes}")
+                logger.info(f"   body_bytes (repr): {repr(body_bytes)}")
                 
-                async with session.post(url, json=body_dict, **request_kwargs) as response:
+                async with session.post(url, data=body_bytes, **request_kwargs) as response:
                     response_text = await response.text()
                     logger.info("=" * 80)
                     logger.info(f"📡 Coinstore API POST {endpoint} RESPONSE")
