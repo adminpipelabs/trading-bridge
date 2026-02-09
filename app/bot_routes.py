@@ -1288,6 +1288,182 @@ def get_bot_wallets(bot_id: str, db: Session = Depends(get_db)):
     } for w in bot_wallets]
 
 
+@router.get("/{bot_id}/balance-and-volume")
+async def get_bot_balance_and_volume(bot_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    Get bot balance (Available | Locked) and Volume stats.
+    Returns unified format for all bot types.
+    
+    For Spread Bots: Volume = total value traded
+    For Volume Bots: Volume = buy/sell count
+    """
+    from sqlalchemy import text
+    
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Get pair to determine base/quote currencies
+    pair = bot.pair or (f"{bot.base_asset}/{bot.quote_asset}" if bot.base_asset and bot.quote_asset else None)
+    if not pair:
+        return {
+            "bot_id": bot_id,
+            "available": {},
+            "locked": {},
+            "volume": None,
+            "error": "Bot missing pair configuration"
+        }
+    
+    base, quote = pair.split("/")
+    
+    # Initialize result
+    result = {
+        "bot_id": bot_id,
+        "bot_type": bot.bot_type,
+        "pair": pair,
+        "available": {base: 0, quote: 0},
+        "locked": {base: 0, quote: 0},
+        "volume": None
+    }
+    
+    # For CEX bots, fetch balance from exchange
+    if bot.bot_type == 'volume' or bot.bot_type == 'spread' or (bot.connector and bot.connector.lower() not in ['jupiter', 'solana']):
+        try:
+            # Get exchange connection via health monitor
+            pool = request.app.state.db_pool
+            monitor = request.app.state.health_monitor
+            
+            async with pool.acquire() as conn:
+                bot_record = await conn.fetchrow("""
+                    SELECT b.id, b.account, b.name, b.pair, b.connector, b.exchange, b.status,
+                           c.api_key, c.api_secret, c.memo
+                    FROM bots b
+                    LEFT JOIN clients cl ON cl.account_identifier = b.account
+                    LEFT JOIN connectors c ON c.client_id = cl.id 
+                        AND (
+                            LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector))
+                            OR (b.exchange IS NULL AND b.connector IS NULL)
+                            OR (LOWER(b.name) LIKE '%' || LOWER(c.name) || '%')
+                        )
+                    WHERE b.id = $1
+                """, bot_id)
+                
+                if not bot_record or not bot_record.get('api_key'):
+                    result["error"] = "No exchange credentials available"
+                    # Still calculate volume even if balance fetch fails
+                else:
+                    # Get exchange instance
+                    exchange = await monitor._get_exchange(bot_record)
+                    if exchange:
+                        # Fetch balance
+                        connector_name = (bot_record.get('exchange') or bot_record.get('connector') or '').lower()
+                        if connector_name == 'bitmart':
+                            balance = await exchange.fetch_balance({'type': 'spot'})
+                        elif connector_name == 'coinstore':
+                            balance = await exchange.fetch_balance()
+                        else:
+                            balance = await exchange.fetch_balance()
+                        
+                        # Extract available (free) and locked (used) balances
+                        base_available = float(balance.get(base, {}).get('free', 0) or 0)
+                        quote_available = float(balance.get(quote, {}).get('free', 0) or 0)
+                        base_locked = float(balance.get(base, {}).get('used', 0) or 0)
+                        quote_locked = float(balance.get(quote, {}).get('used', 0) or 0)
+                        
+                        result["available"] = {
+                            base: round(base_available, 4),
+                            quote: round(quote_available, 2)
+                        }
+                        result["locked"] = {
+                            base: round(base_locked, 4),
+                            quote: round(quote_locked, 2)
+                        }
+                        
+                        # Fetch open orders to get more accurate locked balance
+                        try:
+                            open_orders = await exchange.fetch_open_orders(pair)
+                            locked_base = sum(float(o.get('amount', 0) or 0) for o in open_orders if o.get('side', '').lower() == 'sell')
+                            locked_quote = sum(float(o.get('cost', 0) or (o.get('amount', 0) or 0) * (o.get('price', 0) or 0)) for o in open_orders if o.get('side', '').lower() == 'buy')
+                            
+                            # Use open orders if more accurate
+                            if locked_base > 0 or locked_quote > 0:
+                                result["locked"][base] = round(locked_base, 4)
+                                result["locked"][quote] = round(locked_quote, 2)
+                        except Exception as e:
+                            logger.debug(f"Could not fetch open orders: {e}")
+                            # Use balance.used as fallback (already set above)
+                    else:
+                        result["error"] = "Could not connect to exchange"
+                
+        except Exception as e:
+            logger.error(f"Error fetching balance for bot {bot_id}: {e}", exc_info=True)
+            result["error"] = f"Could not fetch balance: {str(e)[:100]}"
+    
+    # Calculate Volume based on bot type (always calculate, even if balance fetch failed)
+    try:
+        # Get trades from trade_logs (CEX) and bot_trades (DEX)
+        all_trades = []
+        
+        # CEX trades
+        try:
+            trade_logs = db.execute(text("""
+                SELECT side, amount, price, cost_usd, created_at
+                FROM trade_logs
+                WHERE bot_id = :bot_id
+                ORDER BY created_at DESC
+                LIMIT 1000
+            """), {"bot_id": bot_id}).fetchall()
+            
+            for t in trade_logs:
+                all_trades.append({
+                    "side": t.side,
+                    "value_usd": float(t.cost_usd) if t.cost_usd else 0,
+                    "created_at": t.created_at.isoformat() if t.created_at else None
+                })
+        except Exception as e:
+            logger.debug(f"Could not query trade_logs: {e}")
+        
+        # DEX trades
+        try:
+            dex_trades = db.query(BotTrade).filter(
+                BotTrade.bot_id == bot_id
+            ).order_by(BotTrade.created_at.desc()).limit(1000).all()
+            
+            for t in dex_trades:
+                all_trades.append({
+                    "side": t.side,
+                    "value_usd": float(t.value_usd) if t.value_usd else 0,
+                    "created_at": t.created_at.isoformat() if t.created_at else None
+                })
+        except Exception as e:
+            logger.debug(f"Could not query bot_trades: {e}")
+        
+        # Calculate volume based on bot type
+        if bot.bot_type == 'spread':
+            # Spread Bot: Total value traded
+            total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
+            result["volume"] = {
+                "type": "value_traded",
+                "value_usd": round(total_volume, 2),
+                "total_trades": len(all_trades)
+            }
+        else:  # volume bot
+            # Volume Bot: Buy/sell count
+            buy_count = sum(1 for t in all_trades if t.get("side", "").lower() == "buy")
+            sell_count = sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
+            result["volume"] = {
+                "type": "trade_count",
+                "buy_count": buy_count,
+                "sell_count": sell_count,
+                "total_trades": len(all_trades)
+            }
+    except Exception as e:
+        logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
+        result["volume"] = None
+    
+    return result
+
+
 @router.post("/{bot_id}/wallets")
 def add_bot_wallet(bot_id: str, wallet: WalletInfo, db: Session = Depends(get_db)):
     """Add a wallet to a Solana bot."""
