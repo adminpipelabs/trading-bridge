@@ -164,16 +164,29 @@ class CEXBotRunner:
                     from app.cex_volume_bot import CEXVolumeBot
                     import json
                     
-                    # Extract expected exchange from bot name
+                    # Determine expected exchange - check multiple sources
+                    connector_name = (bot_record.get("connector_name") or bot_record.get("connector") or "").lower()
                     bot_name_lower = (bot_record.get("name") or "").lower()
+                    
+                    # Priority: 1) connector field, 2) extract from bot name, 3) use connector_name as-is
                     expected_exchange = None
                     cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
-                    for kw in cex_keywords:
-                        if kw in bot_name_lower:
-                            expected_exchange = kw
-                            break
                     
-                    connector_name = (bot_record.get("connector_name") or "").lower()
+                    # First, check if connector_name is already a valid exchange
+                    if connector_name and connector_name in cex_keywords:
+                        expected_exchange = connector_name
+                        logger.info(f"✅ Bot {bot_id} - Using connector '{connector_name}' as exchange")
+                    else:
+                        # Extract from bot name as fallback
+                        for kw in cex_keywords:
+                            if kw in bot_name_lower:
+                                expected_exchange = kw
+                                logger.info(f"✅ Bot {bot_id} - Extracted exchange '{kw}' from bot name")
+                                break
+                        # If still not found, use connector_name if it exists
+                        if not expected_exchange and connector_name:
+                            expected_exchange = connector_name
+                            logger.info(f"✅ Bot {bot_id} - Using connector '{connector_name}' as exchange (fallback)")
                     
                     # Check if API keys exist and if connector matches expected exchange
                     api_key = bot_record.get("api_key")
@@ -187,11 +200,21 @@ class CEXBotRunner:
                             # Query exchange_credentials table
                             client_id = bot_record.get("client_id")
                             if client_id:
+                                # Try exact match first
                                 creds_result = await conn.fetchrow("""
                                     SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted
                                     FROM exchange_credentials
                                     WHERE client_id = $1 AND LOWER(exchange) = LOWER($2)
                                 """, client_id, expected_exchange)
+                                
+                                # If not found, try connector_name as fallback
+                                if not creds_result and connector_name and connector_name != expected_exchange:
+                                    logger.info(f"🔍 Bot {bot_id} - Trying connector_name '{connector_name}' as exchange...")
+                                    creds_result = await conn.fetchrow("""
+                                        SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+                                        FROM exchange_credentials
+                                        WHERE client_id = $1 AND LOWER(exchange) = LOWER($2)
+                                    """, client_id, connector_name)
                                 
                                 if creds_result:
                                     try:
@@ -209,7 +232,22 @@ class CEXBotRunner:
                                         api_key = None
                                         api_secret = None
                                 else:
-                                    logger.warning(f"⚠️  No credentials found in exchange_credentials table for exchange '{expected_exchange}'")
+                                    # Log detailed debug info
+                                    logger.warning(f"⚠️  No credentials found in exchange_credentials table")
+                                    logger.warning(f"   Bot ID: {bot_id}")
+                                    logger.warning(f"   Client ID: {client_id}")
+                                    logger.warning(f"   Expected exchange: {expected_exchange}")
+                                    logger.warning(f"   Connector name: {connector_name}")
+                                    logger.warning(f"   Bot name: {bot_record.get('name')}")
+                                    
+                                    # Check what credentials exist for this client
+                                    all_creds = await conn.fetch("""
+                                        SELECT exchange FROM exchange_credentials WHERE client_id = $1
+                                    """, client_id)
+                                    if all_creds:
+                                        logger.warning(f"   Available exchanges for this client: {[c['exchange'] for c in all_creds]}")
+                                    else:
+                                        logger.warning(f"   No credentials found for client_id: {client_id}")
                     
                     # Final check if API keys exist
                     if not api_key or not api_secret:
