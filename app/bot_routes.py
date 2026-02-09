@@ -1620,15 +1620,34 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     break
                         
                         if exchange:
+                            logger.info(f"✅ Found exchange connector '{connector_name}' in account '{bot.account}'")
+                        else:
+                            available_connectors = list(account.connectors.keys())
+                            logger.warning(f"❌ Exchange connector '{connector_name}' not found in account '{bot.account}'. Available: {available_connectors}")
+                        
+                        if exchange:
                             try:
+                                # Log exchange type and API key status (masked)
+                                exchange_type = type(exchange).__name__
+                                api_key_preview = "***"
+                                if hasattr(exchange, 'apiKey') and exchange.apiKey:
+                                    api_key_preview = f"{exchange.apiKey[:4]}...{exchange.apiKey[-4:]}" if len(exchange.apiKey) > 8 else "***"
+                                elif hasattr(exchange, 'connector') and hasattr(exchange.connector, 'api_key'):
+                                    api_key_preview = f"{exchange.connector.api_key[:4]}...{exchange.connector.api_key[-4:]}" if len(exchange.connector.api_key) > 8 else "***"
+                                
+                                logger.info(f"🔍 Fetching balance for {connector_name} bot {bot_id}: exchange_type={exchange_type}, api_key={api_key_preview}")
+                                
                                 # Fetch balance (works regardless of bot status)
                                 # Wrap in try-except to handle ccxt AttributeError bug
                                 try:
                                     if connector_name.lower() == 'bitmart':
+                                        logger.debug(f"Calling exchange.fetch_balance({{'type': 'spot'}}) for BitMart")
                                         balance = await exchange.fetch_balance({'type': 'spot'})
                                     elif connector_name.lower() == 'coinstore':
+                                        logger.debug(f"Calling exchange.fetch_balance() for Coinstore")
                                         balance = await exchange.fetch_balance()
                                     else:
+                                        logger.debug(f"Calling exchange.fetch_balance() for {connector_name}")
                                         balance = await exchange.fetch_balance()
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
@@ -1643,7 +1662,10 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 if balance is None:
                                     logger.warning(f"Balance is None for bot {bot_id} - returning default values")
                                 else:
-                                    logger.info(f"Balance response for {connector_name}: keys={list(balance.keys()) if balance else 'None'}, looking for base={base}, quote={quote}")
+                                    logger.info(f"✅ Balance fetch successful for {connector_name}: keys={list(balance.keys()) if balance else 'None'}, looking for base={base}, quote={quote}")
+                                    if isinstance(balance, dict):
+                                        free_keys = list(balance.get('free', {}).keys()) if isinstance(balance.get('free'), dict) else []
+                                        logger.info(f"   Available currencies: {free_keys[:10]}")  # Show first 10
                                     
                                     base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
                                     quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
