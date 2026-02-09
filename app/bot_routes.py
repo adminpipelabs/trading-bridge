@@ -1764,7 +1764,12 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     # Default values are already 0, so no need to set them again
                                 else:
                                     logger.info(f"Balance response keys: {list(balance.keys()) if balance else 'None'}")
-                                    logger.info(f"Looking for base={base}, quote={quote} in balance")
+                                    
+                                    # Log all available currencies in balance response
+                                    free_currencies = list(balance.get("free", {}).keys()) if balance.get("free") else []
+                                    used_currencies = list(balance.get("used", {}).keys()) if balance.get("used") else []
+                                    logger.info(f"💰 All currencies in balance response - free: {free_currencies}, used: {used_currencies}")
+                                    logger.info(f"🔍 Looking for base={base}, quote={quote} in balance")
                                     
                                     # Extract available (free) and locked (used) balances
                                     # Handle both dict format and direct access
@@ -1774,7 +1779,15 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     base_locked = float(balance.get("used", {}).get(base, 0) or 0)
                                     quote_locked = float(balance.get("used", {}).get(quote, 0) or 0)
                                     
-                                    logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
+                                    logger.info(f"✅ Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
+                                    
+                                    # If balances are 0, check if currency names might be different
+                                    if base_available == 0 and quote_available == 0:
+                                        logger.warning(f"⚠️  All balances are 0. Checking if currency names match...")
+                                        logger.warning(f"   Expected: base={base}, quote={quote}")
+                                        logger.warning(f"   Found in balance: {free_currencies}")
+                                        if base.upper() not in [c.upper() for c in free_currencies] or quote.upper() not in [c.upper() for c in free_currencies]:
+                                            logger.error(f"❌ Currency name mismatch! Exchange might use different currency names.")
                                     
                                     result["available"] = {
                                         base: round(base_available, 4),
@@ -1945,8 +1958,8 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                 "unrealized_usd": 0,
                 "trade_count": len(all_trades)
             }
-        except Exception as e:
-            logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
         result["volume"] = None
         result["pnl"] = {
             "total_usd": 0,
