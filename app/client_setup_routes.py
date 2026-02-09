@@ -256,6 +256,10 @@ class SetupBotRequest(BaseModel):
     base_mint: Optional[str] = Field(None, description="Token mint address (for DEX)")
     name: Optional[str] = Field(None, description="Bot name")
     config: Dict[str, Any] = Field(..., description="Bot configuration")
+    # API credentials for CEX bots
+    api_key: Optional[str] = Field(None, description="Exchange API key (for CEX bots)")
+    api_secret: Optional[str] = Field(None, description="Exchange API secret (for CEX bots)")
+    passphrase: Optional[str] = Field(None, description="Exchange passphrase/memo (for CEX bots like BitMart)")
 
 
 class SetupBotResponse(BaseModel):
@@ -367,26 +371,85 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         wallet_address = None
         chain = None
         
-        # For CEX bots, verify exchange credentials exist (skip private key handling)
+        # For CEX bots, save API credentials if provided, or verify they exist
         if is_cex:
-            # Check if exchange credentials exist for this client
             from sqlalchemy import text
-            exchange_lower = request.exchange.lower()
-            creds_check = db.execute(text("""
-                SELECT id FROM exchange_credentials 
-                WHERE client_id = :client_id AND exchange = :exchange
-            """), {
-                "client_id": client_id,
-                "exchange": exchange_lower
-            }).first()
+            from app.cex_volume_bot import encrypt_credential
+            from datetime import datetime, timezone
             
-            if not creds_check:
-                logger.error(f"Client {client_id} attempted to create {exchange_lower} bot but no credentials found")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{request.exchange} API keys not connected. Please add your API credentials first."
-                )
-            logger.info(f"Verified exchange credentials exist for {exchange_lower} bot")
+            exchange_lower = request.exchange.lower()
+            
+            # If API keys are provided in request, save them
+            if request.api_key and request.api_secret:
+                logger.info(f"💾 Saving API credentials for {exchange_lower} bot creation")
+                try:
+                    # Encrypt credentials
+                    api_key_enc = encrypt_credential(request.api_key)
+                    api_secret_enc = encrypt_credential(request.api_secret)
+                    passphrase_enc = encrypt_credential(request.passphrase) if request.passphrase else None
+                    
+                    # Ensure table exists
+                    try:
+                        db.execute(text("""
+                            CREATE TABLE IF NOT EXISTS exchange_credentials (
+                                id SERIAL PRIMARY KEY,
+                                client_id VARCHAR(255) NOT NULL,
+                                exchange VARCHAR(50) NOT NULL,
+                                api_key_encrypted TEXT NOT NULL,
+                                api_secret_encrypted TEXT NOT NULL,
+                                passphrase_encrypted TEXT,
+                                created_at TIMESTAMP DEFAULT NOW(),
+                                updated_at TIMESTAMP DEFAULT NOW(),
+                                UNIQUE(client_id, exchange)
+                            )
+                        """))
+                        db.execute(text("CREATE INDEX IF NOT EXISTS idx_exchange_creds_client ON exchange_credentials(client_id)"))
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    
+                    # Save credentials
+                    db.execute(text("""
+                        INSERT INTO exchange_credentials 
+                            (client_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, updated_at)
+                        VALUES (:client_id, :exchange, :api_key, :api_secret, :passphrase, :updated_at)
+                        ON CONFLICT (client_id, exchange)
+                        DO UPDATE SET 
+                            api_key_encrypted = :api_key,
+                            api_secret_encrypted = :api_secret,
+                            passphrase_encrypted = :passphrase,
+                            updated_at = :updated_at
+                    """), {
+                        "client_id": client_id,
+                        "exchange": exchange_lower,
+                        "api_key": api_key_enc,
+                        "api_secret": api_secret_enc,
+                        "passphrase": passphrase_enc,
+                        "updated_at": datetime.now(timezone.utc)
+                    })
+                    db.commit()
+                    logger.info(f"✅ Saved API credentials for {exchange_lower}")
+                except Exception as e:
+                    logger.error(f"Failed to save API credentials: {e}", exc_info=True)
+                    db.rollback()
+                    raise HTTPException(status_code=500, detail=f"Failed to save API credentials: {str(e)}")
+            else:
+                # No API keys in request - check if they exist already
+                creds_check = db.execute(text("""
+                    SELECT id FROM exchange_credentials 
+                    WHERE client_id = :client_id AND exchange = :exchange
+                """), {
+                    "client_id": client_id,
+                    "exchange": exchange_lower
+                }).first()
+                
+                if not creds_check:
+                    logger.error(f"Client {client_id} attempted to create {exchange_lower} bot but no credentials found")
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{request.exchange} API keys not connected. Please provide API credentials when creating the bot."
+                    )
+                logger.info(f"Verified exchange credentials exist for {exchange_lower} bot")
         
         # For DEX bots, require private key
         if not is_cex:
