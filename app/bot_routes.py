@@ -1524,6 +1524,162 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
     return result
 
 
+@router.get("/{bot_id}/stats")
+async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
+    """
+    Get bot statistics for dashboard display.
+    Returns: available funds, locked funds, 24h volume, and 24h trade counts.
+    """
+    from sqlalchemy import text
+    from datetime import datetime, timedelta, timezone
+    from app.api.client_data import sync_connectors_to_exchange_manager
+    from app.services.exchange import exchange_manager
+    
+    bot = db.query(Bot).filter(Bot.id == bot_id).first()
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    
+    # Get pair to determine base/quote currencies
+    pair = bot.pair or (f"{bot.base_asset}/{bot.quote_asset}" if bot.base_asset and bot.quote_asset else None)
+    if not pair:
+        return {
+            "available": {},
+            "locked": {},
+            "volume_24h": 0,
+            "trades_24h": {"buys": 0, "sells": 0},
+            "error": "Bot missing pair configuration"
+        }
+    
+    base, quote = pair.split("/")
+    
+    # Initialize result
+    result = {
+        "available": {base: 0, quote: 0},
+        "locked": {base: 0, quote: 0},
+        "volume_24h": 0,
+        "trades_24h": {"buys": 0, "sells": 0}
+    }
+    
+    # Fetch balances for CEX bots
+    connector_lower = (bot.connector or '').lower() if bot.connector else ''
+    if bot.bot_type in ['volume', 'spread'] or (connector_lower and connector_lower not in ['jupiter', 'solana']):
+        try:
+            # Sync connectors for this account
+            synced = await sync_connectors_to_exchange_manager(bot.account, db)
+            if synced:
+                account = exchange_manager.get_account(bot.account)
+                if account:
+                    # Determine connector name
+                    connector_name = (bot.connector or '').lower()
+                    if not connector_name:
+                        bot_name_lower = (bot.name or '').lower()
+                        cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+                        for kw in cex_keywords:
+                            if kw in bot_name_lower:
+                                connector_name = kw
+                                break
+                    
+                    if connector_name:
+                        exchange = account.connectors.get(connector_name)
+                        if not exchange:
+                            # Try case-insensitive lookup
+                            for key, val in account.connectors.items():
+                                if key.lower() == connector_name.lower():
+                                    exchange = val
+                                    break
+                        
+                        if exchange:
+                            try:
+                                # Fetch balance
+                                if connector_name.lower() == 'bitmart':
+                                    balance = await exchange.fetch_balance({'type': 'spot'})
+                                elif connector_name.lower() == 'coinstore':
+                                    balance = await exchange.fetch_balance()
+                                else:
+                                    balance = await exchange.fetch_balance()
+                                
+                                # Extract balances
+                                base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
+                                quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
+                                
+                                base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                
+                                result["available"] = {
+                                    base: round(base_available, 4),
+                                    quote: round(quote_available, 2)
+                                }
+                                result["locked"] = {
+                                    base: round(base_locked, 4),
+                                    quote: round(quote_locked, 2)
+                                }
+                            except Exception as balance_error:
+                                logger.error(f"Error fetching balance for bot {bot_id}: {balance_error}")
+        except Exception as e:
+            logger.error(f"Error in balance fetch for bot {bot_id}: {e}")
+    
+    # Calculate 24h volume and trade counts
+    try:
+        # Get trades from last 24 hours
+        twenty_four_hours_ago = datetime.now(timezone.utc) - timedelta(hours=24)
+        
+        # Query trade_logs table (CEX bots)
+        trade_logs = db.execute(text("""
+            SELECT side, amount, price, cost_usd
+            FROM trade_logs
+            WHERE bot_id = :bot_id
+              AND created_at >= :since
+        """), {"bot_id": bot_id, "since": twenty_four_hours_ago}).fetchall()
+        
+        # Query bot_trades table (DEX bots)
+        bot_trades = db.query(BotTrade).filter(
+            BotTrade.bot_id == bot_id,
+            BotTrade.created_at >= twenty_four_hours_ago
+        ).all()
+        
+        # Calculate volume from trade_logs (CEX)
+        volume_24h = 0
+        buys_24h = 0
+        sells_24h = 0
+        
+        for trade in trade_logs:
+            # Volume is cost_usd if available, otherwise price * amount
+            if trade.cost_usd:
+                volume_24h += float(trade.cost_usd)
+            elif trade.price and trade.amount:
+                volume_24h += float(trade.price) * float(trade.amount)
+            
+            if trade.side and trade.side.lower() == 'buy':
+                buys_24h += 1
+            elif trade.side and trade.side.lower() == 'sell':
+                sells_24h += 1
+        
+        # Count trades from bot_trades (DEX)
+        for trade in bot_trades:
+            if trade.value_usd:
+                volume_24h += float(trade.value_usd)
+            elif trade.price and trade.amount:
+                volume_24h += float(trade.price) * float(trade.amount)
+            
+            if trade.side and trade.side.lower() == 'buy':
+                buys_24h += 1
+            elif trade.side and trade.side.lower() == 'sell':
+                sells_24h += 1
+        
+        result["volume_24h"] = round(volume_24h, 2)
+        result["trades_24h"] = {
+            "buys": buys_24h,
+            "sells": sells_24h
+        }
+    except Exception as e:
+        logger.error(f"Error calculating 24h stats for bot {bot_id}: {e}")
+        # Return defaults if query fails
+    
+    return result
+
+
 @router.get("/{bot_id}/balance-debug")
 async def debug_bot_balance(bot_id: str, db: Session = Depends(get_db)):
     """
