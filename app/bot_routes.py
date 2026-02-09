@@ -1289,7 +1289,7 @@ def get_bot_wallets(bot_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{bot_id}/balance-and-volume")
-async def get_bot_balance_and_volume(bot_id: str, request: Request, db: Session = Depends(get_db)):
+async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db)):
     """
     Get bot balance (Available | Locked) and Volume stats.
     Returns unified format for all bot types.
@@ -1298,6 +1298,8 @@ async def get_bot_balance_and_volume(bot_id: str, request: Request, db: Session 
     For Volume Bots: Volume = buy/sell count
     """
     from sqlalchemy import text
+    from app.api.client_data import sync_connectors_to_exchange_manager
+    from app.services.exchange import exchange_manager
     
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
     if not bot:
@@ -1329,71 +1331,75 @@ async def get_bot_balance_and_volume(bot_id: str, request: Request, db: Session 
     # For CEX bots, fetch balance from exchange
     if bot.bot_type == 'volume' or bot.bot_type == 'spread' or (bot.connector and bot.connector.lower() not in ['jupiter', 'solana']):
         try:
-            # Get exchange connection via health monitor
-            pool = request.app.state.db_pool
-            monitor = request.app.state.health_monitor
-            
-            async with pool.acquire() as conn:
-                bot_record = await conn.fetchrow("""
-                    SELECT b.id, b.account, b.name, b.pair, b.connector, b.exchange, b.status,
-                           c.api_key, c.api_secret, c.memo
-                    FROM bots b
-                    LEFT JOIN clients cl ON cl.account_identifier = b.account
-                    LEFT JOIN connectors c ON c.client_id = cl.id 
-                        AND (
-                            LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector))
-                            OR (b.exchange IS NULL AND b.connector IS NULL)
-                            OR (LOWER(b.name) LIKE '%' || LOWER(c.name) || '%')
-                        )
-                    WHERE b.id = $1
-                """, bot_id)
-                
-                if not bot_record or not bot_record.get('api_key'):
-                    result["error"] = "No exchange credentials available"
-                    # Still calculate volume even if balance fetch fails
+            # Sync connectors for this account
+            synced = await sync_connectors_to_exchange_manager(bot.account, db)
+            if not synced:
+                result["error"] = "No exchange credentials available"
+            else:
+                # Get account from exchange_manager
+                account = exchange_manager.get_account(bot.account)
+                if not account:
+                    result["error"] = "Account not found in exchange_manager"
                 else:
-                    # Get exchange instance
-                    exchange = await monitor._get_exchange(bot_record)
-                    if exchange:
-                        # Fetch balance
-                        connector_name = (bot_record.get('exchange') or bot_record.get('connector') or '').lower()
-                        if connector_name == 'bitmart':
-                            balance = await exchange.fetch_balance({'type': 'spot'})
-                        elif connector_name == 'coinstore':
-                            balance = await exchange.fetch_balance()
-                        else:
-                            balance = await exchange.fetch_balance()
-                        
-                        # Extract available (free) and locked (used) balances
-                        base_available = float(balance.get(base, {}).get('free', 0) or 0)
-                        quote_available = float(balance.get(quote, {}).get('free', 0) or 0)
-                        base_locked = float(balance.get(base, {}).get('used', 0) or 0)
-                        quote_locked = float(balance.get(quote, {}).get('used', 0) or 0)
-                        
-                        result["available"] = {
-                            base: round(base_available, 4),
-                            quote: round(quote_available, 2)
-                        }
-                        result["locked"] = {
-                            base: round(base_locked, 4),
-                            quote: round(quote_locked, 2)
-                        }
-                        
-                        # Fetch open orders to get more accurate locked balance
-                        try:
-                            open_orders = await exchange.fetch_open_orders(pair)
-                            locked_base = sum(float(o.get('amount', 0) or 0) for o in open_orders if o.get('side', '').lower() == 'sell')
-                            locked_quote = sum(float(o.get('cost', 0) or (o.get('amount', 0) or 0) * (o.get('price', 0) or 0)) for o in open_orders if o.get('side', '').lower() == 'buy')
-                            
-                            # Use open orders if more accurate
-                            if locked_base > 0 or locked_quote > 0:
-                                result["locked"][base] = round(locked_base, 4)
-                                result["locked"][quote] = round(locked_quote, 2)
-                        except Exception as e:
-                            logger.debug(f"Could not fetch open orders: {e}")
-                            # Use balance.used as fallback (already set above)
+                    # Determine which connector/exchange this bot uses
+                    connector_name = (bot.exchange or bot.connector or '').lower()
+                    if not connector_name:
+                        # Try to extract from bot name
+                        bot_name_lower = (bot.name or '').lower()
+                        cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+                        for kw in cex_keywords:
+                            if kw in bot_name_lower:
+                                connector_name = kw
+                                break
+                    
+                    if not connector_name:
+                        result["error"] = "Could not determine exchange for bot"
                     else:
-                        result["error"] = "Could not connect to exchange"
+                        # Get exchange instance from account
+                        exchange = account.connectors.get(connector_name)
+                        if not exchange:
+                            result["error"] = f"Exchange '{connector_name}' not found in account connectors"
+                        else:
+                            # Fetch balance
+                            try:
+                                if connector_name == 'bitmart':
+                                    balance = await exchange.fetch_balance({'type': 'spot'})
+                                elif connector_name == 'coinstore':
+                                    balance = await exchange.fetch_balance()
+                                else:
+                                    balance = await exchange.fetch_balance()
+                                
+                                # Extract available (free) and locked (used) balances
+                                base_available = float(balance.get(base, {}).get('free', 0) or 0)
+                                quote_available = float(balance.get(quote, {}).get('free', 0) or 0)
+                                base_locked = float(balance.get(base, {}).get('used', 0) or 0)
+                                quote_locked = float(balance.get(quote, {}).get('used', 0) or 0)
+                                
+                                result["available"] = {
+                                    base: round(base_available, 4),
+                                    quote: round(quote_available, 2)
+                                }
+                                result["locked"] = {
+                                    base: round(base_locked, 4),
+                                    quote: round(quote_locked, 2)
+                                }
+                                
+                                # Fetch open orders to get more accurate locked balance
+                                try:
+                                    open_orders = await exchange.fetch_open_orders(pair)
+                                    locked_base = sum(float(o.get('amount', 0) or 0) for o in open_orders if o.get('side', '').lower() == 'sell')
+                                    locked_quote = sum(float(o.get('cost', 0) or (o.get('amount', 0) or 0) * (o.get('price', 0) or 0)) for o in open_orders if o.get('side', '').lower() == 'buy')
+                                    
+                                    # Use open orders if more accurate
+                                    if locked_base > 0 or locked_quote > 0:
+                                        result["locked"][base] = round(locked_base, 4)
+                                        result["locked"][quote] = round(locked_quote, 2)
+                                except Exception as e:
+                                    logger.debug(f"Could not fetch open orders: {e}")
+                                    # Use balance.used as fallback (already set above)
+                            except Exception as e:
+                                logger.error(f"Error fetching balance from exchange: {e}", exc_info=True)
+                                result["error"] = f"Could not fetch balance: {str(e)[:100]}"
                 
         except Exception as e:
             logger.error(f"Error fetching balance for bot {bot_id}: {e}", exc_info=True)
