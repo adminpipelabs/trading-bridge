@@ -1945,14 +1945,17 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                 "unrealized_usd": 0,
                 "trade_count": len(all_trades)
             }
-    except Exception as e:
-        logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
         result["volume"] = None
         result["pnl"] = {
             "total_usd": 0,
             "unrealized_usd": 0,
             "trade_count": 0
         }
+    
+    # Log final result before returning
+    logger.info(f"📤 Returning balance-and-volume for bot {bot_id}: available={result.get('available')}, locked={result.get('locked')}, volume={result.get('volume')}, pnl={result.get('pnl', {}).get('total_usd', 0)}")
     
     return result
 
