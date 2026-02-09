@@ -127,3 +127,23 @@ def check_bot_access(bot, current_client: Client):
         )
     
     return True
+
+
+def get_fernet() -> Fernet:
+    """Get Fernet instance with encryption key from environment."""
+    key = os.environ.get("ENCRYPTION_KEY")
+    if not key:
+        raise ValueError("ENCRYPTION_KEY environment variable not set")
+    return Fernet(key.encode() if isinstance(key, str) else key)
+
+
+def encrypt_credential(plaintext: str) -> str:
+    """Encrypt a credential string."""
+    f = get_fernet()
+    return f.encrypt(plaintext.encode()).decode()
+
+
+def decrypt_credential(encrypted: str) -> str:
+    """Decrypt an encrypted credential string."""
+    f = get_fernet()
+    return f.decrypt(encrypted.encode()).decode()
