@@ -84,12 +84,9 @@ class Account:
             "timeout": 30000,
         }
         
-        # BitMart requires defaultType option (spot, margin, futures)
-        # Without this, ccxt calls .lower() on None account type → crash
+        # BitMart: Just like Hummingbot - simple config
         if connector_lower == "bitmart":
-            config["options"] = {
-                "defaultType": "spot"  # REQUIRED - prevents NoneType.lower() error
-            }
+            config["options"] = {"defaultType": "spot"}
         
         # Add proxy if configured (for QuotaGuard static IP)
         if PROXY_URL:
