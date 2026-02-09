@@ -1378,10 +1378,13 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                             available_connectors = list(account.connectors.keys())
                             # If no connectors found, try to sync again with more detailed logging
                             logger.warning(f"Exchange '{connector_name}' not found. Available connectors: {available_connectors}")
-                            logger.warning(f"Attempting to re-sync connectors for account {bot.account}...")
+                            logger.warning(f"Bot details: id={bot.id}, name={bot.name}, connector={bot.connector}, client_id={bot.client_id}")
+                            logger.warning(f"Attempting to re-sync connectors for account {bot.account} (client_id: {bot.client_id})...")
                             
                             # Re-sync connectors - maybe they weren't loaded yet
                             synced_retry = await sync_connectors_to_exchange_manager(bot.account, db)
+                            logger.info(f"Re-sync result: {synced_retry}")
+                            
                             if synced_retry:
                                 account = exchange_manager.get_account(bot.account)
                                 exchange = account.connectors.get(connector_name) if account else None
@@ -1392,12 +1395,13 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                             if key.lower() == connector_name.lower():
                                                 exchange = val
                                                 connector_name = key
+                                                logger.info(f"Found connector via case-insensitive match after re-sync: {key}")
                                                 break
                             
                             if not exchange:
                                 available_connectors_after = list(account.connectors.keys()) if account else []
-                                result["error"] = f"Exchange '{connector_name}' not found. Available connectors: {available_connectors_after}. Bot connector field: '{bot.connector}'"
-                                logger.error(f"Exchange '{connector_name}' still not found after re-sync. Available: {available_connectors_after}")
+                                result["error"] = f"Exchange '{connector_name}' not found. Available connectors: {available_connectors_after}. Bot connector field: '{bot.connector}'. Client needs to add API keys via bot setup."
+                                logger.error(f"Exchange '{connector_name}' still not found after re-sync. Available: {available_connectors_after}. Bot connector: '{bot.connector}', Client ID: {bot.client_id}")
                         else:
                             # Fetch balance
                             try:
