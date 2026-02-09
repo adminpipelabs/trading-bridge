@@ -76,21 +76,22 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
     <div style={{
       backgroundColor: '#FFFFFF',
       border: '1px solid #E5E7EB',
-      borderRadius: '12px',
-      padding: '20px',
-      marginBottom: '16px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+      borderRadius: '8px',
+      padding: '12px', // Reduced from 20px
+      marginBottom: '12px', // Reduced from 16px
+      boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
       transition: 'all 0.2s ease',
-      // Responsive width
+      // Responsive width - keep compact
       width: '100%',
       maxWidth: '100%',
-      // Desktop: fixed width for grid
+      // Desktop: fixed width for grid - smaller cards
       '@media (min-width: 768px)': {
-        width: 'calc(50% - 12px)', // 2 columns
-        maxWidth: '400px'
+        width: 'calc(50% - 8px)', // 2 columns
+        maxWidth: '320px' // Reduced from 400px
       },
       '@media (min-width: 1024px)': {
-        width: 'calc(33.333% - 16px)' // 3 columns
+        width: 'calc(33.333% - 12px)', // 3 columns
+        maxWidth: '300px' // Even smaller for 3 columns
       }
     }}
     onMouseEnter={(e) => {
@@ -102,100 +103,105 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
       e.currentTarget.style.transform = 'translateY(0)';
     }}
     >
-      {/* Header */}
+      {/* Header - Compact */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: '16px',
+        alignItems: 'center',
+        marginBottom: '10px', // Reduced from 16px
         flexWrap: 'wrap',
-        gap: '8px'
+        gap: '6px'
       }}>
-        <div style={{ flex: 1, minWidth: '200px' }}>
-          <h3 style={{
-            margin: 0,
-            fontSize: '18px',
-            fontWeight: 700,
-            color: '#111827',
-            marginBottom: '4px'
-          }}>
-            {bot.name}
-          </h3>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '6px',
-            padding: '4px 12px',
-            backgroundColor: isRunning ? '#D1FAE5' : '#F3F4F6',
-            color: isRunning ? '#059669' : '#6B7280',
-            borderRadius: '20px',
-            fontSize: '12px',
-            fontWeight: 600
-          }}>
-            <span>{isRunning ? '●' : '○'}</span>
-            <span>{isRunning ? 'Running' : 'Stopped'}</span>
-          </div>
+        <h3 style={{
+          margin: 0,
+          fontSize: '16px', // Reduced from 18px
+          fontWeight: 700,
+          color: '#111827',
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }}>
+          {bot.name}
+        </h3>
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          padding: '3px 10px', // Reduced padding
+          backgroundColor: isRunning ? '#D1FAE5' : '#F3F4F6',
+          color: isRunning ? '#059669' : '#6B7280',
+          borderRadius: '16px',
+          fontSize: '11px', // Reduced from 12px
+          fontWeight: 600,
+          whiteSpace: 'nowrap'
+        }}>
+          <span style={{ fontSize: '8px' }}>{isRunning ? '●' : '○'}</span>
+          <span>{isRunning ? 'Running' : 'Stopped'}</span>
         </div>
       </div>
 
-      {/* Warning/Error Messages */}
+      {/* Warning/Error Messages - Compact */}
       {bot.health_message && (
         <div style={{
-          padding: '12px',
+          padding: '8px 10px', // Reduced padding
           backgroundColor: bot.health_message.includes('Missing API') 
             ? '#FEF3C7' 
             : '#DBEAFE',
           border: `1px solid ${bot.health_message.includes('Missing API') 
             ? '#FBBF24' 
             : '#60A5FA'}`,
-          borderRadius: '8px',
-          marginBottom: '16px'
+          borderRadius: '6px',
+          marginBottom: '10px', // Reduced from 16px
+          fontSize: '12px' // Smaller text
         }}>
           <div style={{
             fontWeight: 600,
-            fontSize: '14px',
+            fontSize: '12px', // Reduced from 14px
             color: bot.health_message.includes('Missing API') 
               ? '#92400E' 
               : '#1E40AF',
-            marginBottom: '4px'
+            marginBottom: '2px'
           }}>
             {bot.health_message.includes('Missing API') 
-              ? 'Connect API Keys' 
-              : 'Action Needed'}
+              ? '⚠️ Connect API Keys' 
+              : '⚠️ Action Needed'}
           </div>
           <div style={{
-            fontSize: '13px',
+            fontSize: '11px', // Reduced from 13px
             color: bot.health_message.includes('Missing API') 
               ? '#78350F' 
-              : '#1E3A8A'
+              : '#1E3A8A',
+            lineHeight: '1.3'
           }}>
             {bot.health_message.includes('Missing API')
-              ? 'Click Edit to add your exchange API keys'
+              ? 'Click Edit to add keys'
               : bot.health_message}
           </div>
         </div>
       )}
 
-      {/* Financial Info Grid */}
+      {/* Financial Info Grid - Compact */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(2, 1fr)',
-        gap: '16px',
-        marginBottom: '16px'
+        gap: '8px', // Reduced from 16px
+        marginBottom: '12px' // Reduced from 16px
       }}>
         {/* Available Funds */}
         <div style={{
-          padding: '12px',
+          padding: '8px', // Reduced from 12px
           backgroundColor: '#F9FAFB',
-          borderRadius: '8px'
+          borderRadius: '6px'
         }}>
           <div style={{
-            fontSize: '11px',
+            fontSize: '10px', // Reduced from 11px
             color: '#6B7280',
             fontWeight: 600,
             textTransform: 'uppercase',
-            letterSpacing: '0.5px',
-            marginBottom: '8px'
+            letterSpacing: '0.3px',
+            marginBottom: '4px' // Reduced from 8px
           }}>
             Available
           </div>
@@ -206,40 +212,41 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
                 if (amount <= 0) return null;
                 return (
                   <div key={asset} style={{
-                    fontSize: '14px',
+                    fontSize: '12px', // Reduced from 14px
                     fontWeight: 600,
                     color: '#111827',
-                    marginBottom: '4px'
+                    marginBottom: '2px', // Reduced from 4px
+                    lineHeight: '1.3'
                   }}>
-                    {formatNumber(amount)} {asset}
+                    {formatCompact(amount)} {asset}
                   </div>
                 );
               })}
             </div>
           ) : (
             <div style={{
-              fontSize: '12px',
+              fontSize: '10px', // Reduced from 12px
               color: '#9CA3AF',
               fontStyle: 'italic'
             }}>
-              Not available
+              N/A
             </div>
           )}
         </div>
 
         {/* Locked Funds */}
         <div style={{
-          padding: '12px',
+          padding: '8px', // Reduced from 12px
           backgroundColor: '#F9FAFB',
-          borderRadius: '8px'
+          borderRadius: '6px'
         }}>
           <div style={{
-            fontSize: '11px',
+            fontSize: '10px', // Reduced from 11px
             color: '#6B7280',
             fontWeight: 600,
             textTransform: 'uppercase',
-            letterSpacing: '0.5px',
-            marginBottom: '8px'
+            letterSpacing: '0.3px',
+            marginBottom: '4px' // Reduced from 8px
           }}>
             Locked
           </div>
@@ -250,19 +257,20 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
                 if (amount <= 0) return null;
                 return (
                   <div key={asset} style={{
-                    fontSize: '14px',
+                    fontSize: '12px', // Reduced from 14px
                     fontWeight: 600,
                     color: '#111827',
-                    marginBottom: '4px'
+                    marginBottom: '2px',
+                    lineHeight: '1.3'
                   }}>
-                    {formatNumber(amount)} {asset}
+                    {formatCompact(amount)} {asset}
                   </div>
                 );
               })}
             </div>
           ) : (
             <div style={{
-              fontSize: '12px',
+              fontSize: '10px', // Reduced from 12px
               color: '#9CA3AF'
             }}>
               0
@@ -272,61 +280,61 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
 
         {/* Volume */}
         <div style={{
-          padding: '12px',
+          padding: '8px', // Reduced from 12px
           backgroundColor: '#F0FDF4',
-          borderRadius: '8px',
+          borderRadius: '6px',
           border: '1px solid #86EFAC'
         }}>
           <div style={{
-            fontSize: '11px',
+            fontSize: '10px', // Reduced from 11px
             color: '#6B7280',
             fontWeight: 600,
             textTransform: 'uppercase',
-            letterSpacing: '0.5px',
-            marginBottom: '8px'
+            letterSpacing: '0.3px',
+            marginBottom: '4px' // Reduced from 8px
           }}>
             Volume
           </div>
           <div style={{
-            fontSize: '18px',
+            fontSize: '16px', // Reduced from 18px
             fontWeight: 700,
             color: '#059669'
           }}>
-            ${formatNumber(bot.volume?.value_usd || 0)}
+            ${formatCompact(bot.volume?.value_usd || 0)}
           </div>
         </div>
 
         {/* P&L */}
         <div style={{
-          padding: '12px',
+          padding: '8px', // Reduced from 12px
           backgroundColor: bot.pnl?.total_usd >= 0 ? '#F0FDF4' : '#FEE2E2',
-          borderRadius: '8px',
+          borderRadius: '6px',
           border: `1px solid ${bot.pnl?.total_usd >= 0 ? '#86EFAC' : '#FCA5A5'}`
         }}>
           <div style={{
-            fontSize: '11px',
+            fontSize: '10px', // Reduced from 11px
             color: '#6B7280',
             fontWeight: 600,
             textTransform: 'uppercase',
-            letterSpacing: '0.5px',
-            marginBottom: '8px'
+            letterSpacing: '0.3px',
+            marginBottom: '4px' // Reduced from 8px
           }}>
             P&L
           </div>
           <div style={{
-            fontSize: '18px',
+            fontSize: '16px', // Reduced from 18px
             fontWeight: 700,
             color: bot.pnl?.total_usd >= 0 ? '#059669' : '#DC2626'
           }}>
-            {bot.pnl?.total_usd >= 0 ? '+' : ''}${formatNumber(bot.pnl?.total_usd || 0)}
+            {bot.pnl?.total_usd >= 0 ? '+' : ''}${formatCompact(bot.pnl?.total_usd || 0)}
           </div>
         </div>
       </div>
 
-      {/* Action Buttons */}
+      {/* Action Buttons - Compact */}
       <div style={{
         display: 'flex',
-        gap: '8px',
+        gap: '6px', // Reduced from 8px
         flexWrap: 'wrap'
       }}>
         {/* Start/Stop Button */}
@@ -334,22 +342,22 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
           onClick={() => isRunning ? onStop(bot.id) : onStart(bot.id)}
           style={{
             flex: 1,
-            minWidth: '100px',
-            padding: '10px 16px',
+            minWidth: '80px', // Reduced from 100px
+            padding: '8px 12px', // Reduced from 10px 16px
             backgroundColor: isRunning ? '#EF4444' : '#10B981',
             color: 'white',
             border: 'none',
-            borderRadius: '8px',
+            borderRadius: '6px',
             fontWeight: 600,
-            fontSize: '14px',
+            fontSize: '13px', // Reduced from 14px
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '6px'
+            gap: '4px'
           }}
         >
-          <span>{isRunning ? '⏹️' : '▶️'}</span>
+          <span style={{ fontSize: '12px' }}>{isRunning ? '⏹️' : '▶️'}</span>
           <span>{isRunning ? 'Stop' : 'Start'}</span>
         </button>
 
@@ -357,20 +365,20 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
         <button
           onClick={() => onEdit(bot)}
           style={{
-            padding: '10px 16px',
+            padding: '8px 12px', // Reduced from 10px 16px
             backgroundColor: '#F3F4F6',
             color: '#374151',
             border: 'none',
-            borderRadius: '8px',
+            borderRadius: '6px',
             fontWeight: 600,
-            fontSize: '14px',
+            fontSize: '13px', // Reduced from 14px
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px'
+            gap: '4px'
           }}
         >
-          <span>✏️</span>
+          <span style={{ fontSize: '12px' }}>✏️</span>
           <span>Edit</span>
         </button>
 
@@ -378,20 +386,20 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
         <button
           onClick={() => onDelete(bot)}
           style={{
-            padding: '10px 16px',
+            padding: '8px 12px', // Reduced from 10px 16px
             backgroundColor: 'transparent',
             color: '#EF4444',
             border: '1px solid #EF4444',
-            borderRadius: '8px',
+            borderRadius: '6px',
             fontWeight: 600,
-            fontSize: '14px',
+            fontSize: '13px', // Reduced from 14px
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px'
+            gap: '4px'
           }}
         >
-          <span>🗑️</span>
+          <span style={{ fontSize: '12px' }}>🗑️</span>
           <span>Delete</span>
         </button>
       </div>
@@ -399,16 +407,15 @@ const BotCard = ({ bot, onStart, onStop, onEdit, onDelete }) => {
   );
 };
 
-// Helper function to format numbers
-const formatNumber = (num) => {
+// Helper function to format numbers - compact version
+const formatCompact = (num) => {
   if (num === 0) return '0';
-  if (num < 0.01) return '< 0.01';
-  if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
-  if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
-  return num.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 8
-  });
+  if (num < 0.01) return '<0.01';
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M'; // 1 decimal instead of 2
+  if (num >= 1000) return (num / 1000).toFixed(1) + 'K'; // 1 decimal instead of 2
+  // For smaller numbers, show fewer decimals
+  if (num >= 1) return num.toFixed(2);
+  return num.toFixed(4);
 };
 
 export default BotCard;
@@ -426,20 +433,20 @@ import BotCard from './BotCard';
 const BotList = ({ bots, onStart, onStop, onEdit, onDelete }) => {
   return (
     <div style={{
-      padding: '20px',
+      padding: '12px', // Reduced from 20px
       // Mobile: single column
       display: 'flex',
       flexDirection: 'column',
-      gap: '16px',
+      gap: '12px', // Reduced from 16px
       // Desktop: grid layout
       '@media (min-width: 768px)': {
         display: 'grid',
         gridTemplateColumns: 'repeat(2, 1fr)',
-        gap: '16px'
+        gap: '12px' // Reduced from 16px
       },
       '@media (min-width: 1024px)': {
         gridTemplateColumns: 'repeat(3, 1fr)',
-        gap: '20px'
+        gap: '12px' // Reduced from 20px
       }
     }}>
       {bots.length === 0 ? (
@@ -486,43 +493,44 @@ import styled from 'styled-components';
 const BotCardContainer = styled.div`
   background-color: #FFFFFF;
   border: 1px solid #E5E7EB;
-  border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 16px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  border-radius: 8px; /* Reduced from 12px */
+  padding: 12px; /* Reduced from 20px */
+  margin-bottom: 12px; /* Reduced from 16px */
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05); /* Lighter shadow */
   transition: all 0.2s ease;
   width: 100%;
   
   &:hover {
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    transform: translateY(-2px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Lighter hover */
+    transform: translateY(-1px); /* Less movement */
   }
   
   @media (min-width: 768px) {
-    width: calc(50% - 12px);
-    max-width: 400px;
+    width: calc(50% - 8px);
+    max-width: 320px; /* Reduced from 400px */
   }
   
   @media (min-width: 1024px) {
-    width: calc(33.333% - 16px);
+    width: calc(33.333% - 12px);
+    max-width: 300px; /* Even smaller for 3 columns */
   }
 `;
 
 const BotGrid = styled.div`
-  padding: 20px;
+  padding: 12px; /* Reduced from 20px */
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px; /* Reduced from 16px */
   
   @media (min-width: 768px) {
     display: grid;
     grid-template-columns: repeat(2, 1fr);
-    gap: 16px;
+    gap: 12px; /* Reduced from 16px */
   }
   
   @media (min-width: 1024px) {
     grid-template-columns: repeat(3, 1fr);
-    gap: 20px;
+    gap: 12px; /* Reduced from 20px */
   }
 `;
 ```
