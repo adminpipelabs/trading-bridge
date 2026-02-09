@@ -165,12 +165,59 @@ class CEXBotRunner:
                     from app.cex_volume_bot import CEXVolumeBot
                     import json
                     
-                    # Check if API keys exist
-                    if not bot_record.get("api_key") or not bot_record.get("api_secret"):
-                        logger.warning(f"Bot {bot_id} missing API keys in connectors table")
+                    # Extract expected exchange from bot name
+                    bot_name_lower = (bot_record.get("name") or "").lower()
+                    expected_exchange = None
+                    cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
+                    for kw in cex_keywords:
+                        if kw in bot_name_lower:
+                            expected_exchange = kw
+                            break
+                    
+                    connector_name = (bot_record.get("connector_name") or "").lower()
+                    
+                    # Check if API keys exist and if connector matches expected exchange
+                    api_key = bot_record.get("api_key")
+                    api_secret = bot_record.get("api_secret")
+                    memo = bot_record.get("memo")
+                    
+                    # If no keys OR connector doesn't match expected exchange, check exchange_credentials
+                    if (not api_key or not api_secret) or (expected_exchange and connector_name and connector_name != expected_exchange):
+                        if expected_exchange:
+                            logger.warning(f"⚠️  Bot {bot_id} - connector '{connector_name}' doesn't match expected '{expected_exchange}' or missing keys, checking exchange_credentials...")
+                            # Query exchange_credentials table
+                            client_id = bot_record.get("client_id")
+                            if client_id:
+                                creds_result = await conn.fetchrow("""
+                                    SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+                                    FROM exchange_credentials
+                                    WHERE client_id = $1 AND LOWER(exchange) = LOWER($2)
+                                """, client_id, expected_exchange)
+                                
+                                if creds_result:
+                                    try:
+                                        from app.security import decrypt_credential
+                                        api_key = decrypt_credential(creds_result["api_key_encrypted"])
+                                        api_secret = decrypt_credential(creds_result["api_secret_encrypted"])
+                                        memo = decrypt_credential(creds_result["passphrase_encrypted"]) if creds_result.get("passphrase_encrypted") else None
+                                        logger.info(f"✅ Found API keys in exchange_credentials table for {expected_exchange}")
+                                        # Update bot_record with decrypted keys
+                                        bot_record["api_key"] = api_key
+                                        bot_record["api_secret"] = api_secret
+                                        bot_record["memo"] = memo
+                                    except Exception as decrypt_err:
+                                        logger.error(f"❌ Failed to decrypt credentials: {decrypt_err}")
+                                        api_key = None
+                                        api_secret = None
+                                else:
+                                    logger.warning(f"⚠️  No credentials found in exchange_credentials table for exchange '{expected_exchange}'")
+                    
+                    # Final check if API keys exist
+                    if not api_key or not api_secret:
+                        logger.warning(f"Bot {bot_id} missing API keys (checked connectors and exchange_credentials)")
                         await conn.execute("""
                             UPDATE bots SET health_status = 'error', 
-                                health_message = 'Missing API keys - add BitMart connector'
+                                health_message = 'Missing API keys - add connector or exchange credentials'
                             WHERE id = $1
                         """, bot_id)
                         continue
