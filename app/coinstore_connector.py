@@ -6,6 +6,7 @@ import aiohttp
 import hmac
 import hashlib
 import time
+import math
 import logging
 from typing import Dict, Any, Optional
 from urllib.parse import urlencode
@@ -42,13 +43,15 @@ class CoinstoreConnector:
         Coinstore uses a two-step signature:
         1. HMAC-SHA256(secret_key, expires_key) where expires_key = floor(expires/30000)
         2. HMAC-SHA256(key_from_step1, payload)
-        """
-        import math
         
+        IMPORTANT: For empty payloads (GET with no params or POST with {}), 
+        payload should be empty string '', not '{}'
+        """
         # Step 1: Calculate expires_key
         expires_key = str(math.floor(expires / 30000))
         
-        # Step 2: First HMAC to get key
+        # Step 2: First HMAC to get derived key
+        # Use api_secret as key, expires_key as message
         key = hmac.new(
             self.api_secret.encode('utf-8'),
             expires_key.encode('utf-8'),
@@ -56,6 +59,7 @@ class CoinstoreConnector:
         ).hexdigest()
         
         # Step 3: Second HMAC to get signature
+        # Use derived key as key, payload as message
         signature = hmac.new(
             key.encode('utf-8'),
             payload.encode('utf-8'),
@@ -75,12 +79,17 @@ class CoinstoreConnector:
             params = {}
         
         # Prepare payload for signature
+        # IMPORTANT: Coinstore expects empty string '' for empty payloads, not '{}'
         if method.upper() == 'GET':
-            # GET: payload is query string
+            # GET: payload is query string (empty string if no params)
             payload = urlencode(params) if params else ''
         else:
             # POST: payload is JSON body
-            payload = json.dumps(params) if params else '{}'
+            # For empty params {}, use empty string '' not '{}' (per Coinstore docs)
+            if params:
+                payload = json.dumps(params, separators=(',', ':'))  # Compact JSON, no spaces
+            else:
+                payload = ''  # Empty string for empty params, not '{}'
         
         headers = {
             'Content-Type': 'application/json',
@@ -98,8 +107,12 @@ class CoinstoreConnector:
             headers['X-CS-EXPIRES'] = str(expires)
             headers['exch-language'] = 'en_US'
             
-            # Debug logging for signature generation
-            logger.debug(f"Coinstore auth: expires={expires}, payload={payload[:100]}, signature={signature[:20]}...")
+            # Detailed logging for signature generation (INFO level for debugging)
+            logger.info(f"🔐 Coinstore auth: method={method}, endpoint={endpoint}")
+            logger.info(f"   expires={expires}, expires_key={math.floor(expires / 30000)}")
+            logger.info(f"   payload='{payload}' (length={len(payload)})")
+            logger.info(f"   signature={signature[:20]}...{signature[-10:]}")
+            logger.info(f"   api_key={self.api_key[:8]}...{self.api_key[-4:]}")
         
         try:
             # Pass proxy per-request if configured
@@ -122,9 +135,12 @@ class CoinstoreConnector:
                         logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
                         raise Exception(f"Invalid JSON response: {response_text[:200]}")
             elif method.upper() == 'POST':
-                # CRITICAL: Send body as raw JSON string to match signature
-                # Signature was generated from payload (json.dumps), so body must match exactly
-                body_data = payload.encode('utf-8') if payload else b'{}'
+                # CRITICAL: Send body to match signature
+                # If payload is empty string, send empty body (not '{}')
+                if payload:
+                    body_data = payload.encode('utf-8')
+                else:
+                    body_data = b''  # Empty body for empty payload
                 async with session.post(url, data=body_data, **request_kwargs) as response:
                     response_text = await response.text()
                     logger.debug(f"Coinstore API POST {endpoint} response status={response.status}, body={response_text[:200]}")
