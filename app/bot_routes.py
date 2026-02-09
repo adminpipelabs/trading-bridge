@@ -1769,15 +1769,18 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                 SELECT side, amount, price, cost_usd, created_at
                 FROM trade_logs
                 WHERE bot_id = :bot_id
-                ORDER BY created_at DESC
+                ORDER BY created_at ASC
                 LIMIT 1000
             """), {"bot_id": bot_id}).fetchall()
             
             for t in trade_logs:
                 all_trades.append({
                     "side": t.side,
+                    "amount": float(t.amount) if t.amount else 0,
+                    "price": float(t.price) if t.price else 0,
                     "value_usd": float(t.cost_usd) if t.cost_usd else 0,
-                    "created_at": t.created_at.isoformat() if t.created_at else None
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "timestamp": t.created_at.timestamp() if t.created_at else 0
                 })
         except Exception as e:
             logger.debug(f"Could not query trade_logs: {e}")
@@ -1786,13 +1789,16 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
         try:
             dex_trades = db.query(BotTrade).filter(
                 BotTrade.bot_id == bot_id
-            ).order_by(BotTrade.created_at.desc()).limit(1000).all()
+            ).order_by(BotTrade.created_at.asc()).limit(1000).all()
             
             for t in dex_trades:
                 all_trades.append({
                     "side": t.side,
+                    "amount": float(t.amount) if t.amount else 0,
+                    "price": float(t.price) if t.price else 0,
                     "value_usd": float(t.value_usd) if t.value_usd else 0,
-                    "created_at": t.created_at.isoformat() if t.created_at else None
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "timestamp": t.created_at.timestamp() if t.created_at else 0
                 })
         except Exception as e:
             logger.debug(f"Could not query bot_trades: {e}")
@@ -1820,21 +1826,21 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
         
         # Calculate P&L from trades (FIFO method)
         try:
-            positions = []  # List of (amount, avg_price) for FIFO
+            positions = []  # List of (amount, price) for FIFO
             total_pnl = 0.0
             
-            # Sort trades by timestamp
-            sorted_trades = sorted(all_trades, key=lambda t: t.get("created_at", 0) or t.get("timestamp", 0))
-            
-            for trade in sorted_trades:
+            # Trades are already sorted by created_at ASC from query
+            for trade in all_trades:
                 side = trade.get("side", "").lower()
-                amount = float(trade.get("amount") or trade.get("quantity") or 0)
+                amount = float(trade.get("amount") or 0)
                 price = float(trade.get("price") or 0)
+                
+                if amount <= 0 or price <= 0:
+                    continue
                 
                 if side == "buy":
                     # Add to position
-                    if amount > 0:
-                        positions.append((amount, price))
+                    positions.append((amount, price))
                 elif side == "sell":
                     # Realize P&L using FIFO
                     remaining_sell = amount
@@ -1852,7 +1858,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
             unrealized_pnl = 0.0
             if positions and len(all_trades) > 0:
                 # Use last trade price as current price estimate
-                last_trade = sorted_trades[-1]
+                last_trade = all_trades[-1]
                 current_price = float(last_trade.get("price") or 0)
                 if current_price > 0:
                     for pos_amount, pos_price in positions:
@@ -1864,7 +1870,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                 "trade_count": len(all_trades)
             }
         except Exception as pnl_error:
-            logger.warning(f"Failed to calculate P&L for bot {bot_id}: {pnl_error}")
+            logger.warning(f"Failed to calculate P&L for bot {bot_id}: {pnl_error}", exc_info=True)
             result["pnl"] = {
                 "total_usd": 0,
                 "unrealized_usd": 0,
