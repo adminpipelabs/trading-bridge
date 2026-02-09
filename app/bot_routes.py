@@ -1634,12 +1634,23 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                         if exchange:
                             try:
                                 # Fetch balance (works regardless of bot status)
-                                if connector_name.lower() == 'bitmart':
-                                    balance = await exchange.fetch_balance({'type': 'spot'})
-                                elif connector_name.lower() == 'coinstore':
-                                    balance = await exchange.fetch_balance()
-                                else:
-                                    balance = await exchange.fetch_balance()
+                                # Wrap in try-except to handle ccxt AttributeError bug
+                                try:
+                                    if connector_name.lower() == 'bitmart':
+                                        balance = await exchange.fetch_balance({'type': 'spot'})
+                                    elif connector_name.lower() == 'coinstore':
+                                        balance = await exchange.fetch_balance()
+                                    else:
+                                        balance = await exchange.fetch_balance()
+                                except AttributeError as attr_err:
+                                    # BitMart ccxt bug: error message is None, causes AttributeError
+                                    if "'NoneType' object has no attribute 'lower'" in str(attr_err):
+                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message)")
+                                        error_msg = "BitMart API error - check IP whitelist (add 3.222.129.4 and 54.205.35.75) and API key permissions"
+                                        result["balance_error"] = error_msg
+                                        raise Exception(error_msg)
+                                    else:
+                                        raise
                                 
                                 # Extract balances
                                 base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
