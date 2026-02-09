@@ -517,12 +517,12 @@ def list_bots(
             
             try:
                 # Handle event loop - check if one exists
+                import concurrent.futures
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # Event loop is running - can't use asyncio.run()
                         # Fall back to creating a new loop in a thread
-                        import concurrent.futures
                         with concurrent.futures.ThreadPoolExecutor() as executor:
                             future = executor.submit(asyncio.run, fetch_all_balances())
                             balances = future.result(timeout=10)  # Overall timeout
@@ -629,7 +629,6 @@ def list_bots(
                     balances = loop.run_until_complete(fetch_all_balances())
             except (RuntimeError, asyncio.TimeoutError):
                 # No event loop or timeout - create one
-                import concurrent.futures
                 try:
                     balances = asyncio.run(fetch_all_balances())
                 except Exception as e:
