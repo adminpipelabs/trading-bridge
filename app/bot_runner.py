@@ -322,6 +322,11 @@ class BotRunner:
                         exchange_from_name = kw
                         break
                 
+                # Use the extracted connector_name from the try block if available
+                if 'connector_name' in locals() and connector_name:
+                    exchange_from_name = connector_name
+                    logger.info(f"Using connector_name '{connector_name}' extracted from bot name in exception handler")
+                
                 # Query with connector name matching
                 bot_record = db.execute(text("""
                     SELECT b.*, 
@@ -331,9 +336,12 @@ class BotRunner:
                     FROM bots b
                     JOIN clients cl ON cl.account_identifier = b.account
                     LEFT JOIN connectors c ON c.client_id = cl.id 
-                        AND LOWER(c.name) = :exchange_name
+                        AND LOWER(c.name) = LOWER(:exchange_name)
                     WHERE b.id = :bot_id
                 """), {"bot_id": bot_id, "exchange_name": exchange_from_name}).first()
+                
+                # Set connector_name for later use
+                connector_name = exchange_from_name
             
             if not bot_record:
                 logger.error(f"Bot {bot_id} not found")
