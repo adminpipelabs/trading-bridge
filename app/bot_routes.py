@@ -627,9 +627,14 @@ def list_bots(
                         balances = future.result(timeout=30)
                 else:
                     balances = loop.run_until_complete(fetch_all_balances())
-            except RuntimeError:
-                # No event loop - create one
-                balances = asyncio.run(fetch_all_balances())
+            except (RuntimeError, asyncio.TimeoutError):
+                # No event loop or timeout - create one
+                import concurrent.futures
+                try:
+                    balances = asyncio.run(fetch_all_balances())
+                except Exception as e:
+                    logger.error(f"Error fetching balances: {e} - returning bots without balances")
+                    balances = [None] * len(bots)
             for bot_dict, balance_data in zip(bot_dicts, balances):
                 if isinstance(balance_data, Exception):
                     bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
@@ -1694,7 +1699,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     
                                     logger.info(f"💰 Fetching balance from {connector_name}...")
                                     if connector_name.lower() == 'bitmart':
-                                        logger.info(f"   Calling: exchange.fetch_balance({'type': 'spot'}) for BitMart")
+                                        logger.info(f"   Calling: exchange.fetch_balance({{'type': 'spot'}}) for BitMart")
                                         balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
                                     elif connector_name.lower() == 'coinstore':
                                         logger.info(f"   Calling: exchange.fetch_balance() for Coinstore")
@@ -1727,7 +1732,25 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                         # Don't expose error to client - just return default values
                                         balance = None
                                     else:
-                                        raise
+                                        logger.error(f"❌ AttributeError fetching balance: {attr_err}", exc_info=True)
+                                        balance = None
+                                except ValueError as val_err:
+                                    # Handle format specifier errors (ccxt error message formatting issues)
+                                    if "format specifier" in str(val_err).lower():
+                                        logger.warning(f"⚠️  ccxt error formatting issue: {val_err} - trying without type parameter...")
+                                        try:
+                                            # Try without type parameter - BitMart might have it in options already
+                                            balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                            logger.info(f"✅ Balance fetch succeeded without type parameter")
+                                        except Exception as retry_err:
+                                            logger.error(f"❌ Retry also failed: {retry_err}")
+                                            balance = None
+                                    else:
+                                        logger.error(f"❌ ValueError fetching balance: {val_err}", exc_info=True)
+                                        balance = None
+                                except Exception as balance_fetch_err:
+                                    logger.error(f"❌ Exception fetching balance from {connector_name}: {balance_fetch_err}", exc_info=True)
+                                    balance = None
                                 
                                 # Extract balances - check if balance is None first
                                 if balance is None:
