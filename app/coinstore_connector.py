@@ -138,7 +138,9 @@ class CoinstoreConnector:
                 body_data = payload.encode('utf-8')
                 async with session.post(url, data=body_data, **request_kwargs) as response:
                     response_text = await response.text()
-                    logger.debug(f"Coinstore API POST {endpoint} response status={response.status}, body={response_text[:200]}")
+                    logger.info(f"📡 Coinstore API POST {endpoint} response status={response.status}")
+                    logger.info(f"   Response length: {len(response_text)} bytes")
+                    logger.info(f"   Response preview: {response_text[:300]}")
                     
                     if response.status != 200:
                         error_text = response_text[:500]
@@ -147,8 +149,11 @@ class CoinstoreConnector:
                             error_json = await response.json()
                             error_code = error_json.get('code', response.status)
                             error_msg = error_json.get('msg') or error_json.get('message') or error_text
+                            logger.error(f"❌ Coinstore API error (code {error_code}): {error_msg}")
+                            logger.error(f"   Full error response: {error_json}")
                             raise Exception(f"HTTP {response.status}: Coinstore API error (code {error_code}): {error_msg}")
                         except:
+                            logger.error(f"❌ Coinstore API HTTP {response.status}: {error_text}")
                             raise Exception(f"HTTP {response.status}: {error_text}")
                     
                     try:
