@@ -1350,14 +1350,12 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
             # Sync connectors for this account
             synced = await sync_connectors_to_exchange_manager(bot.account, db)
             if not synced:
-                result["error"] = "No exchange credentials available"
-                logger.warning(f"No connectors synced for account {bot.account}")
+                logger.warning(f"No connectors synced for account {bot.account} - returning default balances")
             else:
                 # Get account from exchange_manager
                 account = exchange_manager.get_account(bot.account)
                 if not account:
-                    result["error"] = "Account not found in exchange_manager"
-                    logger.warning(f"Account {bot.account} not found in exchange_manager")
+                    logger.warning(f"Account {bot.account} not found in exchange_manager - returning default balances")
                 else:
                     # Determine which connector/exchange this bot uses
                     # Bot model only has 'connector' field, not 'exchange'
@@ -1373,8 +1371,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                 break
                     
                     if not connector_name:
-                        result["error"] = "Could not determine exchange for bot"
-                        logger.warning(f"Could not determine connector for bot {bot_id} (name: {bot.name}, connector: {bot.connector})")
+                        logger.warning(f"Could not determine connector for bot {bot_id} (name: {bot.name}, connector: {bot.connector}) - returning default balances")
                     else:
                         # Get exchange instance from account - check both exact match and case-insensitive
                         # exchange_manager stores connectors with lowercase keys
@@ -1414,8 +1411,7 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                             
                             if not exchange:
                                 available_connectors_after = list(account.connectors.keys()) if account else []
-                                result["error"] = f"Exchange '{connector_name}' not found. Available connectors: {available_connectors_after}. Bot connector field: '{bot.connector}'. Client needs to add API keys via bot setup."
-                                logger.error(f"Exchange '{connector_name}' still not found after re-sync. Available: {available_connectors_after}. Bot connector: '{bot.connector}', Client ID: {bot.client_id}")
+                                logger.error(f"Exchange '{connector_name}' still not found after re-sync. Available: {available_connectors_after}. Bot connector: '{bot.connector}', Client ID: {bot.client_id} - returning default balances")
                         else:
                             # Fetch balance
                             try:
@@ -1432,11 +1428,9 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
-                                        logger.warning(f"⚠️  BitMart ccxt error handler bug (None message). Checking actual error...")
-                                        # Try to get the actual error from exchange
-                                        error_msg = "BitMart API error - check IP whitelist and API key permissions"
-                                        result["error"] = error_msg
-                                        raise Exception(error_msg)
+                                        logger.warning(f"⚠️  BitMart ccxt error handler bug (None message). Balance fetch failed silently.")
+                                        # Don't expose error to client - just return default values
+                                        balance = None
                                     else:
                                         raise
                                 
@@ -1480,26 +1474,20 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                             except AttributeError as attr_err:
                                 # Handle ccxt AttributeError bug when error message is None
                                 if "'NoneType' object has no attribute 'lower'" in str(attr_err):
-                                    error_msg = "BitMart API error - check IP whitelist (add 3.222.129.4 and 54.205.35.75) and API key permissions"
-                                    logger.error(f"BitMart ccxt AttributeError bug: {attr_err}")
-                                    result["error"] = error_msg
+                                    logger.error(f"BitMart ccxt AttributeError bug: {attr_err} - returning default balances")
+                                    # Don't expose error - just return default values (already set to 0)
                                 else:
                                     logger.error(f"AttributeError fetching balance: {attr_err}", exc_info=True)
-                                    result["error"] = f"Could not fetch balance: {str(attr_err)[:100]}"
+                                    # Don't expose error - return default values
                             except Exception as e:
                                 error_msg = str(e)
                                 logger.error(f"Error fetching balance from exchange: {e}", exc_info=True)
-                                # Provide user-friendly error messages
-                                if "IP is forbidden" in error_msg or "30010" in error_msg:
-                                    result["error"] = "IP whitelist required - add Railway IPs (3.222.129.4, 54.205.35.75) to BitMart API settings"
-                                elif "Unauthorized" in error_msg or "1401" in error_msg:
-                                    result["error"] = "API authentication failed - check API keys and permissions"
-                                else:
-                                    result["error"] = f"Could not fetch balance: {error_msg[:100]}"
+                                # Log error but don't expose to client - return default values (already 0)
+                                # Client will see 0 balances instead of error message
                 
         except Exception as e:
             logger.error(f"Error fetching balance for bot {bot_id}: {e}", exc_info=True)
-            result["error"] = f"Could not fetch balance: {str(e)[:100]}"
+            # Don't expose error - return default values (already 0)
     
     # Calculate Volume based on bot type (always calculate, even if balance fetch failed)
     try:
@@ -1645,10 +1633,9 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 except AttributeError as attr_err:
                                     # BitMart ccxt bug: error message is None, causes AttributeError
                                     if "'NoneType' object has no attribute 'lower'" in str(attr_err):
-                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message)")
-                                        error_msg = "BitMart API error - check IP whitelist (add 3.222.129.4 and 54.205.35.75) and API key permissions"
-                                        result["balance_error"] = error_msg
-                                        raise Exception(error_msg)
+                                        logger.warning(f"⚠️  BitMart ccxt AttributeError bug (None message) - returning default balances")
+                                        # Don't expose error - return default values (already 0)
+                                        balance = None
                                     else:
                                         raise
                                 
@@ -1679,17 +1666,17 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 elif "Unauthorized" in error_msg or "1401" in error_msg:
                                     result["balance_error"] = "API authentication failed - check API keys and permissions"
                         else:
-                            result["balance_error"] = f"Exchange connector '{connector_name}' not found - check API keys are configured"
+                            logger.warning(f"Exchange connector '{connector_name}' not found - returning default balances")
                     else:
-                        result["balance_error"] = "Could not determine exchange from bot name or connector"
+                        logger.warning(f"Could not determine exchange from bot name or connector - returning default balances")
                 else:
-                    result["balance_error"] = "Account not found in exchange manager"
+                    logger.warning(f"Account not found in exchange manager - returning default balances")
             else:
-                result["balance_error"] = "Failed to sync exchange connectors - check API keys"
+                logger.warning(f"Failed to sync exchange connectors - returning default balances")
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error in balance fetch for bot {bot_id}: {e}")
-            result["balance_error"] = error_msg
+            # Don't expose error - return default values (already 0)
     
     # Calculate 24h volume and trade counts
     try:
