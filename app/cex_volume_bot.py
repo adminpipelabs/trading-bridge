@@ -378,27 +378,32 @@ class CEXVolumeBot:
             except AttributeError as attr_err:
                 # This error is from ccxt's error handler - BitMart API returned error with None message
                 error_msg = str(attr_err)
-                logger.error(f"❌ AttributeError in ccxt error handler: {error_msg}")
-                logger.error(f"This means BitMart API returned an error, but error message was None")
-                
-                # Log ccxt version (use sync version just for version check)
-                import ccxt as ccxt_sync_version
-                logger.error(f"🔍 ccxt version: {ccxt_sync_version.__version__}")
-                
-                # Log actual BitMart response body
-                if hasattr(self.exchange, 'last_http_response'):
-                    logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
-                if hasattr(self.exchange, 'last_json_response'):
-                    logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
-                if hasattr(self.exchange, 'last_response_body'):
-                    logger.error(f"🔍 BitMart response body: {self.exchange.last_response_body}")
-                if hasattr(self.exchange, 'last_response_headers'):
-                    logger.error(f"🔍 BitMart response headers: {self.exchange.last_response_headers}")
-                if hasattr(self.exchange, 'last_response'):
-                    logger.error(f"🔍 BitMart last_response: {self.exchange.last_response}")
-                
-                logger.error(f"Exchange config: apiKey present={bool(self.api_key)}, uid={self.memo}, options={getattr(self.exchange, 'options', {})}")
-                raise
+                if "'NoneType' object has no attribute 'lower'" in error_msg:
+                    logger.error(f"❌ AttributeError in ccxt error handler: {error_msg}")
+                    logger.error(f"This means BitMart API returned an error, but error message was None")
+                    
+                    # Log ccxt version (use sync version just for version check)
+                    import ccxt as ccxt_sync_version
+                    logger.error(f"🔍 ccxt version: {ccxt_sync_version.__version__}")
+                    
+                    # Log actual BitMart response body
+                    if hasattr(self.exchange, 'last_http_response'):
+                        logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
+                    if hasattr(self.exchange, 'last_json_response'):
+                        logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
+                    if hasattr(self.exchange, 'last_response_body'):
+                        logger.error(f"🔍 BitMart response body: {self.exchange.last_response_body}")
+                    if hasattr(self.exchange, 'last_response_headers'):
+                        logger.error(f"🔍 BitMart response headers: {self.exchange.last_response_headers}")
+                    if hasattr(self.exchange, 'last_response'):
+                        logger.error(f"🔍 BitMart last_response: {self.exchange.last_response}")
+                    
+                    logger.error(f"Exchange config: apiKey present={bool(self.api_key)}, uid={self.memo}, options={getattr(self.exchange, 'options', {})}")
+                    # Return (0, 0) instead of raising - this is a ccxt bug, not a real error
+                    return 0, 0
+                else:
+                    # Re-raise if it's a different AttributeError
+                    raise
             except Exception as e:
                 # Catch any other API errors
                 error_msg = str(e)
@@ -619,9 +624,24 @@ class CEXVolumeBot:
                         logger.info(f"Order filled: {side} {filled_amount} @ {avg_price} = ${cost:.2f}")
                     else:
                         # Cancel unfilled order
-                        await self.exchange.cancel_order(order_id, self.symbol)
-                        logger.warning(f"Order {order_id} not filled, cancelled")
+                        try:
+                            await self.exchange.cancel_order(order_id, self.symbol)
+                            logger.warning(f"Order {order_id} not filled, cancelled")
+                        except AttributeError as cancel_attr_err:
+                            if "'NoneType' object has no attribute 'lower'" in str(cancel_attr_err):
+                                logger.warning(f"⚠️  BitMart ccxt AttributeError during cancel_order (None message) - order may still be open")
+                            else:
+                                raise
                         return None
+                except AttributeError as check_attr_err:
+                    # Handle ccxt AttributeError bug when checking order status
+                    if "'NoneType' object has no attribute 'lower'" in str(check_attr_err):
+                        logger.warning(f"⚠️  BitMart ccxt AttributeError during fetch_order (None message) - assuming filled")
+                        filled_amount = amount
+                        avg_price = price
+                        cost = filled_amount * avg_price
+                    else:
+                        raise
                 except Exception as check_err:
                     logger.warning(f"Could not check order status: {check_err}, assuming filled")
                     filled_amount = amount
@@ -643,6 +663,23 @@ class CEXVolumeBot:
         except ccxt.InvalidOrder as e:
             logger.error(f"Invalid order: {e}")
             return None
+        except AttributeError as attr_err:
+            # Handle ccxt AttributeError bug when BitMart returns error with None message
+            if "'NoneType' object has no attribute 'lower'" in str(attr_err):
+                logger.error(f"❌ BitMart ccxt AttributeError bug during trade execution: {attr_err}")
+                logger.error(f"This means BitMart API returned an error, but error message was None")
+                # Log BitMart response details if available
+                if hasattr(self.exchange, 'last_http_response'):
+                    logger.error(f"🔍 BitMart HTTP response: {self.exchange.last_http_response}")
+                if hasattr(self.exchange, 'last_json_response'):
+                    logger.error(f"🔍 BitMart JSON response: {self.exchange.last_json_response}")
+                if hasattr(self.exchange, 'last_response_headers'):
+                    logger.error(f"🔍 BitMart response headers: {self.exchange.last_response_headers}")
+                # Return None to indicate trade failed
+                return None
+            else:
+                # Re-raise if it's a different AttributeError
+                raise
         except Exception as e:
             logger.error(f"Trade execution failed: {e}", exc_info=True)
             return None

@@ -1722,6 +1722,12 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     else:
                                         raise
                                 
+                                # Initialize balance variables to 0 (default values)
+                                base_available = 0.0
+                                quote_available = 0.0
+                                base_locked = 0.0
+                                quote_locked = 0.0
+                                
                                 # Extract balances - check if balance is None first
                                 if balance is None:
                                     logger.warning(f"Balance is None for bot {bot_id} - returning default values")
@@ -1740,16 +1746,8 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
                                     
                                     logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
-                                    
-                                    result["available"] = {
-                                        base: round(base_available, 4),
-                                        quote: round(quote_available, 2)
-                                    }
-                                    result["locked"] = {
-                                        base: round(base_locked, 4),
-                                        quote: round(quote_locked, 2)
-                                    }
                                 
+                                # Set result balances (use initialized/default values)
                                 result["available"] = {
                                     base: round(base_available, 4),
                                     quote: round(quote_available, 2)

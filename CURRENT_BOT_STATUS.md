@@ -34,7 +34,7 @@
 |-------|--------|-----|--------|
 | DB transaction errors | ✅ Fixed | Dev | Deployed, should unblock bot startup |
 | Coinstore balance fetch | 🧪 Ready to test | After deploy | Hit "Retry" on Coinstore bot, check if balances show |
-| BitMart IP whitelist | ⏳ Pending | User | Add `54.205.35.75` in BitMart dashboard |
+| BitMart IP whitelist | 🔴 **URGENT** | User | Add `54.205.35.75` in BitMart dashboard (proxy rotating between 2 IPs) |
 
 ### **Immediate Actions:**
 
@@ -80,12 +80,13 @@ Watch Railway logs for:
 
 ## 📝 **Notes**
 
-### **BitMart IP Forbidden (Error 30010) - Quick Fix**
+### **BitMart IP Forbidden (Error 30010) - Quick Fix** ✅ CONFIRMED
 - **Clarification:** Those IPs (`3.222.129.4` and `54.205.35.75`) are **QuotaGuard proxy IPs**, not Railway IPs
 - **This means:** ✅ Proxy IS working correctly! BitMart is seeing the QuotaGuard IPs
+- **Confirmed:** Proxy is **rotating between two QuotaGuard IPs** (load balanced)
 - **Solution:** Whitelist **both** QuotaGuard IPs on BitMart API key:
   - `3.222.129.4` ✅ (probably already whitelisted)
-  - `54.205.35.75` ← **Add this one too**
+  - `54.205.35.75` ← **CRITICAL: Add this one now** (confirmed rotating IP)
 - **Why:** QuotaGuard uses both IPs (load balanced), so both need to be whitelisted
 - **Action:** Go to BitMart API settings → IP whitelist → Add `54.205.35.75`
 
@@ -107,7 +108,9 @@ Watch Railway logs for:
 ### **Current Bot Status (From Latest Logs)**
 
 **✅ Working:**
-- Proxy working → Outbound IP: `3.222.129.4` (QuotaGuard)
+- Proxy working → **Rotating between two QuotaGuard IPs:**
+  - `3.222.129.4` ✅
+  - `54.205.35.75` ✅ (confirmed in latest logs)
 - BitMart auth working → Balance fetch successful
 - BitMart balance: `8,364,285 SHARP` | `1.66 USDT`
 - All bots started successfully (no more transaction errors)
