@@ -6,6 +6,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from typing import Optional
 import logging
+import os
+from cryptography.fernet import Fernet
 
 from app.database import get_db, Client, Wallet
 
