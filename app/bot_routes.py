@@ -316,6 +316,7 @@ def list_bots(
     account: Optional[str] = Query(None, description="Filter by account identifier"),
     bot_type: Optional[str] = Query(None, description="Filter by bot type: 'volume', 'spread'"),
     wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
+    include_balances: Optional[bool] = Query(True, description="Include balance data for each bot (default: true)"),
     db: Session = Depends(get_db)
 ):
     """
@@ -477,7 +478,49 @@ def list_bots(
         logger.info(f"✅ Admin returning {len(bots)} bots for account={account}, bot_type={bot_type}")
         for bot in bots:
             logger.info(f"  - Bot: id={bot.id}, name={bot.name}, bot_type={bot.bot_type or 'NULL'}, account={bot.account}")
-        return {"bots": [bot.to_dict() for bot in bots]}
+        
+        bot_dicts = [bot.to_dict() for bot in bots]
+        
+        # Include balances if requested
+        if include_balances:
+            import asyncio
+            from app.database import SessionLocal
+            
+            async def fetch_balance_for_bot(bot_id: str):
+                """Helper to fetch balance for a single bot"""
+                try:
+                    async_db = SessionLocal()
+                    try:
+                        balance_data = await get_bot_stats(bot_id, async_db)
+                        return balance_data
+                    finally:
+                        async_db.close()
+                except Exception as e:
+                    logger.warning(f"Could not fetch balance for bot {bot_id}: {e}")
+                    return None
+            
+            async def fetch_all_balances():
+                tasks = [fetch_balance_for_bot(bot.id) for bot in bots]
+                return await asyncio.gather(*tasks, return_exceptions=True)
+            
+            try:
+                balances = asyncio.run(fetch_all_balances())
+                for bot_dict, balance_data in zip(bot_dicts, balances):
+                    if isinstance(balance_data, Exception):
+                        bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
+                    elif balance_data:
+                        bot_dict["balance"] = {
+                            "available": balance_data.get("available", {}),
+                            "locked": balance_data.get("locked", {}),
+                            "volume_24h": balance_data.get("volume_24h", 0),
+                            "trades_24h": balance_data.get("trades_24h", {"buys": 0, "sells": 0})
+                        }
+                    else:
+                        bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
+            except Exception as e:
+                logger.error(f"Error fetching balances: {e}")
+        
+        return {"bots": bot_dicts}
     
     # Non-admin must have wallet, only sees their bots
     if not wallet_address:
@@ -515,7 +558,125 @@ def list_bots(
     for bot in bots:
         logger.info(f"  - Bot: id={bot.id}, name={bot.name}, bot_type={bot.bot_type or 'NULL'}, account={bot.account}")
     
-    return {"bots": [bot.to_dict() for bot in bots]}
+    bot_dicts = [bot.to_dict() for bot in bots]
+    
+    # Include balances if requested
+    if include_balances:
+        import asyncio
+        from app.database import SessionLocal
+        
+        async def fetch_balance_for_bot(bot_id: str):
+            """Helper to fetch balance for a single bot"""
+            try:
+                async_db = SessionLocal()
+                try:
+                    balance_data = await get_bot_stats(bot_id, async_db)
+                    return balance_data
+                finally:
+                    async_db.close()
+            except Exception as e:
+                logger.warning(f"Could not fetch balance for bot {bot_id}: {e}")
+                return None
+        
+        async def fetch_all_balances():
+            tasks = [fetch_balance_for_bot(bot.id) for bot in bots]
+            return await asyncio.gather(*tasks, return_exceptions=True)
+        
+        try:
+            balances = asyncio.run(fetch_all_balances())
+            for bot_dict, balance_data in zip(bot_dicts, balances):
+                if isinstance(balance_data, Exception):
+                    bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
+                elif balance_data:
+                    bot_dict["balance"] = {
+                        "available": balance_data.get("available", {}),
+                        "locked": balance_data.get("locked", {}),
+                        "volume_24h": balance_data.get("volume_24h", 0),
+                        "trades_24h": balance_data.get("trades_24h", {"buys": 0, "sells": 0})
+                    }
+                else:
+                    bot_dict["balance"] = {"available": {}, "locked": {}, "volume_24h": 0, "trades_24h": {"buys": 0, "sells": 0}}
+        except Exception as e:
+            logger.error(f"Error fetching balances: {e}")
+    
+    return {"bots": bot_dicts}
+
+
+@router.get("/with-balances")
+async def list_bots_with_balances(
+    request: Request,
+    account: Optional[str] = Query(None, description="Filter by account identifier"),
+    bot_type: Optional[str] = Query(None, description="Filter by bot type: 'volume', 'spread'"),
+    wallet_address: Optional[str] = Header(None, alias="X-Wallet-Address"),
+    db: Session = Depends(get_db)
+):
+    """
+    List bots with balance data included.
+    This is an async endpoint that fetches balances for each bot in parallel.
+    Returns the same format as /bots but with a 'balance' field added to each bot.
+    """
+    from starlette.concurrency import run_in_threadpool
+    
+    # Use the sync list_bots logic to get bots
+    def _get_bots():
+        return list_bots(request, account, bot_type, wallet_address, db)
+    
+    bots_response = await run_in_threadpool(_get_bots)
+    bots = bots_response.get("bots", [])
+    
+    # Fetch balances for all bots in parallel
+    import asyncio
+    
+    async def fetch_balance_for_bot(bot_id: str):
+        """Helper to fetch balance for a single bot"""
+        try:
+            # Create a new db session for this async call (required for async operations)
+            from app.database import SessionLocal
+            async_db = SessionLocal()
+            try:
+                balance_data = await get_bot_stats(bot_id, async_db)
+                return balance_data
+            finally:
+                async_db.close()
+        except Exception as e:
+            logger.warning(f"Could not fetch balance for bot {bot_id}: {e}")
+            return {
+                "available": {},
+                "locked": {},
+                "volume_24h": 0,
+                "trades_24h": {"buys": 0, "sells": 0}
+            }
+    
+    # Fetch balances for all bots in parallel
+    balance_tasks = [fetch_balance_for_bot(bot["id"]) for bot in bots]
+    balances = await asyncio.gather(*balance_tasks, return_exceptions=True)
+    
+    # Add balances to each bot dict
+    for bot_dict, balance_data in zip(bots, balances):
+        if isinstance(balance_data, Exception):
+            logger.error(f"Error fetching balance for bot {bot_dict['id']}: {balance_data}")
+            bot_dict["balance"] = {
+                "available": {},
+                "locked": {},
+                "volume_24h": 0,
+                "trades_24h": {"buys": 0, "sells": 0}
+            }
+        elif balance_data:
+            bot_dict["balance"] = {
+                "available": balance_data.get("available", {}),
+                "locked": balance_data.get("locked", {}),
+                "volume_24h": balance_data.get("volume_24h", 0),
+                "trades_24h": balance_data.get("trades_24h", {"buys": 0, "sells": 0})
+            }
+        else:
+            bot_dict["balance"] = {
+                "available": {},
+                "locked": {},
+                "volume_24h": 0,
+                "trades_24h": {"buys": 0, "sells": 0}
+            }
+    
+    return {"bots": bots}
 
 
 @router.post("/debug/test-volume-bot-insert")
