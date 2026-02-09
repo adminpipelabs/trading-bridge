@@ -71,17 +71,14 @@ Watch Railway logs for:
 
 ## 📝 **Notes**
 
-### **BitMart IP Forbidden (Error 30010) - URGENT**
-- **Problem:** Railway IP changed from `3.222.129.4` to `54.205.35.75` (new deployment)
-- **Issue:** Proxy is configured (`aiohttp_proxy`) but BitMart still sees direct Railway IP
-- **Possible causes:**
-  1. ccxt.async_support might not be using `aiohttp_proxy` correctly
-  2. Need to verify proxy is actually being used by checking outbound IP
-  3. May need to whitelist new Railway IP `54.205.35.75` on BitMart API key
-- **Action needed:** 
-  - Verify proxy is working (check if requests go through `3.222.129.4`)
-  - OR whitelist new Railway IP `54.205.35.75` on BitMart API key
-  - OR investigate why ccxt isn't using the proxy
+### **BitMart IP Forbidden (Error 30010) - Quick Fix**
+- **Clarification:** Those IPs (`3.222.129.4` and `54.205.35.75`) are **QuotaGuard proxy IPs**, not Railway IPs
+- **This means:** ✅ Proxy IS working correctly! BitMart is seeing the QuotaGuard IPs
+- **Solution:** Whitelist **both** QuotaGuard IPs on BitMart API key:
+  - `3.222.129.4` ✅ (probably already whitelisted)
+  - `54.205.35.75` ← **Add this one too**
+- **Why:** QuotaGuard uses both IPs (load balanced), so both need to be whitelisted
+- **Action:** Go to BitMart API settings → IP whitelist → Add `54.205.35.75`
 
 ### **Coinstore Fix**
 - Complete rewrite based on official API documentation
@@ -89,7 +86,11 @@ Watch Railway logs for:
 - **Status:** Fix deployed but bots failed to start due to database transaction errors
 - **Action needed:** Fix database transaction errors preventing bot startup
 
-### **Database Transaction Errors**
-- Multiple bots failing to start: `InFailedSqlTransaction`
-- This is preventing Coinstore bots from testing the new implementation
-- Need to investigate and fix transaction handling in bot startup code
+### **Database Transaction Errors** ✅ FIXED
+- **Problem:** Multiple bots failing to start: `InFailedSqlTransaction`
+- **Root cause:** SQL query fails (exchange/chain columns don't exist) → transaction aborted → subsequent queries fail
+- **Fix applied:**
+  - Added `db.rollback()` in `bot_runner.py` when exchange/chain query fails
+  - Added try-except wrapper around each bot startup to isolate failures
+  - Each bot startup is now isolated - one failure won't break others
+- **Status:** ✅ Fix deployed, should unblock bot startup
