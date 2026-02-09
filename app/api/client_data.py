@@ -45,6 +45,40 @@ async def sync_connectors_to_exchange_manager(account_identifier: str, db: Sessi
         Connector.client_id == client.id
     ).all()
     
+    logger.info(f"📋 Found {len(connectors)} connector(s) in 'connectors' table for client {client.id}")
+    
+    # Add connectors from plaintext table to exchange_manager
+    if connectors:
+        for connector in connectors:
+            connector_name = connector.name.lower()
+            # Skip if already loaded
+            if connector_name in account.connectors:
+                logger.debug(f"⏭️  Connector {connector.name} already loaded")
+                continue
+            
+            if not connector.api_key or not connector.api_secret:
+                logger.warning(f"⚠️  Connector {connector.name} missing API key or secret, skipping")
+                continue
+            
+            try:
+                await account.add_connector(
+                    connector_name=connector.name,
+                    api_key=connector.api_key,
+                    api_secret=connector.api_secret,
+                    memo=connector.memo
+                )
+                logger.info(f"✅ Synced connector '{connector.name}' from 'connectors' table to exchange_manager")
+            except Exception as e:
+                logger.error(f"❌ Failed to sync connector {connector.name}: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                continue
+        
+        # Check if we successfully synced any
+        if len(account.connectors) > 0:
+            logger.info(f"✅ Successfully synced {len(account.connectors)} connector(s) from 'connectors' table")
+            return True
+    
     # If no connectors in plaintext table, check encrypted exchange_credentials table
     if not connectors:
         logger.info(f"⚠️  No connectors in 'connectors' table, checking 'exchange_credentials' table...")
