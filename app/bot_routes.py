@@ -1420,12 +1420,25 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                             # Fetch balance
                             try:
                                 logger.info(f"Fetching balance from {connector_name} for pair {pair}")
-                                if connector_name.lower() == 'bitmart':
-                                    balance = await exchange.fetch_balance({'type': 'spot'})
-                                elif connector_name.lower() == 'coinstore':
-                                    balance = await exchange.fetch_balance()
-                                else:
-                                    balance = await exchange.fetch_balance()
+                                
+                                # Wrap in try-except to handle ccxt AttributeError bug
+                                try:
+                                    if connector_name.lower() == 'bitmart':
+                                        balance = await exchange.fetch_balance({'type': 'spot'})
+                                    elif connector_name.lower() == 'coinstore':
+                                        balance = await exchange.fetch_balance()
+                                    else:
+                                        balance = await exchange.fetch_balance()
+                                except AttributeError as attr_err:
+                                    # BitMart ccxt bug: error message is None, causes AttributeError
+                                    if "'NoneType' object has no attribute 'lower'" in str(attr_err):
+                                        logger.warning(f"⚠️  BitMart ccxt error handler bug (None message). Checking actual error...")
+                                        # Try to get the actual error from exchange
+                                        error_msg = "BitMart API error - check IP whitelist and API key permissions"
+                                        result["error"] = error_msg
+                                        raise Exception(error_msg)
+                                    else:
+                                        raise
                                 
                                 logger.info(f"Balance response keys: {list(balance.keys()) if balance else 'None'}")
                                 logger.info(f"Looking for base={base}, quote={quote} in balance")
