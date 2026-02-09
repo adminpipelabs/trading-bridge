@@ -1593,10 +1593,14 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     
     # Fetch balances for CEX bots (works even when bot is stopped)
     connector_lower = (bot.connector or '').lower() if bot.connector else ''
+    logger.info(f"🔍 Balance fetch request for bot {bot_id}: name={bot.name}, type={bot.bot_type}, connector={bot.connector}, account={bot.account}")
+    
     if bot.bot_type in ['volume', 'spread'] or (connector_lower and connector_lower not in ['jupiter', 'solana']):
         try:
             # Sync connectors for this account
+            logger.info(f"🔄 Syncing connectors for account {bot.account}")
             synced = await sync_connectors_to_exchange_manager(bot.account, db)
+            logger.info(f"✅ Sync result for {bot.account}: {synced}")
             if synced:
                 account = exchange_manager.get_account(bot.account)
                 if account:
