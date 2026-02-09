@@ -319,6 +319,7 @@ def list_bots(
     include_balances: Optional[bool] = Query(True, description="Include balance data for each bot (default: true)"),
     db: Session = Depends(get_db)
 ):
+    logger.info(f"📋 GET /bots called: account={account}, bot_type={bot_type}, include_balances={include_balances}, wallet={wallet_address[:10] if wallet_address else 'None'}...")
     """
     List bots with authentication and authorization.
     - Admin users can see all bots (wallet_address optional if authenticated via token)
@@ -588,8 +589,11 @@ def list_bots(
     
     bot_dicts = [bot.to_dict() for bot in bots]
     
+    logger.info(f"📊 Client has {len(bot_dicts)} bots, include_balances={include_balances}")
+    
     # Include balances if requested
     if include_balances:
+        logger.info(f"💰 Balance fetch requested for {len(bot_dicts)} bots")
         import asyncio
         from app.database import SessionLocal
         
