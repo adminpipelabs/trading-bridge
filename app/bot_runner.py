@@ -343,8 +343,19 @@ class BotRunner:
             api_key = getattr(bot_record, 'api_key', None) if hasattr(bot_record, 'api_key') else (bot_record[8] if len(bot_record) > 8 else None)
             api_secret = getattr(bot_record, 'api_secret', None) if hasattr(bot_record, 'api_secret') else (bot_record[9] if len(bot_record) > 9 else None)
             
-            if not api_key or not api_secret:
-                logger.warning(f"⚠️  No API keys found in connectors table for connector '{connector_name}', checking exchange_credentials table...")
+            # Check what connector was actually found in the query
+            found_connector_name = None
+            if hasattr(bot_record, 'name') and hasattr(bot_record, 'connector'):
+                # Try to get connector name from the joined connector
+                found_connector_name = getattr(bot_record, 'connector', None) if hasattr(bot_record, 'connector') else None
+            # Also check if connector was joined (it might be in a different position)
+            # The connector name might be in the connectors table result
+            
+            # If no keys found OR connector name doesn't match what we extracted, check exchange_credentials
+            should_check_exchange_creds = (not api_key or not api_secret) or (connector_name and found_connector_name and found_connector_name.lower() != connector_name.lower())
+            
+            if should_check_exchange_creds:
+                logger.warning(f"⚠️  Checking exchange_credentials table for connector '{connector_name}' (found connector: {found_connector_name}, has_keys: {bool(api_key and api_secret)})...")
                 # Try exchange_credentials table (encrypted)
                 bot = db.query(Bot).filter(Bot.id == bot_id).first()
                 if bot:
@@ -374,6 +385,8 @@ class BotRunner:
                                     bot_record = (*bot_record[:8], api_key, api_secret, memo)
                             except Exception as decrypt_err:
                                 logger.error(f"❌ Failed to decrypt credentials: {decrypt_err}")
+                        else:
+                            logger.warning(f"⚠️  No credentials found in exchange_credentials table for exchange '{connector_name}'")
             
             # DEBUG: Log connector retrieval
             bot = db.query(Bot).filter(Bot.id == bot_id).first()
