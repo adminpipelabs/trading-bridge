@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api.coinstore.com"
+BASE_URL = "https://api.coinstore.com/api"
 
 
 class CoinstoreConnector:
@@ -36,16 +36,29 @@ class CoinstoreConnector:
         if self.session and not self.session.closed:
             await self.session.close()
     
-    def _generate_signature(self, params: Dict[str, Any]) -> str:
-        """Generate HMAC-SHA256 signature for authenticated requests."""
-        # Sort parameters
-        sorted_params = sorted(params.items())
-        query_string = urlencode(sorted_params)
+    def _generate_signature(self, expires: int, payload: str) -> str:
+        """
+        Generate HMAC-SHA256 signature for authenticated requests.
+        Coinstore uses a two-step signature:
+        1. HMAC-SHA256(secret_key, expires_key) where expires_key = floor(expires/30000)
+        2. HMAC-SHA256(key_from_step1, payload)
+        """
+        import math
         
-        # Create signature
-        signature = hmac.new(
+        # Step 1: Calculate expires_key
+        expires_key = str(math.floor(expires / 30000))
+        
+        # Step 2: First HMAC to get key
+        key = hmac.new(
             self.api_secret.encode('utf-8'),
-            query_string.encode('utf-8'),
+            expires_key.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        # Step 3: Second HMAC to get signature
+        signature = hmac.new(
+            key.encode('utf-8'),
+            payload.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
         
@@ -53,25 +66,37 @@ class CoinstoreConnector:
     
     async def _request(self, method: str, endpoint: str, params: Optional[Dict] = None, authenticated: bool = False) -> Dict[str, Any]:
         """Make HTTP request to Coinstore API."""
+        import json
+        
         session = await self._get_session()
         url = f"{BASE_URL}{endpoint}"
         
         if params is None:
             params = {}
         
-        # Add timestamp for authenticated requests
-        if authenticated:
-            params['timestamp'] = int(time.time() * 1000)
-            params['apiKey'] = self.api_key
-            signature = self._generate_signature(params)
-            params['signature'] = signature
+        # Prepare payload for signature
+        if method.upper() == 'GET':
+            # GET: payload is query string
+            payload = urlencode(params) if params else ''
+        else:
+            # POST: payload is JSON body
+            payload = json.dumps(params) if params else '{}'
         
         headers = {
             'Content-Type': 'application/json',
+            'Accept': '*/*',
+            'Connection': 'keep-alive',
         }
         
+        # Add authentication headers
         if authenticated:
-            headers['X-API-KEY'] = self.api_key
+            expires = int(time.time() * 1000)
+            signature = self._generate_signature(expires, payload)
+            
+            headers['X-CS-APIKEY'] = self.api_key
+            headers['X-CS-SIGN'] = signature
+            headers['X-CS-EXPIRES'] = str(expires)
+            headers['exch-language'] = 'en_US'
         
         try:
             # Pass proxy per-request if configured
@@ -128,8 +153,8 @@ class CoinstoreConnector:
     
     async def get_balances(self) -> Dict[str, Any]:
         """Get account balances."""
-        endpoint = "/api/v1/account/balance"
-        return await self._request('GET', endpoint, authenticated=True)
+        endpoint = "/spot/accountList"
+        return await self._request('POST', endpoint, params={}, authenticated=True)
     
     async def get_open_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get open orders."""
@@ -141,8 +166,8 @@ class CoinstoreConnector:
     
     async def get_symbols(self) -> Dict[str, Any]:
         """Get all trading symbols."""
-        endpoint = "/api/v1/market/symbols"
-        return await self._request('GET', endpoint, authenticated=False)
+        endpoint = "/v2/public/config/spot/symbols"
+        return await self._request('POST', endpoint, params={}, authenticated=False)
     
     async def place_order(
         self,

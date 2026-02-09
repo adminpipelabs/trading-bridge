@@ -115,7 +115,15 @@ class Account:
             exchange = exchange_class(config)
             
             # Test connection by loading markets
-            await exchange.load_markets()
+            # Catch AttributeError for BitMart ccxt bug (calls .lower() on None message)
+            try:
+                await exchange.load_markets()
+            except AttributeError as attr_err:
+                if "'NoneType' object has no attribute 'lower'" in str(attr_err):
+                    logger.warning(f"⚠️  BitMart ccxt error handler bug detected (None message). Exchange may still work for trading.")
+                    # Continue anyway - exchange might still work
+                else:
+                    raise
             
             self.connectors[connector_lower] = exchange
             
@@ -124,7 +132,7 @@ class Account:
             return {
                 "success": True,
                 "connector": connector_name,
-                "markets_loaded": len(exchange.markets)
+                "markets_loaded": len(exchange.markets) if hasattr(exchange, 'markets') else 0
             }
             
         except Exception as e:

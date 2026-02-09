@@ -32,29 +32,32 @@ class CoinstoreExchange:
         
         try:
             symbols_data = await self.connector.get_symbols()
-            if symbols_data.get('code') == 0:
+            code = symbols_data.get('code')
+            # Coinstore returns code as string "0" for success or int 0
+            if code == 0 or code == "0":
                 markets = {}
                 for symbol_info in symbols_data.get('data', []):
-                    symbol = symbol_info.get('symbol', '')
-                    if symbol:
+                    symbol_code = symbol_info.get('symbolCode', '')
+                    if symbol_code:
                         # Format: BTCUSDT -> BTC/USDT
-                        if len(symbol) > 4 and symbol.endswith('USDT'):
-                            base = symbol[:-4]
+                        if len(symbol_code) > 4 and symbol_code.endswith('USDT'):
+                            base = symbol_code[:-4]
                             markets[f"{base}/USDT"] = {
-                                'id': symbol,
+                                'id': symbol_code,
                                 'symbol': f"{base}/USDT",
                                 'base': base,
                                 'quote': 'USDT',
-                                'active': True,
+                                'active': symbol_info.get('openTrade', True),
                             }
                 self.markets = markets
                 logger.info(f"Loaded {len(markets)} Coinstore markets")
                 return markets
             else:
-                logger.error(f"Failed to load markets: {symbols_data.get('msg')}")
+                error_msg = symbols_data.get('message') or symbols_data.get('msg') or str(symbols_data)
+                logger.error(f"Failed to load markets: {error_msg}")
                 return {}
         except Exception as e:
-            logger.error(f"Error loading Coinstore markets: {e}")
+            logger.error(f"Error loading Coinstore markets: {e}", exc_info=True)
             return {}
     
     async def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
@@ -85,15 +88,17 @@ class CoinstoreExchange:
             data = await self.connector.get_balances()
             
             # Log full response for debugging
-            logger.debug(f"Coinstore balance API response: code={data.get('code')}, data keys={list(data.get('data', {}).keys()) if isinstance(data.get('data'), dict) else 'not dict'}")
+            logger.debug(f"Coinstore balance API response: code={data.get('code')}, data type={type(data.get('data'))}")
             
-            if data.get('code') == 0:
-                balances_data = data.get('data', {})
+            code = data.get('code')
+            # Coinstore returns code as string "0" for success or int 0
+            if code == 0 or code == "0":
+                balances_list = data.get('data', [])
                 
-                # Handle case where data might not be a dict
-                if not isinstance(balances_data, dict):
-                    logger.error(f"Coinstore balance data is not a dict: {type(balances_data)} = {balances_data}")
-                    raise Exception(f"Invalid balance response format: expected dict, got {type(balances_data)}")
+                # Coinstore returns balance as a list of account objects
+                if not isinstance(balances_list, list):
+                    logger.error(f"Coinstore balance data is not a list: {type(balances_list)} = {balances_list}")
+                    raise Exception(f"Invalid balance response format: expected list, got {type(balances_list)}")
                 
                 result = {
                     'free': {},
@@ -101,19 +106,33 @@ class CoinstoreExchange:
                     'total': {},
                 }
                 
-                for currency, amounts in balances_data.items():
-                    if not isinstance(amounts, dict):
-                        logger.warning(f"Balance entry for {currency} is not a dict: {amounts}")
-                        continue
+                # Group balances by currency (can have multiple entries: AVAILABLE and FROZEN)
+                for account in balances_list:
+                    currency = account.get('currency', '').upper()
+                    balance = float(account.get('balance', 0) or 0)
+                    account_type = account.get('type', 0)
+                    type_name = account.get('typeName', '')
                     
-                    available = float(amounts.get('available', 0) or 0)
-                    frozen = float(amounts.get('frozen', 0) or 0)
-                    total = available + frozen
-                    
-                    if total > 0:
-                        result['free'][currency] = available
-                        result['used'][currency] = frozen
-                        result['total'][currency] = total
+                    # type 1 = AVAILABLE, type 4 = FROZEN
+                    if currency:
+                        if currency not in result['free']:
+                            result['free'][currency] = 0.0
+                            result['used'][currency] = 0.0
+                            result['total'][currency] = 0.0
+                        
+                        if account_type == 1 or type_name == 'AVAILABLE':
+                            result['free'][currency] += balance
+                        elif account_type == 4 or type_name == 'FROZEN':
+                            result['used'][currency] += balance
+                        
+                        result['total'][currency] = result['free'][currency] + result['used'][currency]
+                
+                # Remove zero balances
+                for currency in list(result['free'].keys()):
+                    if result['total'][currency] == 0:
+                        del result['free'][currency]
+                        del result['used'][currency]
+                        del result['total'][currency]
                 
                 return result
             else:
