@@ -1560,10 +1560,24 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
     # For CEX bots, fetch balance from exchange (even if bot is stopped)
     # Safely check connector (could be None)
     connector_lower = (bot.connector or '').lower() if bot.connector else ''
+    logger.info(f"🔍 Balance-and-volume request for bot {bot_id}: name={bot.name}, type={bot.bot_type}, connector={bot.connector}, account={bot.account}")
+    logger.info(f"🔍 Bot details: connector_lower={connector_lower}, bot_type={bot.bot_type}, pair={pair}")
+    
     if bot.bot_type == 'volume' or bot.bot_type == 'spread' or (connector_lower and connector_lower not in ['jupiter', 'solana']):
+        logger.info(f"✅ Bot {bot_id} identified as CEX bot - proceeding with balance fetch")
         try:
-            # Sync connectors for this account
-            synced = await sync_connectors_to_exchange_manager(bot.account, db)
+            # Sync connectors for this account WITH TIMEOUT
+            logger.info(f"🔄 Syncing connectors for account {bot.account} (bot: {bot.name})")
+            import asyncio
+            try:
+                synced = await asyncio.wait_for(
+                    sync_connectors_to_exchange_manager(bot.account, db),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"❌ Timeout syncing connectors for {bot.account} (5s) - returning default balances")
+                synced = False
+            logger.info(f"✅ Sync result for {bot.account}: {synced}, connectors loaded: {list(exchange_manager.get_account(bot.account).connectors.keys()) if exchange_manager.get_account(bot.account) else 'No account'}")
             if not synced:
                 logger.warning(f"No connectors synced for account {bot.account} - returning default balances")
             else:
@@ -1585,6 +1599,9 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                 logger.info(f"Extracted connector '{connector_name}' from bot name '{bot.name}'")
                                 break
                     
+                    logger.info(f"🔍 Looking for connector '{connector_name}' in account '{bot.account}'")
+                    logger.info(f"🔍 Available connectors: {list(account.connectors.keys())}")
+                    
                     if not connector_name:
                         logger.warning(f"Could not determine connector for bot {bot_id} (name: {bot.name}, connector: {bot.connector}) - returning default balances")
                     else:
@@ -1593,17 +1610,21 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                         exchange = account.connectors.get(connector_name)
                         if not exchange:
                             # Try case-insensitive lookup
+                            logger.info(f"🔍 Direct lookup failed, trying case-insensitive match...")
                             for key, val in account.connectors.items():
                                 if key.lower() == connector_name.lower():
+                                    logger.info(f"✅ Found case-insensitive match: '{key}' matches '{connector_name}'")
                                     exchange = val
                                     connector_name = key  # Use actual key name
-                                    logger.info(f"Found connector via case-insensitive match: {key}")
                                     break
                         
-                        if not exchange:
+                        if exchange:
+                            logger.info(f"✅ Found exchange connector '{connector_name}' in account '{bot.account}'")
+                        else:
                             available_connectors = list(account.connectors.keys())
                             # If no connectors found, try to sync again with more detailed logging
-                            logger.warning(f"Exchange '{connector_name}' not found. Available connectors: {available_connectors}")
+                            logger.warning(f"❌ Exchange connector '{connector_name}' not found in account '{bot.account}'. Available: {available_connectors}")
+                            logger.warning(f"❌ Bot connector field: '{bot.connector}', normalized: '{connector_name}'")
                             logger.warning(f"Bot details: id={bot.id}, name={bot.name}, connector={bot.connector}, client_id={bot.client_id}")
                             logger.warning(f"Attempting to re-sync connectors for account {bot.account} (client_id: {bot.client_id})...")
                             
@@ -1670,15 +1691,29 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                     # Fetch balance with timeout to prevent dashboard hanging
                                     import asyncio
                                     
+                                    logger.info(f"💰 Fetching balance from {connector_name}...")
                                     if connector_name.lower() == 'bitmart':
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for BitMart")
-                                        balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                        logger.info(f"   Calling: exchange.fetch_balance({'type': 'spot'}) for BitMart")
+                                        balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
                                     elif connector_name.lower() == 'coinstore':
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for Coinstore")
+                                        logger.info(f"   Calling: exchange.fetch_balance() for Coinstore")
                                         balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
                                     else:
-                                        logger.debug(f"   Calling: exchange.fetch_balance() for {connector_name}")
+                                        logger.info(f"   Calling: exchange.fetch_balance() for {connector_name}")
                                         balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                    
+                                    if balance:
+                                        free_count = len(balance.get('free', {}))
+                                        logger.info(f"✅ Balance fetched: {free_count} currencies")
+                                        # Log sample balances
+                                        sample_balances = []
+                                        for currency, amount in balance.get('free', {}).items():
+                                            if float(amount or 0) > 0:
+                                                sample_balances.append(f"{currency}: {amount}")
+                                        if sample_balances:
+                                            logger.info(f"   Sample balances: {', '.join(sample_balances[:5])}")
+                                    else:
+                                        logger.warning(f"⚠️  Balance response is None or empty")
                                     
                                     logger.info(f"✅ Balance fetch successful for {connector_name}")
                                 except asyncio.TimeoutError:
