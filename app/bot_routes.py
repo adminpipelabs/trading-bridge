@@ -1104,9 +1104,9 @@ def update_bot(
     return bot.to_dict()
 
 
-@router.get("/{bot_id}/stats")
-def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
-    """Get bot statistics including trades from both bot_trades and trade_logs tables."""
+@router.get("/{bot_id}/trades-history")
+def get_bot_trades_history(bot_id: str, db: Session = Depends(get_db)):
+    """Get bot trade history from both bot_trades and trade_logs tables."""
     from sqlalchemy import text
     
     bot = db.query(Bot).filter(Bot.id == bot_id).first()
@@ -1165,6 +1165,13 @@ def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
     total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
     buy_count = sum(1 for t in all_trades if t.get("side", "").lower() == "buy")
     sell_count = sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
+    
+    # Calculate last_trade_time from trades
+    last_trade_time = None
+    if all_trades:
+        last_trade = all_trades[0]
+        if last_trade.get("created_at"):
+            last_trade_time = last_trade["created_at"]
 
     return {
         "bot_id": bot_id,
@@ -1177,7 +1184,7 @@ def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
         "total_volume_usd": round(total_volume, 2),
         "buy_count": buy_count,
         "sell_count": sell_count,
-        "last_trade_time": bot.last_trade_time.isoformat() if bot.last_trade_time else None,
+        "last_trade_time": last_trade_time,
         "health_status": bot.health_status,
         "health_message": bot.health_message
     }
@@ -1256,6 +1263,13 @@ def get_bot_trades(
     total_volume = sum(float(t.get("value_usd") or 0) for t in all_trades)
     buy_count = sum(1 for t in all_trades if t.get("side", "").lower() == "buy")
     sell_count = sum(1 for t in all_trades if t.get("side", "").lower() == "sell")
+    
+    # Calculate last_trade_time from trades
+    last_trade_time = None
+    if all_trades:
+        last_trade = all_trades[0]
+        if last_trade.get("created_at"):
+            last_trade_time = last_trade["created_at"]
 
     return {
         "bot_id": bot_id,
@@ -1267,7 +1281,7 @@ def get_bot_trades(
         "total_volume_usd": round(total_volume, 2),
         "buy_count": buy_count,
         "sell_count": sell_count,
-        "last_trade_time": bot.last_trade_time.isoformat() if bot.last_trade_time else None
+        "last_trade_time": last_trade_time
     }
 
 
@@ -1560,7 +1574,7 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
         "trades_24h": {"buys": 0, "sells": 0}
     }
     
-    # Fetch balances for CEX bots
+    # Fetch balances for CEX bots (works even when bot is stopped)
     connector_lower = (bot.connector or '').lower() if bot.connector else ''
     if bot.bot_type in ['volume', 'spread'] or (connector_lower and connector_lower not in ['jupiter', 'solana']):
         try:
@@ -1590,7 +1604,7 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                         
                         if exchange:
                             try:
-                                # Fetch balance
+                                # Fetch balance (works regardless of bot status)
                                 if connector_name.lower() == 'bitmart':
                                     balance = await exchange.fetch_balance({'type': 'spot'})
                                 elif connector_name.lower() == 'coinstore':
@@ -1616,9 +1630,26 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     quote: round(quote_locked, 2)
                                 }
                             except Exception as balance_error:
+                                error_msg = str(balance_error)
                                 logger.error(f"Error fetching balance for bot {bot_id}: {balance_error}")
+                                # Add error info to result so frontend can display it
+                                result["balance_error"] = error_msg
+                                if "IP is forbidden" in error_msg or "30010" in error_msg:
+                                    result["balance_error"] = "IP whitelist required - add Railway IPs to exchange API settings"
+                                elif "Unauthorized" in error_msg or "1401" in error_msg:
+                                    result["balance_error"] = "API authentication failed - check API keys and permissions"
+                        else:
+                            result["balance_error"] = f"Exchange connector '{connector_name}' not found - check API keys are configured"
+                    else:
+                        result["balance_error"] = "Could not determine exchange from bot name or connector"
+                else:
+                    result["balance_error"] = "Account not found in exchange manager"
+            else:
+                result["balance_error"] = "Failed to sync exchange connectors - check API keys"
         except Exception as e:
+            error_msg = str(e)
             logger.error(f"Error in balance fetch for bot {bot_id}: {e}")
+            result["balance_error"] = error_msg
     
     # Calculate 24h volume and trade counts
     try:
