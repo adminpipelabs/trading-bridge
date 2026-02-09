@@ -1708,7 +1708,19 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                                             balance = await asyncio.wait_for(exchange.fetch_balance({'type': 'spot'}), timeout=15.0)
                                     elif connector_name.lower() == 'coinstore':
                                         logger.info(f"   Calling: exchange.fetch_balance() for Coinstore")
+                                        logger.info(f"   🔍 Coinstore exchange type: {type(exchange).__name__}")
+                                        logger.info(f"   🔍 Coinstore has connector: {hasattr(exchange, 'connector')}")
                                         balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
+                                        logger.info(f"   ✅ Coinstore balance response received: {balance is not None}")
+                                        if balance:
+                                            logger.info(f"   🔍 Coinstore balance keys: {list(balance.keys())}")
+                                            logger.info(f"   🔍 Coinstore free currencies: {list(balance.get('free', {}).keys())}")
+                                            logger.info(f"   🔍 Coinstore used currencies: {list(balance.get('used', {}).keys())}")
+                                            # Log sample balances
+                                            for currency, amount in list(balance.get('free', {}).items())[:5]:
+                                                logger.info(f"      {currency}: {amount} (free)")
+                                            for currency, amount in list(balance.get('used', {}).items())[:5]:
+                                                logger.info(f"      {currency}: {amount} (used)")
                                     else:
                                         logger.info(f"   Calling: exchange.fetch_balance() for {connector_name}")
                                         balance = await asyncio.wait_for(exchange.fetch_balance(), timeout=15.0)
