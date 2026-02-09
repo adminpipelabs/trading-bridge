@@ -1261,7 +1261,7 @@ def get_bot_trades(
         "bot_id": bot_id,
         "bot_name": bot.name,
         "bot_type": bot.bot_type,
-        "exchange": bot.exchange,
+        "exchange": bot.connector,  # Bot model uses 'connector' field, not 'exchange'
         "trades": all_trades[:limit],
         "total_trades": len(all_trades),
         "total_volume_usd": round(total_volume, 2),
@@ -1342,7 +1342,8 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                     result["error"] = "Account not found in exchange_manager"
                 else:
                     # Determine which connector/exchange this bot uses
-                    connector_name = (bot.exchange or bot.connector or '').lower()
+                    # Bot model only has 'connector' field, not 'exchange'
+                    connector_name = (bot.connector or '').lower()
                     if not connector_name:
                         # Try to extract from bot name
                         bot_name_lower = (bot.name or '').lower()
