@@ -140,6 +140,11 @@ class CoinstoreExchange:
                 error_msg = data.get('msg') or data.get('message') or str(data)
                 error_code = data.get('code', 'unknown')
                 logger.error(f"Coinstore API error: code={error_code}, msg={error_msg}, full response={data}")
+                logger.error(f"⚠️  Coinstore authentication failed. Check:")
+                logger.error(f"   1. API key is correct")
+                logger.error(f"   2. API secret is correct")
+                logger.error(f"   3. API key has 'spot trading' permissions enabled")
+                logger.error(f"   4. IP whitelist (if enabled) includes Railway IPs")
                 raise Exception(f"Coinstore API error (code {error_code}): {error_msg}")
         except Exception as e:
             logger.error(f"Error fetching balance from Coinstore: {e}", exc_info=True)

@@ -97,6 +97,9 @@ class CoinstoreConnector:
             headers['X-CS-SIGN'] = signature
             headers['X-CS-EXPIRES'] = str(expires)
             headers['exch-language'] = 'en_US'
+            
+            # Debug logging for signature generation
+            logger.debug(f"Coinstore auth: expires={expires}, payload={payload[:100]}, signature={signature[:20]}...")
         
         try:
             # Pass proxy per-request if configured
@@ -119,13 +122,23 @@ class CoinstoreConnector:
                         logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
                         raise Exception(f"Invalid JSON response: {response_text[:200]}")
             elif method.upper() == 'POST':
-                async with session.post(url, json=params, **request_kwargs) as response:
+                # CRITICAL: Send body as raw JSON string to match signature
+                # Signature was generated from payload (json.dumps), so body must match exactly
+                body_data = payload.encode('utf-8') if payload else b'{}'
+                async with session.post(url, data=body_data, **request_kwargs) as response:
                     response_text = await response.text()
                     logger.debug(f"Coinstore API POST {endpoint} response status={response.status}, body={response_text[:200]}")
                     
                     if response.status != 200:
                         error_text = response_text[:500]
-                        raise Exception(f"HTTP {response.status}: {error_text}")
+                        # Try to parse error response
+                        try:
+                            error_json = await response.json()
+                            error_code = error_json.get('code', response.status)
+                            error_msg = error_json.get('msg') or error_json.get('message') or error_text
+                            raise Exception(f"HTTP {response.status}: Coinstore API error (code {error_code}): {error_msg}")
+                        except:
+                            raise Exception(f"HTTP {response.status}: {error_text}")
                     
                     try:
                         return await response.json()
