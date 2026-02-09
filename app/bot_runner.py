@@ -1258,7 +1258,7 @@ class BotRunner:
             
             # Get bot record with connector info
             bot_record = db.execute(text("""
-                SELECT b.id, b.name, b.connector, b.account, b.base_asset, b.quote_asset, b.pair, b.config,
+                SELECT b.id, b.name, b.connector, b.account, b.pair, b.config,
                        ec.api_key_encrypted, ec.api_secret_encrypted, ec.memo
                 FROM bots b
                 LEFT JOIN clients cl ON cl.account_identifier = b.account
@@ -1310,15 +1310,13 @@ class BotRunner:
             api_key = decrypt_credential(bot_record.api_key_encrypted)
             api_secret = decrypt_credential(bot_record.api_secret_encrypted)
             
-            # Get symbol
-            if bot_record.base_asset and bot_record.quote_asset:
-                symbol = f"{bot_record.base_asset}/{bot_record.quote_asset}"
-            elif bot_record.pair:
+            # Get symbol from pair column
+            if bot_record.pair:
                 symbol = bot_record.pair.replace("_", "/").replace("-", "/")
             else:
                 logger.error(f"Bot {bot_id} missing trading pair")
                 bot.status = "error"
-                bot.error = "Missing trading pair - set base_asset and quote_asset"
+                bot.error = "Missing trading pair - set pair column"
                 db.commit()
                 return
             
