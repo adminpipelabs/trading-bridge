@@ -30,15 +30,24 @@
 
 ## 📋 **Next Steps**
 
-1. ⏳ **Wait for Railway deployment** to complete
+| Issue | Status | Who | Action |
+|-------|--------|-----|--------|
+| DB transaction errors | ✅ Fixed | Dev | Deployed, should unblock bot startup |
+| Coinstore balance fetch | 🧪 Ready to test | After deploy | Hit "Retry" on Coinstore bot, check if balances show |
+| BitMart IP whitelist | ⏳ Pending | User | Add `54.205.35.75` in BitMart dashboard |
+
+### **Immediate Actions:**
+
+1. ⏳ **Wait for Railway deployment** (~1-2 minutes)
 2. 🧪 **Test Coinstore bots:**
    - Open client dashboard
-   - Check balance display for Coinstore bots
-   - Verify logs show successful API calls
-3. 🔄 **BitMart bots:**
-   - Monitor for BitMart server recovery
-   - Retry if error 59002 clears up
-   - If persists, may need to contact BitMart support
+   - Click "Retry" on a Coinstore bot balance display
+   - Check if balances show: `Available: X SHARP | Y USDT`
+   - Verify Railway logs show: `Coinstore API POST /spot/accountList response status=200`
+3. 🔧 **BitMart IP whitelist:**
+   - Go to BitMart API settings → IP whitelist
+   - Add `54.205.35.75` (both `3.222.129.4` and `54.205.35.75` should be whitelisted)
+   - This will fix BitMart "IP forbidden" errors
 
 ## 🎯 **Success Criteria**
 
