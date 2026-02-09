@@ -139,8 +139,10 @@ class CoinstoreConnector:
             elif method.upper() == 'POST':
                 # CRITICAL: Send body to match signature
                 # Payload is always JSON string (even if '{}' for empty params)
-                body_data = payload.encode('utf-8')
-                async with session.post(url, data=body_data, **request_kwargs) as response:
+                # For aiohttp, use json= parameter to ensure Content-Type: application/json
+                # Parse payload back to dict for json= parameter (signature already calculated on string)
+                body_dict = json.loads(payload) if payload else {}
+                async with session.post(url, json=body_dict, **request_kwargs) as response:
                     response_text = await response.text()
                     logger.info(f"📡 Coinstore API POST {endpoint} response status={response.status}")
                     logger.info(f"   Response length: {len(response_text)} bytes")
