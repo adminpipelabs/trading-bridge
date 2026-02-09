@@ -77,15 +77,15 @@ class CEXBotRunner:
                                c.memo
                         FROM bots b
                         JOIN clients cl ON cl.account_identifier = b.account
-                        JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.exchange, 'bitmart'))
+                        JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.connector, 'bitmart'))
                         WHERE b.status = 'running'
                           AND b.bot_type = 'volume'
-                          AND (b.exchange IS NULL OR (b.exchange IS NOT NULL AND b.exchange != 'jupiter'))
+                          AND (b.connector IS NULL OR (b.connector IS NOT NULL AND b.connector != 'jupiter'))
                           AND (b.chain IS NULL OR b.chain != 'solana')
                     """)
                 except Exception as exchange_col_error:
-                    # Exchange column doesn't exist - use bot name fallback
-                    logger.warning(f"exchange column doesn't exist, using bot name fallback: {exchange_col_error}")
+                    # Connector column doesn't exist - use bot name fallback
+                    logger.warning(f"connector column doesn't exist, using bot name fallback: {exchange_col_error}")
                     # Get all volume bots and filter by name
                     all_bots = await conn.fetch("""
                         SELECT b.*, 
@@ -261,9 +261,17 @@ class CEXBotRunner:
                     # Final check if API keys exist
                     if not api_key or not api_secret:
                         logger.warning(f"Bot {bot_id} missing API keys (checked connectors and exchange_credentials)")
+                        logger.warning(f"   Bot name: {bot_record.get('name')}")
+                        logger.warning(f"   Connector: {connector_name}")
+                        logger.warning(f"   Expected exchange: {expected_exchange}")
+                        logger.warning(f"   Client ID: {client_id}")
+                        
+                        # Set error status but DON'T stop the bot - let user fix via Edit button
                         await conn.execute("""
-                            UPDATE bots SET health_status = 'error', 
-                                health_message = 'Missing API keys - add connector or exchange credentials'
+                            UPDATE bots SET 
+                                health_status = 'error', 
+                                health_message = 'Missing API keys - add connector or exchange credentials',
+                                status = 'stopped'
                             WHERE id = $1
                         """, bot_id)
                         continue

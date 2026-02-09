@@ -116,7 +116,7 @@ class BotHealthMonitor:
             # Include chain and wallet info for Solana routing
             bots = await conn.fetch("""
                 SELECT b.id, b.account, b.name, b.pair, b.base_asset, b.quote_asset, b.base_mint,
-                       b.connector, b.exchange, b.status,
+                       b.connector, b.status,
                        b.health_status, b.last_trade_time, b.last_heartbeat,
                        b.bot_type, b.chain, b.config,
                        c.api_key, c.api_secret, c.memo,
@@ -125,9 +125,8 @@ class BotHealthMonitor:
                 LEFT JOIN clients cl ON cl.account_identifier = b.account
                 LEFT JOIN connectors c ON c.client_id = cl.id 
                     AND (
-                        LOWER(c.name) = LOWER(COALESCE(b.exchange, b.connector))
-                        OR (b.exchange IS NULL AND b.connector IS NULL)
-                        OR (LOWER(b.name) LIKE '%' || LOWER(c.name) || '%')
+                        LOWER(c.name) = LOWER(b.connector)
+                        OR (b.connector IS NULL AND LOWER(b.name) LIKE '%' || LOWER(c.name) || '%')
                     )
                 LEFT JOIN wallets w ON w.client_id = cl.id
                 WHERE b.reported_status = 'running' OR b.status = 'running'

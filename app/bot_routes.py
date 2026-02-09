@@ -1056,7 +1056,7 @@ async def start_bot(
         exchange_column_exists = True
         try:
             bot_check = db.execute(text("""
-                SELECT exchange, chain FROM bots WHERE id = :bot_id
+                SELECT connector, chain FROM bots WHERE id = :bot_id
             """), {"bot_id": bot_id}).first()
             
             if bot_check:
@@ -1066,17 +1066,17 @@ async def start_bot(
             # Columns might not exist yet - rollback transaction and continue
             db.rollback()
             exchange_column_exists = False
-            logger.warning(f"⚠️  exchange/chain columns don't exist (will use bot name fallback): {sql_error}")
+            logger.warning(f"⚠️  connector/chain columns don't exist (will use bot name fallback): {sql_error}")
         
-        # CEX bot detection - check exchange field OR bot name as fallback
+        # CEX bot detection - check connector field OR bot name as fallback
         # CEX exchanges: bitmart, coinstore, binance, kucoin, gateio, mexc, etc.
         # IMPORTANT: Chain must NOT be 'solana' for CEX bots
         cex_exchanges = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'okx', 'bybit', 'gate', 'htx', 'kraken']
         
-        # DEBUG: Log exchange/chain detection
-        logger.info(f"🔍 CEX Detection for bot {bot_id}: bot_type={bot.bot_type}, exchange={exchange}, chain={chain}, exchange_column_exists={exchange_column_exists}")
+        # DEBUG: Log connector/chain detection
+        logger.info(f"🔍 CEX Detection for bot {bot_id}: bot_type={bot.bot_type}, connector={exchange}, chain={chain}, exchange_column_exists={exchange_column_exists}")
         
-        # Primary detection: Use exchange column if available
+        # Primary detection: Use connector column if available
         is_cex_bot = (
             bot.bot_type == 'volume' and 
             exchange and 

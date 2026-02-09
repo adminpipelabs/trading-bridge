@@ -106,7 +106,7 @@ class BotRunner:
             chain = None
             try:
                 bot_check = db.execute(text("""
-                    SELECT exchange, chain FROM bots WHERE id = :bot_id
+                    SELECT connector, chain FROM bots WHERE id = :bot_id
                 """), {"bot_id": bot_id}).first()
                 
                 if bot_check:
@@ -115,7 +115,7 @@ class BotRunner:
             except Exception as sql_error:
                 # Columns might not exist yet - rollback transaction and continue
                 db.rollback()
-                logger.warning(f"Could not check exchange/chain columns: {sql_error}")
+                logger.warning(f"Could not check connector/chain columns: {sql_error}")
             
             # CEX bot check - check explicit CEX exchanges list
             # IMPORTANT: Chain must NOT be 'solana' for CEX bots
@@ -611,7 +611,7 @@ class BotRunner:
             exchange_column_exists = True
             try:
                 bot_check = db.execute(text("""
-                    SELECT exchange, chain FROM bots WHERE id = :bot_id
+                    SELECT connector, chain FROM bots WHERE id = :bot_id
                 """), {"bot_id": bot_id}).first()
                 
                 if bot_check:
