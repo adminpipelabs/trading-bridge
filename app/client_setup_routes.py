@@ -732,8 +732,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 logger.error(f"Failed to add wallet to bot: {e}")
                 # Don't fail - bot can be created without wallet initially
 
-        # Start the bot in background (truly non-blocking)
-        # Don't wait for startup to complete - return response immediately
+        # Start the bot - CEX bots handled differently than DEX bots
         logger.info(f"Scheduling bot {bot_id} to start for client {client_id} (CEX: {is_cex})")
         try:
             # Re-query bot to ensure it's attached to the session (after previous commits)
@@ -750,9 +749,50 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 else:
                     raise HTTPException(status_code=500, detail=f"Bot {bot_id} was not saved to database")
             
-            bot.status = "running"
-            db.commit()
-            logger.info(f"✅ Bot {bot_id} status set to 'running'")
+            # For CEX bots: Just set status to 'running' - CEXBotRunner will pick it up automatically
+            # For DEX bots: Set status and start via bot_runner
+            if is_cex:
+                bot.status = "running"
+                bot.health_status = None  # Clear any previous health errors
+                bot.health_message = None
+                bot.error = None
+                db.commit()
+                logger.info(f"✅ CEX bot {bot_id} status set to 'running' - CEXBotRunner will pick it up automatically")
+            else:
+                bot.status = "running"
+                db.commit()
+                logger.info(f"✅ Bot {bot_id} status set to 'running'")
+                
+                # Start DEX bot in background task
+                import asyncio
+                async def start_bot_background():
+                    """Start DEX bot in background without blocking the HTTP response."""
+                    try:
+                        logger.info(f"Background: Starting DEX bot {bot_id} for client {client_id}")
+                        # Get a new DB session for the background task
+                        from app.database import get_db_session
+                        bg_db = get_db_session()
+                        try:
+                            await bot_runner.start_bot(bot_id, bg_db)
+                            logger.info(f"Background: Bot {bot_id} started successfully for client {client_id}")
+                        except Exception as start_error:
+                            logger.warning(f"Background: Bot {bot_id} startup failed: {start_error}", exc_info=True)
+                            # Update bot status to stopped if startup fails
+                            try:
+                                bg_bot = bg_db.query(Bot).filter(Bot.id == bot_id).first()
+                                if bg_bot:
+                                    bg_bot.status = "stopped"
+                                    bg_db.commit()
+                            except Exception as update_error:
+                                logger.error(f"Background: Failed to update bot status: {update_error}")
+                        finally:
+                            bg_db.close()
+                    except Exception as bg_error:
+                        logger.error(f"Background: Error in bot startup task: {bg_error}", exc_info=True)
+                
+                # Create background task for DEX bots only
+                asyncio.create_task(start_bot_background())
+                logger.info(f"DEX bot startup task scheduled for {bot_id} - returning response immediately")
         except HTTPException:
             # Re-raise HTTP exceptions
             raise
@@ -765,6 +805,10 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 bot = db.query(Bot).filter(Bot.id == bot_id).first()
                 if bot:
                     bot.status = "running"
+                    if is_cex:
+                        bot.health_status = None
+                        bot.health_message = None
+                        bot.error = None
                     db.commit()
                     logger.info(f"✅ Retried and succeeded updating bot status after rollback")
                 else:
@@ -784,38 +828,6 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                 db.rollback()
                 # Don't fail - bot exists, status update can happen in background task
                 logger.warning(f"⚠️  Could not update bot status immediately - will be updated by background task")
-        
-        # Start bot in background task - don't await it
-        # This ensures the HTTP response returns immediately
-        import asyncio
-        async def start_bot_background():
-            """Start bot in background without blocking the HTTP response."""
-            try:
-                logger.info(f"Background: Starting bot {bot_id} for client {client_id}")
-                # Get a new DB session for the background task
-                from app.database import get_db_session
-                bg_db = get_db_session()
-                try:
-                    await bot_runner.start_bot(bot_id, bg_db)
-                    logger.info(f"Background: Bot {bot_id} started successfully for client {client_id}")
-                except Exception as start_error:
-                    logger.warning(f"Background: Bot {bot_id} startup failed: {start_error}", exc_info=True)
-                    # Update bot status to stopped if startup fails
-                    try:
-                        bg_bot = bg_db.query(Bot).filter(Bot.id == bot_id).first()
-                        if bg_bot:
-                            bg_bot.status = "stopped"
-                            bg_db.commit()
-                    except Exception as update_error:
-                        logger.error(f"Background: Failed to update bot status: {update_error}")
-                finally:
-                    bg_db.close()
-            except Exception as bg_error:
-                logger.error(f"Background: Error in bot startup task: {bg_error}", exc_info=True)
-        
-        # Create background task - don't await it
-        asyncio.create_task(start_bot_background())
-        logger.info(f"Bot startup task scheduled for {bot_id} - returning response immediately")
 
         # Final verification - ensure bot was actually saved
         db.refresh(bot)
