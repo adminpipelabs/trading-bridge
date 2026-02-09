@@ -1639,14 +1639,30 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                     else:
                                         raise
                                 
-                                # Extract balances
-                                base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
-                                quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
-                                
-                                base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
-                                base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
-                                quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                # Extract balances - check if balance is None first
+                                if balance is None:
+                                    logger.warning(f"Balance is None for bot {bot_id} - returning default values")
+                                else:
+                                    logger.info(f"Balance response for {connector_name}: keys={list(balance.keys()) if balance else 'None'}, looking for base={base}, quote={quote}")
+                                    
+                                    base_balance = balance.get(base, {}) if isinstance(balance.get(base), dict) else {}
+                                    quote_balance = balance.get(quote, {}) if isinstance(balance.get(quote), dict) else {}
+                                    
+                                    base_available = float(base_balance.get('free', 0) if isinstance(base_balance, dict) else (balance.get('free', {}).get(base, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                    quote_available = float(quote_balance.get('free', 0) if isinstance(quote_balance, dict) else (balance.get('free', {}).get(quote, 0) if isinstance(balance.get('free'), dict) else 0) or 0)
+                                    base_locked = float(base_balance.get('used', 0) if isinstance(base_balance, dict) else (balance.get('used', {}).get(base, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                    quote_locked = float(quote_balance.get('used', 0) if isinstance(quote_balance, dict) else (balance.get('used', {}).get(quote, 0) if isinstance(balance.get('used'), dict) else 0) or 0)
+                                    
+                                    logger.info(f"Extracted balances: {base}={base_available} available, {base_locked} locked; {quote}={quote_available} available, {quote_locked} locked")
+                                    
+                                    result["available"] = {
+                                        base: round(base_available, 4),
+                                        quote: round(quote_available, 2)
+                                    }
+                                    result["locked"] = {
+                                        base: round(base_locked, 4),
+                                        quote: round(quote_locked, 2)
+                                    }
                                 
                                 result["available"] = {
                                     base: round(base_available, 4),
@@ -1658,13 +1674,9 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
                                 }
                             except Exception as balance_error:
                                 error_msg = str(balance_error)
-                                logger.error(f"Error fetching balance for bot {bot_id}: {balance_error}")
-                                # Add error info to result so frontend can display it
-                                result["balance_error"] = error_msg
-                                if "IP is forbidden" in error_msg or "30010" in error_msg:
-                                    result["balance_error"] = "IP whitelist required - add Railway IPs to exchange API settings"
-                                elif "Unauthorized" in error_msg or "1401" in error_msg:
-                                    result["balance_error"] = "API authentication failed - check API keys and permissions"
+                                logger.error(f"Error fetching balance for bot {bot_id}: {balance_error}", exc_info=True)
+                                # Log error but don't expose to client - return default values (already 0)
+                                # Client will see 0 balances instead of error message
                         else:
                             logger.warning(f"Exchange connector '{connector_name}' not found - returning default balances")
                     else:
