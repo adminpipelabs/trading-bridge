@@ -6,10 +6,10 @@
 
 | Bot | Exchange | Type | Blocker | Fix Status | Notes |
 |-----|----------|------|---------|------------|-------|
-| Sharp-SB-BitMart | BitMart | Spread | Error 59002 (BitMart server issue) | ⏳ Out of our control | BitMart API returning "Internal Server Error" |
-| Sharp-VB-BitMart | BitMart | Volume | Same | ⏳ Out of our control | Same BitMart server issue |
+| Sharp-SB-BitMart | BitMart | Spread | Error 30010 (IP forbidden) | 🔴 **NEW ISSUE** | Railway IP changed to `54.205.35.75`, proxy not working |
+| Sharp-VB-BitMart | BitMart | Volume | Same | 🔴 **NEW ISSUE** | Proxy configured but BitMart sees direct Railway IP |
 | SHARP-VB-Coinstore | Coinstore | Volume | Balance fetch / auth | 🚀 Fix deployed, needs testing | Coinstore API implementation rewritten |
-| SHARP-SB-Coinstore | Coinstore | Spread | Same | 🚀 Fix deployed, needs testing | Same Coinstore fix |
+| SHARP-SB-Coinstore | Coinstore | Spread | Database transaction error | 🔴 **NEW ISSUE** | Failed to start due to `InFailedSqlTransaction` |
 
 ## ✅ **Fixes Deployed**
 
@@ -71,6 +71,25 @@ Watch Railway logs for:
 
 ## 📝 **Notes**
 
-- **BitMart Error 59002:** This is a BitMart server-side issue. Our code is correct, but BitMart's API is returning internal server errors. May resolve on its own or require BitMart support intervention.
+### **BitMart IP Forbidden (Error 30010) - URGENT**
+- **Problem:** Railway IP changed from `3.222.129.4` to `54.205.35.75` (new deployment)
+- **Issue:** Proxy is configured (`aiohttp_proxy`) but BitMart still sees direct Railway IP
+- **Possible causes:**
+  1. ccxt.async_support might not be using `aiohttp_proxy` correctly
+  2. Need to verify proxy is actually being used by checking outbound IP
+  3. May need to whitelist new Railway IP `54.205.35.75` on BitMart API key
+- **Action needed:** 
+  - Verify proxy is working (check if requests go through `3.222.129.4`)
+  - OR whitelist new Railway IP `54.205.35.75` on BitMart API key
+  - OR investigate why ccxt isn't using the proxy
 
-- **Coinstore Fix:** Complete rewrite based on official API documentation. Should resolve all authentication and balance fetching issues. If problems persist, signature debugging logs are available in the code.
+### **Coinstore Fix**
+- Complete rewrite based on official API documentation
+- Should resolve all authentication and balance fetching issues
+- **Status:** Fix deployed but bots failed to start due to database transaction errors
+- **Action needed:** Fix database transaction errors preventing bot startup
+
+### **Database Transaction Errors**
+- Multiple bots failing to start: `InFailedSqlTransaction`
+- This is preventing Coinstore bots from testing the new implementation
+- Need to investigate and fix transaction handling in bot startup code
