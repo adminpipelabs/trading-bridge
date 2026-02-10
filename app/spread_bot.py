@@ -155,6 +155,10 @@ class SpreadBot:
             
             logger.info(f"✅ Placed orders: bid #{self.active_bid_id}, ask #{self.active_ask_id}")
             
+            # Log order placements for recent activity display
+            await self._log_order_placement('buy', bid_qty, bid_price, self.active_bid_id)
+            await self._log_order_placement('sell', ask_qty, ask_price, self.active_ask_id)
+            
         except Exception as e:
             logger.error(f"❌ Error placing orders: {e}", exc_info=True)
             await asyncio.sleep(5)
@@ -308,6 +312,32 @@ class SpreadBot:
             except Exception as e:
                 logger.debug(f"Could not cancel ask: {e}")
             self.active_ask_id = None
+    
+    async def _log_order_placement(self, side: str, amount: Decimal, price: Decimal, order_id: str):
+        """Log limit order placement to database for recent activity display."""
+        if not self.db_session:
+            return
+        
+        try:
+            from sqlalchemy import text
+            # Log order placement (will show in recent activity as "Buy order placed" / "Sell order placed")
+            # Note: This creates a separate entry from filled trades, so both placement and fill will show
+            self.db_session.execute(text("""
+                INSERT INTO trade_logs (bot_id, side, amount, price, cost_usd, order_id, created_at)
+                VALUES (:bot_id, :side, :amount, :price, :cost_usd, :order_id, NOW())
+            """), {
+                'bot_id': self.bot_id,
+                'side': f"{side}_placed",  # Prefix to distinguish: "buy_placed" vs "buy" (filled)
+                'amount': float(amount),
+                'price': float(price),
+                'cost_usd': float(amount * price),  # Estimated cost
+                'order_id': order_id
+            })
+            self.db_session.commit()
+            logger.debug(f"📝 Logged order placement: {side.upper()} {amount} @ {price} (order #{order_id})")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not log order placement: {e}")
+            self.db_session.rollback()
     
     async def _log_trade(self, side: str, amount: Decimal, price: Decimal, order_id: str):
         """Log filled trade to database."""
