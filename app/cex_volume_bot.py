@@ -603,7 +603,8 @@ class CEXVolumeBot:
             
             expected_value = amount * current_price
             
-            logger.info(f"Placing {side.upper()} market order: {amount:.6f} {self.symbol} @ ~{current_price:.6f}")
+            logger.info(f"🔄 EXECUTING TRADE NOW - Placing {side.upper()} MARKET order: {amount:.6f} {self.symbol} @ ~{current_price:.6f}")
+            logger.info(f"📊 Order details: side={side}, amount={amount}, symbol={self.symbol}, exchange={self.exchange_name}")
             
             # Exchange-specific params
             order_params = {}
@@ -612,6 +613,7 @@ class CEXVolumeBot:
             
             # Place MARKET order (not limit!) - instant fill, real volume
             # Use create_market_order for better compatibility
+            logger.info(f"🚀 CALLING create_market_{side}_order() NOW - This should execute immediately")
             if side == "buy":
                 order = await self.exchange.create_market_buy_order(
                     symbol=self.symbol,
@@ -624,6 +626,8 @@ class CEXVolumeBot:
                     amount=amount,
                     params=order_params
                 )
+            
+            logger.info(f"✅ Order placed successfully - Order result: {order}")
             
             # Get filled price and amount
             order_id = order.get("id")
@@ -666,7 +670,11 @@ class CEXVolumeBot:
                 # Re-raise if it's a different AttributeError
                 raise
         except Exception as e:
-            logger.error(f"Trade execution failed: {e}", exc_info=True)
+            logger.error(f"❌ ORDER FAILED: Trade execution failed: {e}", exc_info=True)
+            logger.error(f"❌ ORDER FAILED: Exception type: {type(e).__name__}")
+            logger.error(f"❌ ORDER FAILED: Exception message: {str(e)}")
+            import traceback
+            logger.error(f"❌ ORDER FAILED: Full traceback:\n{traceback.format_exc()}")
             return None
     
     async def run_single_cycle(self) -> Optional[dict]:
@@ -675,13 +683,18 @@ class CEXVolumeBot:
         
         Returns trade info if successful, None if skipped or failed.
         """
+        logger.info(f"🔄 Starting trade cycle for bot {self.bot_id} - Checking if should continue...")
         if not self.should_continue():
+            logger.info(f"⏸️  Trade cycle skipped - Daily target reached or bot stopped")
             return None
         
         # Get current state
+        logger.info(f"📊 Getting current price for {self.symbol}...")
         price = await self.get_price()
         if not price:
+            logger.error(f"❌ Could not get price for {self.symbol} - skipping trade")
             return None
+        logger.info(f"✅ Current price: ${price:.6f}")
         
         # SKIP BALANCE CHECK - Try to place order directly
         # If balance check fails but credentials are valid, we can still try trading
@@ -721,6 +734,7 @@ class CEXVolumeBot:
                     logger.info(f"Using minimum trade size (no valid size calculated): ${min_usd} = {amount} {self.symbol.split('/')[0]}")
         
         # Execute trade
+        logger.info(f"🚀 EXECUTING TRADE NOW - Side: {side.upper()}, Amount: {amount:.6f}, Price: ${price:.6f}")
         result = await self.execute_trade(side, amount)
         
         if result:

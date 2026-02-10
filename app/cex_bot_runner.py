@@ -389,9 +389,12 @@ class CEXBotRunner:
                 last_trade = bot_record.get("last_trade_time")
                 interval = bot.get_next_interval()
                 
+                logger.info(f"🔍 Bot {bot_id} - Checking trade timing: last_trade={last_trade}, interval={interval}s ({interval/60:.1f} min)")
+                
                 should_trade = False
                 if last_trade is None:
                     should_trade = True
+                    logger.info(f"✅ Bot {bot_id} - First trade (no last_trade_time) - WILL TRADE NOW")
                 else:
                     # Handle timezone awareness - ensure UTC
                     try:
@@ -404,13 +407,16 @@ class CEXBotRunner:
                         
                         elapsed = (datetime.now(timezone.utc) - last_trade).total_seconds()
                         should_trade = elapsed >= interval
+                        logger.info(f"🔍 Bot {bot_id} - Elapsed: {elapsed:.0f}s / {interval}s - {'WILL TRADE' if should_trade else 'WAITING'}")
                     except Exception as e:
                         logger.error(f"Error calculating trade interval for bot {bot_id}: {e}")
                         # If datetime comparison fails, allow trade (safer)
                         should_trade = True
+                        logger.info(f"✅ Bot {bot_id} - Interval calculation error - WILL TRADE (safer)")
                 
                 if should_trade:
                     # Execute trade
+                    logger.info(f"🔄 EXECUTING TRADE NOW - Bot {bot_id} - Interval elapsed, calling run_single_cycle()")
                     result = await bot.run_single_cycle()
                     
                     if result:
