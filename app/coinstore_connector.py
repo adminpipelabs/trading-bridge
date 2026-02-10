@@ -344,9 +344,10 @@ class CoinstoreConnector:
                 params['ordQty'] = str(amount)
         else:
             # LIMIT orders: use quantity and price
+            # Per Coinstore docs: use ordQty and ordPrice (not 'price')
             params['ordQty'] = str(amount)
             if price:
-                params['price'] = str(price)
+                params['ordPrice'] = str(price)  # Coinstore uses 'ordPrice' not 'price'
         
         # Log payload before sending
         logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")
