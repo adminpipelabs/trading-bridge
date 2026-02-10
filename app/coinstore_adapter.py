@@ -111,28 +111,6 @@ class CoinstoreExchange:
                     'timestamp': int(time.time() * 1000),
                 }
             else:
-                # Fallback: try old format (data as object) - shouldn't happen with /v1/ticker/price
-                ticker_data = data.get('data', {})
-                if isinstance(ticker_data, dict):
-                    last_price = ticker_data.get('lastPrice') or ticker_data.get('last') or ticker_data.get('close') or ticker_data.get('price')
-                    if not last_price:
-                        logger.error(f"Ticker data missing price: {ticker_data}")
-                        raise Exception(f"API error: No price in ticker data")
-                    
-                    return {
-                        'symbol': symbol,
-                        'last': float(last_price),
-                        'bid': float(ticker_data.get('bidPrice', 0) or ticker_data.get('bid', 0) or last_price),
-                        'ask': float(ticker_data.get('askPrice', 0) or ticker_data.get('ask', 0) or last_price),
-                        'high': float(ticker_data.get('high24h', 0) or ticker_data.get('high', 0)),
-                        'low': float(ticker_data.get('low24h', 0) or ticker_data.get('low', 0)),
-                        'volume': float(ticker_data.get('volume24h', 0) or ticker_data.get('volume', 0)),
-                            'timestamp': int(time.time() * 1000),
-                        }
-                    else:
-                        logger.error(f"Ticker response has unexpected data format: {data}")
-                        raise Exception(f"API error: Unexpected data format")
-            else:
                 error_msg = data.get('msg') or data.get('message') or f"Code {code}"
                 logger.error(f"Ticker API error for {symbol}: code={code}, msg={error_msg}, full response: {data}")
                 raise Exception(f"API error: {error_msg}")
