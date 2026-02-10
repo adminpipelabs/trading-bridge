@@ -108,14 +108,16 @@ async def test_spread_bot_operations():
     print("TEST 2: Place Limit Buy Order (5% Below Market)")
     print("=" * 80)
     try:
-        # Calculate test price: 5% below market (won't fill)
-        test_price = Decimal(str(last_price)) * Decimal('0.95')
-        test_amount = Decimal('100')  # Small test amount
+        # Calculate test price: well below market (won't fill)
+        # Use $0.009 as test price (well below current market)
+        test_price = Decimal('0.009')
+        # Calculate amount for ~$10 worth: $10 / $0.009 = ~1111 SHARP
+        test_amount = Decimal('1200')  # ~$10.80 worth at $0.009
         
         print(f"   Market price: ${last_price}")
-        print(f"   Test buy price: ${test_price} (5% below)")
-        print(f"   Test amount: {test_amount} SHARP")
-        print(f"   Placing order...")
+        print(f"   Test buy price: ${test_price} (well below market, won't fill)")
+        print(f"   Test amount: {test_amount} SHARP (~${test_amount * test_price:.2f} worth)")
+        print(f"   Placing LIMIT order (no timestamp in payload)...")
         
         order = await exchange.create_limit_order(
             symbol=symbol,

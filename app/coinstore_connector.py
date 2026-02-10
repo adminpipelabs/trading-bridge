@@ -313,21 +313,22 @@ class CoinstoreConnector:
         # Format symbol (SHARP/USDT -> SHARPUSDT)
         symbol_formatted = symbol.replace('/', '')
         
-        # Generate timestamp ONCE - will be used for both payload and expires header
-        # This ensures they match exactly (critical for signature validation)
+        # Generate timestamp ONCE - will be used for expires header
+        # Note: timestamp goes in HEADER (X-CS-EXPIRES), NOT in payload for LIMIT orders
         timestamp_ms = int(time.time() * 1000)
         
         # Build payload per Coinstore docs
-        # Note: timestamp is REQUIRED per API docs parameter table
+        # CRITICAL: MARKET orders include timestamp in payload, LIMIT orders do NOT
         params = {
             'symbol': symbol_formatted,
             'side': side.upper(),  # 'BUY' or 'SELL'
             'ordType': order_type.upper(),  # 'MARKET' or 'LIMIT'
-            'timestamp': timestamp_ms,  # Milliseconds timestamp (REQUIRED per docs)
         }
         
         # For MARKET orders: BUY uses ordAmt (USDT), SELL uses ordQty (tokens)
+        # MARKET orders include timestamp in payload
         if order_type.lower() == 'market':
+            params['timestamp'] = timestamp_ms  # MARKET orders need timestamp in payload
             if side.lower() == 'buy':
                 # Market BUY: spend X USDT (ordAmt)
                 # amount is already in USDT if is_usdt_amount=True, otherwise convert
@@ -344,7 +345,8 @@ class CoinstoreConnector:
                 params['ordQty'] = str(amount)
         else:
             # LIMIT orders: use quantity and price
-            # Per Coinstore docs: use ordQty and ordPrice (not 'price')
+            # Per Coinstore docs: LIMIT orders do NOT include timestamp in payload
+            # Only ordPrice, ordQty, symbol, side, ordType
             params['ordQty'] = str(amount)
             if price:
                 params['ordPrice'] = str(price)  # Coinstore uses 'ordPrice' not 'price'
