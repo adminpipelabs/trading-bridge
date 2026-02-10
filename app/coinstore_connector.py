@@ -237,7 +237,8 @@ class CoinstoreConnector:
         side: str,  # 'buy' or 'sell'
         order_type: str,  # 'market' or 'limit'
         amount: float,
-        price: Optional[float] = None
+        price: Optional[float] = None,
+        is_usdt_amount: bool = False  # True if amount is in USDT (for MARKET BUY), False if in base currency
     ) -> Dict[str, Any]:
         """
         Place an order on Coinstore.
@@ -262,13 +263,21 @@ class CoinstoreConnector:
             'timestamp': int(time.time() * 1000),  # Milliseconds timestamp
         }
         
-        # For MARKET orders: BUY uses ordAmt, SELL uses ordQty
+        # For MARKET orders: BUY uses ordAmt (USDT), SELL uses ordQty (tokens)
         if order_type.lower() == 'market':
             if side.lower() == 'buy':
                 # Market BUY: spend X USDT (ordAmt)
-                params['ordAmt'] = str(amount)
+                # amount is already in USDT if is_usdt_amount=True, otherwise convert
+                if is_usdt_amount:
+                    params['ordAmt'] = str(amount)
+                else:
+                    # If amount is in base currency, we need price to convert
+                    # This shouldn't happen if called from adapter correctly
+                    logger.warning(f"MARKET BUY received base amount without USDT conversion - using as-is")
+                    params['ordAmt'] = str(amount)
             else:
                 # Market SELL: sell X tokens (ordQty)
+                # amount is in base currency (tokens)
                 params['ordQty'] = str(amount)
         else:
             # LIMIT orders: use quantity and price

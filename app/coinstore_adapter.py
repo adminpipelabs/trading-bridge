@@ -192,12 +192,37 @@ class CoinstoreExchange:
             raise
     
     async def create_market_buy_order(self, symbol: str, amount: float, params: Optional[Dict] = None) -> Dict[str, Any]:
-        """Create market buy order."""
-        return await self.connector.place_order(symbol, 'buy', 'market', amount)
+        """
+        Create market buy order.
+        
+        For Coinstore MARKET BUY:
+        - amount is in base currency (tokens)
+        - Need to convert to USDT amount (ordAmt) using current price
+        """
+        # Get current price to calculate USDT amount
+        ticker = await self.fetch_ticker(symbol)
+        current_price = ticker.get('last') or ticker.get('close')
+        if not current_price:
+            raise ValueError(f"Could not get current price for {symbol}")
+        
+        # Convert base amount to USDT amount for MARKET BUY
+        usdt_amount = amount * current_price
+        
+        logger.info(f"🔵 MARKET BUY: {amount} tokens @ {current_price} = {usdt_amount} USDT")
+        
+        # Pass USDT amount (Coinstore expects ordAmt for MARKET BUY)
+        return await self.connector.place_order(symbol, 'buy', 'market', usdt_amount, is_usdt_amount=True)
     
     async def create_market_sell_order(self, symbol: str, amount: float, params: Optional[Dict] = None) -> Dict[str, Any]:
-        """Create market sell order."""
-        return await self.connector.place_order(symbol, 'sell', 'market', amount)
+        """
+        Create market sell order.
+        
+        For Coinstore MARKET SELL:
+        - amount is in base currency (tokens)
+        - Use ordQty directly (sell X tokens)
+        """
+        logger.info(f"🔵 MARKET SELL: {amount} tokens")
+        return await self.connector.place_order(symbol, 'sell', 'market', amount, is_usdt_amount=False)
     
     async def create_limit_buy_order(self, symbol: str, amount: float, price: float, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Create limit buy order."""
