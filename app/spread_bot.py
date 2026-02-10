@@ -51,7 +51,7 @@ class SpreadBot:
             spread_bps = Decimal(str(config.get('spread_bps', 200)))
             self.spread_percent = spread_bps / Decimal('10000') * Decimal('100')  # Convert to percentage
         else:
-            self.spread_percent = Decimal('0.3')  # Default 0.3%
+            self.spread_percent = Decimal('1.0')  # Default 1.0% (wider spread for testing)
         
         # Order size: support both order_size_usdt and order_size
         if 'order_size_usdt' in config:
@@ -66,7 +66,7 @@ class SpreadBot:
             else:
                 self.order_size_usd = order_size
         else:
-            self.order_size_usd = Decimal('10')  # Default $10
+            self.order_size_usd = Decimal('10')  # Default $10 USDT
         
         # Poll interval: support both poll_interval_seconds and default
         self.poll_interval = config.get('poll_interval_seconds', config.get('poll_interval', 5))
