@@ -115,18 +115,18 @@ class CoinstoreExchange:
                 ticker_data = data.get('data', {})
                 if isinstance(ticker_data, dict):
                     last_price = ticker_data.get('lastPrice') or ticker_data.get('last') or ticker_data.get('close') or ticker_data.get('price')
-                        if not last_price:
-                            logger.error(f"Ticker data missing price: {ticker_data}")
-                            raise Exception(f"API error: No price in ticker data")
-                        
-                        return {
-                            'symbol': symbol,
-                            'last': float(last_price),
-                            'bid': float(ticker_data.get('bidPrice', 0) or ticker_data.get('bid', 0) or last_price),
-                            'ask': float(ticker_data.get('askPrice', 0) or ticker_data.get('ask', 0) or last_price),
-                            'high': float(ticker_data.get('high24h', 0) or ticker_data.get('high', 0)),
-                            'low': float(ticker_data.get('low24h', 0) or ticker_data.get('low', 0)),
-                            'volume': float(ticker_data.get('volume24h', 0) or ticker_data.get('volume', 0)),
+                    if not last_price:
+                        logger.error(f"Ticker data missing price: {ticker_data}")
+                        raise Exception(f"API error: No price in ticker data")
+                    
+                    return {
+                        'symbol': symbol,
+                        'last': float(last_price),
+                        'bid': float(ticker_data.get('bidPrice', 0) or ticker_data.get('bid', 0) or last_price),
+                        'ask': float(ticker_data.get('askPrice', 0) or ticker_data.get('ask', 0) or last_price),
+                        'high': float(ticker_data.get('high24h', 0) or ticker_data.get('high', 0)),
+                        'low': float(ticker_data.get('low24h', 0) or ticker_data.get('low', 0)),
+                        'volume': float(ticker_data.get('volume24h', 0) or ticker_data.get('volume', 0)),
                             'timestamp': int(time.time() * 1000),
                         }
                     else:
