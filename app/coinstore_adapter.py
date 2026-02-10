@@ -61,7 +61,12 @@ class CoinstoreExchange:
             return {}
     
     async def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
-        """Fetch ticker data."""
+        """Fetch ticker data.
+        
+        Coinstore docs: GET /v1/ticker/price?symbol=SYMBOL
+        Returns: {"code": 0, "data": [{"id": 1, "symbol": "btcusdt", "price": "400"}, ...]}
+        Note: API returns ALL tickers, we need to find our symbol in the list
+        """
         try:
             data = await self.connector.get_ticker(symbol)
             logger.debug(f"Ticker API response for {symbol}: code={data.get('code')}, keys={list(data.keys())}")
@@ -69,26 +74,64 @@ class CoinstoreExchange:
             # Coinstore returns code as 0 (int) or "0" (string) for success
             code = data.get('code')
             if code == 0 or code == "0":
-                ticker_data = data.get('data', {})
-                if not ticker_data:
-                    logger.error(f"Ticker response has no data field: {data}")
-                    raise Exception(f"API error: No data in response")
+                # /v1/ticker/price returns data as array of ALL tickers
+                ticker_list = data.get('data', [])
+                if not isinstance(ticker_list, list):
+                    raise Exception(f"API error: Expected list in data field, got {type(ticker_list)}")
                 
-                last_price = ticker_data.get('lastPrice') or ticker_data.get('last')
-                if not last_price:
-                    logger.error(f"Ticker data missing lastPrice: {ticker_data}")
-                    raise Exception(f"API error: No lastPrice in ticker data")
+                # Find our symbol in the list (case-insensitive)
+                symbol_formatted = symbol.replace('/', '').upper()
+                ticker_item = None
+                for item in ticker_list:
+                    if isinstance(item, dict):
+                        item_symbol = item.get('symbol', '').upper()
+                        if item_symbol == symbol_formatted:
+                            ticker_item = item
+                            break
                 
+                if not ticker_item:
+                    logger.error(f"Symbol {symbol_formatted} not found in ticker response. Available symbols: {[t.get('symbol') for t in ticker_list[:10] if isinstance(t, dict)]}")
+                    raise Exception(f"API error: Symbol {symbol} not found in ticker data")
+                
+                price = ticker_item.get('price')
+                if not price or price == "0":
+                    logger.error(f"Ticker price missing or zero for {symbol}: {ticker_item}")
+                    raise Exception(f"API error: No valid price for {symbol}")
+                
+                # For /v1/ticker/price, we only get price, so use it as last
                 return {
                     'symbol': symbol,
-                    'last': float(last_price),
-                    'bid': float(ticker_data.get('bidPrice', 0) or ticker_data.get('bid', 0)),
-                    'ask': float(ticker_data.get('askPrice', 0) or ticker_data.get('ask', 0)),
-                    'high': float(ticker_data.get('high24h', 0) or ticker_data.get('high', 0)),
-                    'low': float(ticker_data.get('low24h', 0) or ticker_data.get('low', 0)),
-                    'volume': float(ticker_data.get('volume24h', 0) or ticker_data.get('volume', 0)),
+                    'last': float(price),
+                    'close': float(price),  # Use price as close
+                    'bid': float(price),  # Approximate - /v1/ticker/price doesn't provide bid/ask
+                    'ask': float(price),  # Approximate
+                    'high': 0.0,  # Not available from /v1/ticker/price
+                    'low': 0.0,
+                    'volume': 0.0,
                     'timestamp': int(time.time() * 1000),
                 }
+            else:
+                # Fallback: try old format (data as object) - shouldn't happen with /v1/ticker/price
+                ticker_data = data.get('data', {})
+                if isinstance(ticker_data, dict):
+                    last_price = ticker_data.get('lastPrice') or ticker_data.get('last') or ticker_data.get('close') or ticker_data.get('price')
+                        if not last_price:
+                            logger.error(f"Ticker data missing price: {ticker_data}")
+                            raise Exception(f"API error: No price in ticker data")
+                        
+                        return {
+                            'symbol': symbol,
+                            'last': float(last_price),
+                            'bid': float(ticker_data.get('bidPrice', 0) or ticker_data.get('bid', 0) or last_price),
+                            'ask': float(ticker_data.get('askPrice', 0) or ticker_data.get('ask', 0) or last_price),
+                            'high': float(ticker_data.get('high24h', 0) or ticker_data.get('high', 0)),
+                            'low': float(ticker_data.get('low24h', 0) or ticker_data.get('low', 0)),
+                            'volume': float(ticker_data.get('volume24h', 0) or ticker_data.get('volume', 0)),
+                            'timestamp': int(time.time() * 1000),
+                        }
+                    else:
+                        logger.error(f"Ticker response has unexpected data format: {data}")
+                        raise Exception(f"API error: Unexpected data format")
             else:
                 error_msg = data.get('msg') or data.get('message') or f"Code {code}"
                 logger.error(f"Ticker API error for {symbol}: code={code}, msg={error_msg}, full response: {data}")
