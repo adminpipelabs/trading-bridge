@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Security
     API_KEY: str = ""  # Optional API key for securing the bridge
     
+    # Database
+    DATABASE_URL: str = ""  # PostgreSQL connection string
+    
     # Rate limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW: int = 60  # seconds
@@ -26,6 +29,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"  # Allow extra fields like DATABASE_URL from .env
         extra = "allow"  # Allow extra fields like DATABASE_URL
 
 
