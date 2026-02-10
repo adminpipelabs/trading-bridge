@@ -119,7 +119,10 @@ export function BotCard({ bot }: { bot: BotData }) {
         </div>
 
         {/* Metrics grid */}
-        <div className="mt-4 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className={cn(
+          "mt-4 grid gap-x-6 gap-y-3",
+          bot.type === "volume" ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+        )}>
           <div className="min-w-0">
             <span className="text-xs text-muted-foreground">Available</span>
             <p className="truncate font-mono text-xs text-foreground sm:text-sm">
@@ -136,27 +139,43 @@ export function BotCard({ bot }: { bot: BotData }) {
             <span className="text-xs text-muted-foreground">{bot.metric}</span>
             <p className="truncate font-mono text-xs text-foreground sm:text-sm">{bot.metricValue}</p>
           </div>
-          <div className="flex items-end justify-between gap-2 sm:items-center">
-            <div>
-              <span className="text-xs text-muted-foreground">{"P&L"}</span>
-              <p
-                className={cn(
-                  "font-mono text-xs font-semibold sm:text-sm",
-                  bot.pnlPositive ? "text-primary" : "text-destructive"
-                )}
+          {/* P&L - Only show for Spread Bot, not Volume Bot */}
+          {bot.type === "spread" && (
+            <div className="flex items-end justify-between gap-2 sm:items-center">
+              <div>
+                <span className="text-xs text-muted-foreground">{"P&L"}</span>
+                <p
+                  className={cn(
+                    "font-mono text-xs font-semibold sm:text-sm",
+                    bot.pnlPositive ? "text-primary" : "text-destructive"
+                  )}
+                >
+                  {bot.pnl}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 border-border bg-transparent text-xs text-primary hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
               >
-                {bot.pnl}
-              </p>
+                <RefreshCw className="h-3 w-3" />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 gap-1.5 border-border bg-transparent text-xs text-primary hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
-            >
-              <RefreshCw className="h-3 w-3" />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
-          </div>
+          )}
+          {/* Refresh button for Volume Bot (without P&L) */}
+          {bot.type === "volume" && (
+            <div className="flex items-end justify-end gap-2 sm:items-center">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 border-border bg-transparent text-xs text-primary hover:border-primary/30 hover:bg-primary/5 hover:text-primary"
+              >
+                <RefreshCw className="h-3 w-3" />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Recent Activity Toggle */}
