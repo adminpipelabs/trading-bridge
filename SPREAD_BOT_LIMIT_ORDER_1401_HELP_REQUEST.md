@@ -167,9 +167,29 @@ order = await self.exchange.create_limit_order(
 
 ---
 
-**Status:** ⏸️ **WAITING FOR DEV INPUT**
+**Status:** ⏸️ **STILL FAILING AFTER TIMESTAMP REMOVAL**
 
-Please review and provide guidance on:
-- Correct LIMIT order parameters for Coinstore
-- Any permission/account requirements
-- Reference to working open source implementation
+**Update:** Removed `timestamp` from LIMIT order payload as suggested, but still getting 1401.
+
+**Current LIMIT order payload (no timestamp):**
+```json
+{
+    "symbol": "SHARPUSDT",
+    "side": "BUY",
+    "ordType": "LIMIT",
+    "ordQty": "1200",
+    "ordPrice": "0.009"
+}
+```
+
+**Still getting:** `{"message":"Unauthorized","code":1401}`
+
+**Questions:**
+1. Is the parameter order important? (symbol, side, ordType, ordQty, ordPrice)
+2. Should `ordQty` and `ordPrice` be integers vs strings?
+3. Are there any other required fields we're missing?
+4. Could this be an API key permission issue specific to LIMIT orders?
+
+**Please verify:**
+- Exact payload format from a working Coinstore LIMIT order implementation
+- Any Coinstore-specific requirements we might be missing
