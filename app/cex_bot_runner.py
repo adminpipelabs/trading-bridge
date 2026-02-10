@@ -30,15 +30,22 @@ class CEXBotRunner:
     async def start(self):
         """Start the bot runner."""
         self.running = True
-        logger.info("CEX Bot Runner started")
+        logger.info("=" * 80)
+        logger.info("🚀 CEX Bot Runner STARTING - Loop will run every 10 seconds")
+        logger.info("=" * 80)
         
+        cycle_count = 0
         while self.running:
             try:
+                cycle_count += 1
+                logger.info(f"🔄 CEX Bot Runner cycle #{cycle_count} - Running now...")
                 await self.run_cycle()
+                logger.info(f"✅ CEX Bot Runner cycle #{cycle_count} completed")
             except Exception as e:
-                logger.error(f"Bot runner cycle error: {e}", exc_info=True)
+                logger.error(f"❌ Bot runner cycle error: {e}", exc_info=True)
             
             # Short sleep between cycles
+            logger.info(f"💤 Sleeping 10 seconds before next cycle...")
             await asyncio.sleep(10)
     
     async def stop(self):
