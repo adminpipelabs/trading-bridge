@@ -39,11 +39,41 @@ class SpreadBot:
         self.symbol = symbol
         self.db_session = db_session
         
-        # Configuration with defaults
-        self.spread_percent = Decimal(str(config.get('spread_percent', 0.3)))  # 0.3% default
-        self.order_size_usd = Decimal(str(config.get('order_size_usdt', 10)))  # $10 per side
-        self.poll_interval = config.get('poll_interval_seconds', 5)  # Check fills every 5s
-        self.refresh_interval = config.get('refresh_interval_seconds', 60)  # Refresh orders every 60s
+        # Configuration with defaults - support both old and new config formats
+        # Old format: spread_bps (200 = 2%), order_size (1000), refresh_interval (30)
+        # New format: spread_percent (0.3 = 0.3%), order_size_usdt (10), poll_interval_seconds (5), refresh_interval_seconds (60)
+        
+        # Spread: support both spread_bps (basis points) and spread_percent (percentage)
+        if 'spread_percent' in config:
+            self.spread_percent = Decimal(str(config.get('spread_percent', 0.3)))
+        elif 'spread_bps' in config:
+            # Convert basis points to percentage (200 bps = 2% = 0.02)
+            spread_bps = Decimal(str(config.get('spread_bps', 200)))
+            self.spread_percent = spread_bps / Decimal('10000') * Decimal('100')  # Convert to percentage
+        else:
+            self.spread_percent = Decimal('0.3')  # Default 0.3%
+        
+        # Order size: support both order_size_usdt and order_size
+        if 'order_size_usdt' in config:
+            self.order_size_usd = Decimal(str(config.get('order_size_usdt', 10)))
+        elif 'order_size' in config:
+            # Old format might be in tokens, but we'll treat as USD for now
+            order_size = Decimal(str(config.get('order_size', 1000)))
+            # If it's > 100, assume it's old token-based config, convert to USD estimate
+            if order_size > 100:
+                logger.warning(f"⚠️ Old config format detected: order_size={order_size}. Assuming USD value.")
+                self.order_size_usd = Decimal('10')  # Use safe default
+            else:
+                self.order_size_usd = order_size
+        else:
+            self.order_size_usd = Decimal('10')  # Default $10
+        
+        # Poll interval: support both poll_interval_seconds and default
+        self.poll_interval = config.get('poll_interval_seconds', config.get('poll_interval', 5))
+        
+        # Refresh interval: support both refresh_interval_seconds and refresh_interval
+        self.refresh_interval = config.get('refresh_interval_seconds', config.get('refresh_interval', 60))
+        
         self.price_decimals = config.get('price_decimals', 8)
         self.amount_decimals = config.get('amount_decimals', 6)
         
@@ -142,20 +172,32 @@ class SpreadBot:
                 open_ids = set()
                 
                 # Parse open orders (handle different response formats)
-                if isinstance(open_orders, dict):
-                    orders_list = open_orders.get('data', []) or open_orders.get('orders', []) or []
-                elif isinstance(open_orders, list):
+                # CoinstoreAdapter.fetch_open_orders returns a list directly
+                if isinstance(open_orders, list):
                     orders_list = open_orders
+                elif isinstance(open_orders, dict):
+                    # Handle dict format (e.g., {'data': [...], 'code': 0})
+                    orders_list = open_orders.get('data', []) or open_orders.get('orders', []) or []
                 else:
+                    logger.warning(f"⚠️ Unexpected open_orders format: {type(open_orders)}")
                     orders_list = []
                 
                 for order in orders_list:
-                    order_id = str(order.get('id') or order.get('orderId') or order.get('ordId'))
-                    if order_id:
+                    # Handle different order ID field names
+                    order_id = str(
+                        order.get('id') or 
+                        order.get('orderId') or 
+                        order.get('ordId') or
+                        order.get('order_id') or
+                        ''
+                    )
+                    if order_id and order_id != 'None' and order_id != '':
                         open_ids.add(order_id)
                 
                 bid_open = self.active_bid_id in open_ids if self.active_bid_id else False
                 ask_open = self.active_ask_id in open_ids if self.active_ask_id else False
+                
+                logger.debug(f"🔍 Open orders check: bid_id={self.active_bid_id} (open={bid_open}), ask_id={self.active_ask_id} (open={ask_open}), total_open={len(open_ids)}")
                 
                 # Step 7: Handle fills
                 if not bid_open or not ask_open:

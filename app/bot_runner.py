@@ -1341,12 +1341,17 @@ class BotRunner:
                 else:
                     config = config_raw
             
-            # Set defaults
-            config.setdefault('spread_bps', 200)  # 2% spread
-            config.setdefault('order_size', 1000)
-            config.setdefault('refresh_interval', 30)
+            # Set defaults - support both old and new format
+            # Old: spread_bps (200 = 2%), order_size (1000)
+            # New: spread_percent (0.3 = 0.3%), order_size_usdt (10)
+            if 'spread_percent' not in config:
+                config.setdefault('spread_bps', 30)  # 0.3% = 30 bps (new default)
+            if 'order_size_usdt' not in config:
+                config.setdefault('order_size', 10)  # $10 USD (new default)
+            config.setdefault('refresh_interval', 60)  # 60 seconds
+            config.setdefault('poll_interval_seconds', 5)  # Check fills every 5s
             config.setdefault('price_decimals', 8)
-            config.setdefault('amount_decimals', 2)
+            config.setdefault('amount_decimals', 6)
             
             # Get proxy URL
             proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
