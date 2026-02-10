@@ -318,17 +318,16 @@ class CoinstoreConnector:
         timestamp_ms = int(time.time() * 1000)
         
         # Build payload per Coinstore docs
-        # CRITICAL: MARKET orders include timestamp in payload, LIMIT orders do NOT
+        # CRITICAL: Both MARKET and LIMIT orders require timestamp in payload
         params = {
             'symbol': symbol_formatted,
             'side': side.upper(),  # 'BUY' or 'SELL'
             'ordType': order_type.upper(),  # 'MARKET' or 'LIMIT'
+            'timestamp': timestamp_ms,  # REQUIRED for both MARKET and LIMIT orders
         }
         
         # For MARKET orders: BUY uses ordAmt (USDT), SELL uses ordQty (tokens)
-        # MARKET orders include timestamp in payload
         if order_type.lower() == 'market':
-            params['timestamp'] = timestamp_ms  # MARKET orders need timestamp in payload
             if side.lower() == 'buy':
                 # Market BUY: spend X USDT (ordAmt)
                 # amount is already in USDT if is_usdt_amount=True, otherwise convert
@@ -345,17 +344,12 @@ class CoinstoreConnector:
                 params['ordQty'] = str(amount)
         else:
             # LIMIT orders: use quantity and price
-            # Per Coinstore docs: LIMIT orders do NOT include timestamp in payload
-            # Only ordPrice, ordQty, symbol, side, ordType
-            # CRITICAL: Must match symbol precision requirements
-            # SHARPUSDT: tickSz=6 (price needs 6 decimals), lotSz=2 (quantity needs 2 decimals)
+            # CRITICAL: ordPrice must be a NUMBER (not string), ordQty must be a STRING
+            # Coinstore returns 1401 when payload types are wrong (misleading error code)
             if price:
-                # Format price with 6 decimal places (SHARPUSDT tickSz=6)
-                # Always include trailing zeros to match precision
-                params['ordPrice'] = f"{price:.6f}"
-            # Format amount with 2 decimal places (SHARPUSDT lotSz=2)
-            # Always include trailing zeros to match precision
-            params['ordQty'] = f"{amount:.2f}"
+                params['ordPrice'] = float(price)  # NUMBER type (no quotes in JSON)
+            # Format amount as string with 2 decimal places (SHARPUSDT lotSz=2)
+            params['ordQty'] = f"{amount:.2f}"  # STRING type (with quotes in JSON)
         
         # Log payload before sending
         logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")
