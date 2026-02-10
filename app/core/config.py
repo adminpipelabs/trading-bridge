@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"  # Allow extra fields like DATABASE_URL
 
 
 settings = Settings()
