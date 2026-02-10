@@ -1,6 +1,17 @@
-# Spread Bot 1401 Unauthorized Error - Developer Help Request
+# Spread Bot 1401 Unauthorized Error - SOLUTION FOUND ✅
 
-## Current Status
+## ✅ RESOLVED
+
+**Date:** February 10, 2026  
+**Environment:** Production (Hetzner VPS)  
+**Root Cause:** API Key missing **Read** permission (Trade permission works, Read does not)  
+**Solution:** Enable Read permission on Coinstore API key dashboard
+
+**See `SPREAD_BOT_1401_SOLUTION.md` for complete fix instructions.**
+
+---
+
+## Original Issue (RESOLVED)
 
 **Date:** February 10, 2026  
 **Environment:** Production (Hetzner VPS)  
