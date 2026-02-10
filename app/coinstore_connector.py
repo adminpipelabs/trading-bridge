@@ -347,9 +347,14 @@ class CoinstoreConnector:
             # LIMIT orders: use quantity and price
             # Per Coinstore docs: LIMIT orders do NOT include timestamp in payload
             # Only ordPrice, ordQty, symbol, side, ordType
-            params['ordQty'] = str(amount)
+            # Format numbers as strings without decimal if whole number
             if price:
-                params['ordPrice'] = str(price)  # Coinstore uses 'ordPrice' not 'price'
+                # Remove trailing zeros and decimal point if whole number
+                price_str = f"{price:.8f}".rstrip('0').rstrip('.')
+                params['ordPrice'] = price_str
+            # Format amount similarly
+            amount_str = f"{amount:.6f}".rstrip('0').rstrip('.')
+            params['ordQty'] = amount_str
         
         # Log payload before sending
         logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")
