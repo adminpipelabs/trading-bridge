@@ -1917,58 +1917,63 @@ async def get_bot_balance_and_volume(bot_id: str, db: Session = Depends(get_db))
                 "total_trades": len(all_trades)
             }
         
-        # Calculate P&L from trades (FIFO method)
-        try:
-            positions = []  # List of (amount, price) for FIFO
-            total_pnl = 0.0
-            
-            # Trades are already sorted by created_at ASC from query
-            for trade in all_trades:
-                side = trade.get("side", "").lower()
-                amount = float(trade.get("amount") or 0)
-                price = float(trade.get("price") or 0)
+        # Calculate P&L from trades (FIFO method) - ONLY for Spread Bot, not Volume Bot
+        # Volume Bot is for generating volume, not profit tracking - P&L is misleading due to fees
+        if bot.bot_type == "spread":
+            try:
+                positions = []  # List of (amount, price) for FIFO
+                total_pnl = 0.0
                 
-                if amount <= 0 or price <= 0:
-                    continue
+                # Trades are already sorted by created_at ASC from query
+                for trade in all_trades:
+                    side = trade.get("side", "").lower()
+                    amount = float(trade.get("amount") or 0)
+                    price = float(trade.get("price") or 0)
+                    
+                    if amount <= 0 or price <= 0:
+                        continue
+                    
+                    if side == "buy":
+                        # Add to position
+                        positions.append((amount, price))
+                    elif side == "sell":
+                        # Realize P&L using FIFO
+                        remaining_sell = amount
+                        while remaining_sell > 0 and positions:
+                            buy_amount, buy_price = positions.pop(0)
+                            sell_amount = min(remaining_sell, buy_amount)
+                            pnl = (price - buy_price) * sell_amount
+                            total_pnl += pnl
+                            remaining_sell -= sell_amount
+                            if buy_amount > sell_amount:
+                                # Put remaining back
+                                positions.insert(0, (buy_amount - sell_amount, buy_price))
                 
-                if side == "buy":
-                    # Add to position
-                    positions.append((amount, price))
-                elif side == "sell":
-                    # Realize P&L using FIFO
-                    remaining_sell = amount
-                    while remaining_sell > 0 and positions:
-                        buy_amount, buy_price = positions.pop(0)
-                        sell_amount = min(remaining_sell, buy_amount)
-                        pnl = (price - buy_price) * sell_amount
-                        total_pnl += pnl
-                        remaining_sell -= sell_amount
-                        if buy_amount > sell_amount:
-                            # Put remaining back
-                            positions.insert(0, (buy_amount - sell_amount, buy_price))
-            
-            # Calculate unrealized P&L from remaining positions (if we have current price)
-            unrealized_pnl = 0.0
-            if positions and len(all_trades) > 0:
-                # Use last trade price as current price estimate
-                last_trade = all_trades[-1]
-                current_price = float(last_trade.get("price") or 0)
-                if current_price > 0:
-                    for pos_amount, pos_price in positions:
-                        unrealized_pnl += (current_price - pos_price) * pos_amount
-            
-            result["pnl"] = {
-                "total_usd": round(total_pnl, 2),
-                "unrealized_usd": round(unrealized_pnl, 2),
-                "trade_count": len(all_trades)
-            }
-        except Exception as pnl_error:
-            logger.warning(f"Failed to calculate P&L for bot {bot_id}: {pnl_error}", exc_info=True)
-            result["pnl"] = {
-                "total_usd": 0,
-                "unrealized_usd": 0,
-                "trade_count": len(all_trades)
-            }
+                # Calculate unrealized P&L from remaining positions (if we have current price)
+                unrealized_pnl = 0.0
+                if positions and len(all_trades) > 0:
+                    # Use last trade price as current price estimate
+                    last_trade = all_trades[-1]
+                    current_price = float(last_trade.get("price") or 0)
+                    if current_price > 0:
+                        for pos_amount, pos_price in positions:
+                            unrealized_pnl += (current_price - pos_price) * pos_amount
+                
+                result["pnl"] = {
+                    "total_usd": round(total_pnl, 2),
+                    "unrealized_usd": round(unrealized_pnl, 2),
+                    "trade_count": len(all_trades)
+                }
+            except Exception as pnl_error:
+                logger.warning(f"Failed to calculate P&L for bot {bot_id}: {pnl_error}", exc_info=True)
+                result["pnl"] = {
+                    "total_usd": 0,
+                    "unrealized_usd": 0,
+                    "trade_count": len(all_trades)
+                }
+        else:
+            # Volume Bot: Don't include P&L (it's misleading - volume bots are for volume, not profit)
+            logger.debug(f"Skipping P&L calculation for Volume Bot {bot_id} - volume bots track volume, not profit")
     except Exception as e:
         logger.error(f"Error calculating volume for bot {bot_id}: {e}", exc_info=True)
         result["volume"] = None
