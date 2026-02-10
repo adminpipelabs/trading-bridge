@@ -239,18 +239,52 @@ class CoinstoreConnector:
         amount: float,
         price: Optional[float] = None
     ) -> Dict[str, Any]:
-        """Place an order."""
-        endpoint = "/api/v1/order/place"
-        params = {
-            'symbol': symbol.replace('/', ''),
-            'side': side.upper(),
-            'type': order_type.upper(),
-            'quantity': str(amount),
-        }
-        if order_type.lower() == 'limit' and price:
-            params['price'] = str(price)
+        """
+        Place an order on Coinstore.
         
-        return await self._request('POST', endpoint, params, authenticated=True)
+        Per Coinstore API docs:
+        - Endpoint: /trade/order/place
+        - For MARKET orders:
+          * BUY: use ordAmt (spend X USDT)
+          * SELL: use ordQty (sell X tokens)
+        - Must use ordType: "MARKET" (not "LIMIT")
+        """
+        endpoint = "/trade/order/place"
+        
+        # Format symbol (SHARP/USDT -> SHARPUSDT)
+        symbol_formatted = symbol.replace('/', '')
+        
+        # Build payload per Coinstore docs
+        params = {
+            'symbol': symbol_formatted,
+            'side': side.upper(),  # 'BUY' or 'SELL'
+            'ordType': order_type.upper(),  # 'MARKET' or 'LIMIT'
+            'timestamp': int(time.time() * 1000),  # Milliseconds timestamp
+        }
+        
+        # For MARKET orders: BUY uses ordAmt, SELL uses ordQty
+        if order_type.lower() == 'market':
+            if side.lower() == 'buy':
+                # Market BUY: spend X USDT (ordAmt)
+                params['ordAmt'] = str(amount)
+            else:
+                # Market SELL: sell X tokens (ordQty)
+                params['ordQty'] = str(amount)
+        else:
+            # LIMIT orders: use quantity and price
+            params['ordQty'] = str(amount)
+            if price:
+                params['price'] = str(price)
+        
+        # Log payload before sending
+        logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")
+        
+        response = await self._request('POST', endpoint, params, authenticated=True)
+        
+        # Log response
+        logger.info(f"🔵 COINSTORE ORDER RESPONSE: {response}")
+        
+        return response
     
     async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
         """Cancel an order."""
