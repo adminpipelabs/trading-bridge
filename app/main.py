@@ -32,6 +32,12 @@ import logging
 import json
 from datetime import datetime
 import asyncpg
+import hashlib
+import hmac
+import math
+import time
+import requests
+from cryptography.fernet import Fernet
 
 
 class JSONFormatter(logging.Formatter):
@@ -641,3 +647,93 @@ async def debug_env():
         "DATABASE_URL_length": len(db_url_raw),
         "DATABASE_URL_starts_with": db_url_raw[:30] if db_url_raw else "NOT SET"
     }
+
+@app.get("/test/coinstore")
+async def test_coinstore_official():
+    """Test Coinstore API using official documentation example."""
+    from sqlalchemy import create_engine, text
+    
+    DATABASE_URL = os.getenv("DATABASE_URL")
+    ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+    
+    if not DATABASE_URL or not ENCRYPTION_KEY:
+        return {"error": "DATABASE_URL or ENCRYPTION_KEY not set"}
+    
+    try:
+        # Initialize Fernet
+        fernet = Fernet(ENCRYPTION_KEY.encode())
+        
+        # Connect to database
+        engine = create_engine(DATABASE_URL)
+        
+        # Get API credentials from database
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT ec.api_key_encrypted, ec.api_secret_encrypted
+                FROM exchange_credentials ec
+                JOIN clients cl ON cl.id = ec.client_id
+                JOIN bots b ON b.account = cl.account_identifier
+                WHERE b.connector = 'coinstore'
+                LIMIT 1
+            """))
+            
+            row = result.fetchone()
+            if not row:
+                return {"error": "No Coinstore credentials found in database"}
+            
+            api_key_encrypted = row[0]
+            api_secret_encrypted = row[1]
+            
+            # Decrypt
+            api_key = fernet.decrypt(api_key_encrypted.encode()).decode()
+            api_secret = fernet.decrypt(api_secret_encrypted.encode()).decode()
+        
+        # Official Coinstore example (exact from docs)
+        url = "https://api.coinstore.com/api/spot/accountList"
+        api_key_bytes = api_key.encode('utf-8')
+        secret_key_bytes = api_secret.encode('utf-8')
+        
+        expires = int(time.time() * 1000)
+        expires_key = str(math.floor(expires / 30000))
+        expires_key_bytes = expires_key.encode("utf-8")
+        
+        # Step 1: HMAC(secret, expires_key)
+        key = hmac.new(secret_key_bytes, expires_key_bytes, hashlib.sha256).hexdigest()
+        key_bytes = key.encode("utf-8")
+        
+        # Step 2: HMAC(key, payload)
+        payload_dict = {}
+        payload_json = json.dumps(payload_dict)
+        payload_bytes = payload_json.encode("utf-8")
+        
+        signature = hmac.new(key_bytes, payload_bytes, hashlib.sha256).hexdigest()
+        
+        # Headers (exact from official docs)
+        headers = {
+            'X-CS-APIKEY': api_key,
+            'X-CS-SIGN': signature,
+            'X-CS-EXPIRES': str(expires),
+            'exch-language': 'en_US',
+            'Content-Type': 'application/json',
+            'Accept': '*/*',
+            'Connection': 'keep-alive'
+        }
+        
+        # Make request (exact from official docs)
+        response = requests.request("POST", url, headers=headers, data=payload_bytes, timeout=30)
+        
+        return {
+            "status_code": response.status_code,
+            "response_text": response.text,
+            "success": response.status_code == 200,
+            "error_1401": response.status_code == 1401,
+            "api_key_preview": f"{api_key[:10]}...{api_key[-5:]}",
+            "signature_preview": f"{signature[:20]}...{signature[-10:]}"
+        }
+        
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }

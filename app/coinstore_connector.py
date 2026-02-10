@@ -103,6 +103,7 @@ class CoinstoreConnector:
             # Coinstore docs show: payload = json.dumps({}) for empty params
             payload = json.dumps(params, separators=(',', ':')) if params else json.dumps({})
         
+        # Headers matching official Coinstore API docs exactly
         headers = {
             'Content-Type': 'application/json',
             'Accept': '*/*',
