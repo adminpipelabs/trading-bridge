@@ -123,10 +123,11 @@ class CoinstoreConnector:
             logger.debug(f"Coinstore authenticated request: {method} {endpoint}")
         
         try:
-            # Coinstore doesn't need proxy - bypass it
-            # Only use proxy for exchanges that require IP whitelisting (like BitMart)
+            # Pass proxy per-request if configured
+            # Coinstore API key has IP 54.205.35.75 whitelisted, so we need proxy
             request_kwargs = {'headers': headers}
-            # Don't set proxy for Coinstore - it doesn't need IP whitelisting
+            if self.proxy_url:
+                request_kwargs['proxy'] = self.proxy_url
             
             if method.upper() == 'GET':
                 async with session.get(url, params=params, **request_kwargs) as response:
