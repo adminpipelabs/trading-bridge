@@ -83,7 +83,7 @@ class CoinstoreConnector:
         
         return signature
     
-    async def _request(self, method: str, endpoint: str, params: Optional[Dict] = None, authenticated: bool = False) -> Dict[str, Any]:
+    async def _request(self, method: str, endpoint: str, params: Optional[Dict] = None, authenticated: bool = False, custom_payload: Optional[str] = None) -> Dict[str, Any]:
         """Make HTTP request to Coinstore API."""
         import json
         
@@ -95,7 +95,10 @@ class CoinstoreConnector:
         
         # Prepare payload for signature
         # Per Coinstore docs: POST with empty params uses json.dumps({}) = '{}'
-        if method.upper() == 'GET':
+        if custom_payload:
+            # Custom payload override (e.g., for semicolon-formatted endpoints)
+            payload = custom_payload
+        elif method.upper() == 'GET':
             # GET: payload is query string (empty string if no params)
             payload = urlencode(params) if params else ''
         else:
@@ -207,19 +210,21 @@ class CoinstoreConnector:
         """Get ticker data for a symbol.
         
         According to Coinstore docs (https://coinstore-openapi.github.io/en/):
-        - GET /v1/ticker/price?symbol=SYMBOL - returns price for specific symbol(s)
+        - GET /v1/ticker/price;symbol=SYMBOL - returns price for specific symbol(s) (semicolon format!)
         - Response format: {"code": 0, "data": [{"id": 1, "symbol": "btcusdt", "price": "400"}]}
         - Even public endpoints use auth headers (X-CS-APIKEY, X-CS-SIGN, X-CS-EXPIRES) for rate limiting
         """
         # Format: BTC/USDT -> BTCUSDT (remove separator, uppercase)
         symbol_formatted = symbol.replace('/', '').upper()
         
-        # Use documented endpoint: /v1/ticker/price with symbol query parameter
-        endpoint = "/v1/ticker/price"
-        params = {"symbol": symbol_formatted}
+        # Coinstore docs show semicolon format: /v1/ticker/price;symbol=btcusdt
+        # For signature, payload should be "symbol=SHARPUSDT" (query string format)
+        endpoint = f"/v1/ticker/price;symbol={symbol_formatted}"
+        params = {}  # No params - symbol is in URL path
         
-        # Coinstore docs show all endpoints (even public) use auth headers
-        return await self._request('GET', endpoint, params, authenticated=True)
+        # Payload for signature is the query string part: "symbol=SHARPUSDT"
+        # We'll override the payload calculation in _request for this special case
+        return await self._request('GET', endpoint, params, authenticated=True, custom_payload=f"symbol={symbol_formatted}")
     
     async def get_balances(self) -> Dict[str, Any]:
         """Get account balances."""
