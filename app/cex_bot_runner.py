@@ -63,6 +63,7 @@ class CEXBotRunner:
         3. Execute trades for bots whose interval has elapsed
         4. Clean up stopped bots
         """
+        logger.info(f"🔄 CEX Bot Runner cycle starting - Active bots: {len(self.active_bots)}")
         async with self.db_pool.acquire() as conn:
             # Get all running CEX volume bots
             # Use connectors table (where BitMart API keys are stored)
@@ -89,7 +90,9 @@ class CEXBotRunner:
                     """)
                     # Filter for CEX bots (exclude Jupiter/Solana)
                     bots = [b for b in bots if b.get("connector") != "jupiter" and b.get("chain") != "solana"]
-                    logger.info(f"Found {len(bots)} CEX bots from main query")
+                    logger.info(f"✅ Found {len(bots)} CEX bots from main query")
+                    for bot in bots:
+                        logger.info(f"   - Bot: {bot.get('id')} | Name: {bot.get('name')} | Exchange: {bot.get('bot_exchange')} | Status: {bot.get('status')}")
                 except Exception as exchange_col_error:
                     # Connector column doesn't exist - use bot name fallback
                     logger.warning(f"connector column doesn't exist, using bot name fallback: {exchange_col_error}")
@@ -154,19 +157,20 @@ class CEXBotRunner:
             
             active_bot_ids = set()
             
+            logger.info(f"📋 Processing {len(bots)} bot(s)...")
             for bot_record in bots:
                 bot_id = bot_record["id"]
+                bot_name = bot_record.get("name", "Unknown")
                 active_bot_ids.add(bot_id)
                 
-                # DEBUG: Log connector retrieval
-                logger.info(f"🔍 DEBUG: Bot {bot_id} - account = {bot_record.get('account')}")
-                logger.info(f"🔍 DEBUG: Bot {bot_id} - api_key present = {bool(bot_record.get('api_key'))}")
-                logger.info(f"🔍 DEBUG: Bot {bot_id} - api_secret present = {bool(bot_record.get('api_secret'))}")
-                logger.info(f"🔍 DEBUG: Bot {bot_id} - memo = {bot_record.get('memo')}")
-                logger.info(f"🔍 DEBUG: Bot {bot_id} - connector name = {bot_record.get('name')}")
+                logger.info(f"🔍 Processing bot: {bot_id} ({bot_name})")
+                logger.info(f"   Account: {bot_record.get('account')}")
+                logger.info(f"   Exchange: {bot_record.get('bot_exchange')} | Connector: {bot_record.get('connector')}")
+                logger.info(f"   Has API key: {bool(bot_record.get('api_key'))} | Has secret: {bool(bot_record.get('api_secret'))}")
                 
                 # Initialize new bots
                 if bot_id not in self.active_bots:
+                    logger.info(f"🔄 Bot {bot_id} not in active_bots - Initializing...")
                     # Use connectors table (API keys are plaintext in connectors, not encrypted)
                     from app.cex_volume_bot import CEXVolumeBot
                     import json
@@ -358,11 +362,12 @@ class CEXBotRunner:
                         logger.warning(f"⚠️  No proxy URL configured for bot {bot_record['id']} - IP whitelisting may not work")
                     
                     logger.info(f"🔄 Attempting to initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
-                    if await bot.initialize():
+                    init_result = await bot.initialize()
+                    if init_result:
                         self.active_bots[bot_id] = bot
-                        logger.info(f"✅ Initialized CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
+                        logger.info(f"✅ SUCCESS: Initialized CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')}) - Bot is now active")
                     else:
-                        logger.error(f"❌ Failed to initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')}) - check logs above for initialization errors")
+                        logger.error(f"❌ FAILED: Could not initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')}) - check logs above for initialization errors")
                         # Mark bot as error
                         await conn.execute("""
                             UPDATE bots SET health_status = 'error', 
@@ -382,8 +387,10 @@ class CEXBotRunner:
                 
                 bot = self.active_bots.get(bot_id)
                 if not bot:
-                    logger.warning(f"Bot {bot_id} is None in active_bots - skipping cycle")
+                    logger.warning(f"⚠️  Bot {bot_id} is None in active_bots - skipping cycle (initialization may have failed)")
                     continue
+                
+                logger.info(f"✅ Bot {bot_id} is active and ready - Checking if should trade...")
                 
                 # Check if it's time to trade
                 last_trade = bot_record.get("last_trade_time")
