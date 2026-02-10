@@ -201,3 +201,29 @@ Response Text: {"message":"Unauthorized","code":1401}
 4. Test with a different trading pair (e.g., BTCUSDT) to see if it's pair-specific
 
 **The code is correct. This is an API key/permission/account restriction issue.**
+
+---
+
+## 🔍 **Coinstore API Documentation Findings**
+
+**From official docs (https://coinstore-openapi.github.io/en/):**
+
+### Error Code 1401 (Unauthorized) Possible Causes:
+1. **Request IP is not in the IP whitelist** ⚠️ **MOST LIKELY**
+2. Signature failure
+3. User login Token expired
+
+### Trading Restrictions (Different Error Codes):
+- **3012**: Restricted from trading this specific spot currency pair
+- **3013**: No qualification for spot trading
+- **3014**: Sub-account lacks spot trading qualifications
+
+### Account Limits:
+- Regular accounts: **Up to 50 active orders** at the same time
+- Market-making accounts: **No restriction**
+
+### Next Steps:
+1. **Check IP whitelist** - Verify Hetzner IP (5.161.64.209) is whitelisted in Coinstore API key settings
+2. **Check account type** - Verify if account has market-making permissions
+3. **Check trading qualifications** - Verify account has spot trading enabled
+4. **Contact Coinstore support** - If market maker, may need to contact delivery department for permissions
