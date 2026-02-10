@@ -39,7 +39,8 @@ class SpreadBot:
         
         # Configuration with defaults
         self.spread_bps = Decimal(str(config.get('spread_bps', 200)))  # 2% default
-        self.order_size_base = Decimal(str(config.get('order_size', 1000)))
+        # Order size in USD - will be converted to base tokens based on price
+        self.order_size_usd = Decimal(str(config.get('order_size_usd', 10)))
         self.refresh_interval = config.get('refresh_interval', 30)
         self.max_inventory_imbalance = Decimal(str(config.get('max_imbalance', 0.3)))  # 30%
         self.min_order_size = Decimal(str(config.get('min_order_size', 10)))
@@ -113,19 +114,24 @@ class SpreadBot:
         # Step 4: Cancel stale orders
         await self._cancel_stale_orders(bid_price, ask_price)
         
-        # Step 5: Calculate order sizes with inventory management
+        # Step 5: Calculate order sizes (in base tokens) from USD order size
         bid_size, ask_size = self._calculate_order_sizes()
         
         # Step 6: Place new orders
-        if bid_size >= self.min_order_size and self.inventory_quote >= bid_size * bid_price:
+        # Bid (BUY): Spending USDT to buy SHARP tokens
+        bid_cost_usd = bid_size * bid_price
+        if bid_size >= self.min_order_size and self.inventory_quote >= bid_cost_usd:
             await self._place_order('buy', bid_price, bid_size)
+            logger.info(f"✅ Bid placed: {bid_size} SHARP @ {bid_price} = ${bid_cost_usd:.2f} USDT")
         else:
-            logger.info(f"⏭️ Skipping bid: size={bid_size}, required_quote={bid_size * bid_price}, have={self.inventory_quote}")
+            logger.info(f"⏭️ Skipping bid: size={bid_size} SHARP, cost=${bid_cost_usd:.2f}, have=${self.inventory_quote:.2f} USDT")
         
+        # Ask (SELL): Selling SHARP tokens to get USDT
         if ask_size >= self.min_order_size and self.inventory_base >= ask_size:
             await self._place_order('sell', ask_price, ask_size)
+            logger.info(f"✅ Ask placed: {ask_size} SHARP @ {ask_price} = ${ask_size * ask_price:.2f} USDT")
         else:
-            logger.info(f"⏭️ Skipping ask: size={ask_size}, have_base={self.inventory_base}")
+            logger.info(f"⏭️ Skipping ask: size={ask_size} SHARP, have={self.inventory_base} SHARP")
         
         logger.info(f"✅ Cycle complete. Active orders: {len(self.active_orders)}")
     
@@ -191,38 +197,59 @@ class SpreadBot:
     
     def _calculate_order_sizes(self) -> Tuple[Decimal, Decimal]:
         """
-        Calculate bid/ask sizes with inventory management.
-        Skews orders to rebalance inventory toward 50/50.
+        Calculate bid/ask sizes in base tokens from USD order size.
+        
+        For spread bot:
+        - Bid (BUY): Convert $10 USDT to SHARP tokens at bid_price
+        - Ask (SELL): Convert $10 USDT to SHARP tokens at ask_price
+        - Both orders have same USD value, different token amounts due to price spread
         """
-        base_size = self.order_size_base
+        if not self.last_mid_price or self.last_mid_price <= 0:
+            # Fallback: use mid price if available, otherwise skip
+            logger.warning("⚠️ No mid price available for order size calculation")
+            return Decimal('0'), Decimal('0')
         
-        # Calculate current inventory ratio
-        if self.last_mid_price and self.last_mid_price > 0:
-            base_value = self.inventory_base * self.last_mid_price
-            total_value = base_value + self.inventory_quote
+        # Calculate bid/ask prices (same as in _run_cycle)
+        spread_multiplier = self.spread_bps / Decimal('10000')
+        half_spread = self.last_mid_price * spread_multiplier / 2
+        bid_price = (self.last_mid_price - half_spread).quantize(
+            Decimal(10) ** -self.price_decimals, rounding=ROUND_DOWN
+        )
+        ask_price = (self.last_mid_price + half_spread).quantize(
+            Decimal(10) ** -self.price_decimals, rounding=ROUND_DOWN
+        )
+        
+        # Convert USD order size to base tokens
+        # Bid: $10 USDT / bid_price = SHARP tokens to buy
+        bid_size_base = self.order_size_usd / bid_price
+        
+        # Ask: $10 USDT / ask_price = SHARP tokens to sell
+        ask_size_base = self.order_size_usd / ask_price
+        
+        # Apply inventory management skewing
+        base_value = self.inventory_base * self.last_mid_price
+        total_value = base_value + self.inventory_quote
+        
+        if total_value > 0:
+            base_ratio = base_value / total_value
+            target_ratio = Decimal('0.5')
+            imbalance = base_ratio - target_ratio
             
-            if total_value > 0:
-                base_ratio = base_value / total_value
-                
-                # Skew factor: if we have too much base, increase ask size
-                # if we have too little base, increase bid size
-                target_ratio = Decimal('0.5')
-                imbalance = base_ratio - target_ratio
-                
-                if abs(imbalance) > self.max_inventory_imbalance:
-                    logger.warning(f"⚠️ Inventory imbalance: {imbalance:.2%}")
-                
-                # Adjust sizes: more base = bigger asks, less base = bigger bids
-                skew = 1 + (imbalance * 2)  # Scale factor
-                bid_size = base_size * max(Decimal('0.5'), 2 - skew)
-                ask_size = base_size * max(Decimal('0.5'), skew)
-                
-                return (
-                    bid_size.quantize(Decimal(10) ** -self.amount_decimals),
-                    ask_size.quantize(Decimal(10) ** -self.amount_decimals)
-                )
+            if abs(imbalance) > self.max_inventory_imbalance:
+                logger.warning(f"⚠️ Inventory imbalance: {imbalance:.2%}")
+            
+            # Skew: more base = bigger asks, less base = bigger bids
+            skew = 1 + (imbalance * 2)
+            bid_size = bid_size_base * max(Decimal('0.5'), 2 - skew)
+            ask_size = ask_size_base * max(Decimal('0.5'), skew)
+        else:
+            bid_size = bid_size_base
+            ask_size = ask_size_base
         
-        return base_size, base_size
+        return (
+            bid_size.quantize(Decimal(10) ** -self.amount_decimals, rounding=ROUND_DOWN),
+            ask_size.quantize(Decimal(10) ** -self.amount_decimals, rounding=ROUND_DOWN)
+        )
     
     async def _place_order(self, side: str, price: Decimal, amount: Decimal):
         """Place a limit order on the exchange."""
