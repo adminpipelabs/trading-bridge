@@ -230,6 +230,7 @@ class CoinstoreConnector:
                             logger.error(f"   Payload: {payload[:200] if len(payload) < 200 else payload[:200] + '...'}")
                             logger.error(f"   API Key: {self.api_key[:10]}...{self.api_key[-5:]}")
                             logger.error(f"   Full response: {json_data}")
+                            logger.error(f"   FULL JSON RESPONSE BODY: {response_text}")  # Developer requested
                             logger.error("")
                             logger.error("   NOTE: HTTP 200 means signature/auth passed.")
                             logger.error("   Application error could be:")
