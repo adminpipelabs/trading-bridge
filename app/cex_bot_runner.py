@@ -408,7 +408,7 @@ class CEXBotRunner:
                 should_trade = False
                 if last_trade is None:
                     should_trade = True
-                    logger.info(f"✅ Bot {bot_id} - First trade (no last_trade_time) - WILL TRADE NOW")
+                    logger.info(f"✅✅✅ Bot {bot_id} - FIRST TRADE (no last_trade_time) - WILL EXECUTE MARKET ORDER NOW ✅✅✅")
                 else:
                     # Handle timezone awareness - ensure UTC
                     try:
