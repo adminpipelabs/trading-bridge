@@ -741,25 +741,28 @@ async def test_coinstore_official():
             os.environ.clear()
             os.environ.update(original_env)
         
-        # Also test proxy status
+        # Also test proxy status - use QuotaGuard's own test endpoint
         proxy_url = os.getenv("QUOTAGUARDSTATIC_URL", "")
         proxy_test_result = None
         if proxy_url:
             try:
-                # Test proxy with api.ipify.org
-                proxy_test = requests.get("https://api.ipify.org", proxies={
+                # Test proxy with QuotaGuard's own test endpoint (as shown in their dashboard)
+                # Their dashboard shows: curl -x https://... -L ip.quotaguard.com
+                proxy_test = requests.get("https://ip.quotaguard.com", proxies={
                     "http": proxy_url,
                     "https": proxy_url
-                }, timeout=10)
+                }, timeout=10, allow_redirects=True)
                 proxy_test_result = {
                     "status": "success",
-                    "ip": proxy_test.text,
-                    "status_code": proxy_test.status_code
+                    "ip": proxy_test.text.strip(),
+                    "status_code": proxy_test.status_code,
+                    "test_endpoint": "ip.quotaguard.com"
                 }
             except Exception as proxy_err:
                 proxy_test_result = {
                     "status": "failed",
-                    "error": str(proxy_err)
+                    "error": str(proxy_err),
+                    "test_endpoint": "ip.quotaguard.com"
                 }
         
         return {
