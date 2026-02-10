@@ -186,6 +186,19 @@ class CoinstoreConnector:
                 
                 logger.debug(f"Coinstore POST payload bytes: {body_bytes[:200]}")
                 
+                # DEBUG: Print exact payload and headers right before request (Dev requested)
+                logger.info("=" * 80)
+                logger.info("🔍 DEBUG: EXACT REQUEST BEING SENT (right before HTTP call)")
+                logger.info("=" * 80)
+                logger.info(f"URL: {url}")
+                logger.info(f"Method: POST")
+                logger.info(f"Payload (string): {payload}")
+                logger.info(f"Payload (bytes): {body_bytes}")
+                logger.info(f"Payload length: {len(body_bytes)} bytes")
+                logger.info(f"Headers: {headers}")
+                logger.info(f"Request kwargs: {request_kwargs}")
+                logger.info("=" * 80)
+                
                 async with session.post(url, data=body_bytes, **request_kwargs) as response:
                     response_text = await response.text()
                     http_status = response.status
@@ -358,6 +371,15 @@ class CoinstoreConnector:
         import json
         payload_json = json.dumps(params)  # Use default JSON format (with spaces) - matches Coinstore expectation
         logger.info(f"🔵 ORDER PAYLOAD JSON (for signature): {payload_json}")
+        
+        # DEBUG: Log exact payload types and values for LIMIT orders
+        if order_type.lower() == 'limit':
+            logger.info(f"🔍 DEBUG LIMIT ORDER PAYLOAD:")
+            logger.info(f"   ordPrice type: {type(params.get('ordPrice'))}, value: {params.get('ordPrice')}")
+            logger.info(f"   ordQty type: {type(params.get('ordQty'))}, value: {params.get('ordQty')}")
+            logger.info(f"   timestamp type: {type(params.get('timestamp'))}, value: {params.get('timestamp')}")
+            logger.info(f"   Full payload dict: {params}")
+            logger.info(f"   Full payload JSON: {payload_json}")
         
         response = await self._request('POST', endpoint, params, authenticated=True)
         
