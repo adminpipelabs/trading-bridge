@@ -136,14 +136,17 @@ class CoinstoreConnector:
             if method.upper() == 'GET':
                 async with session.get(url, params=params, **request_kwargs) as response:
                     response_text = await response.text()
-                    logger.debug(f"Coinstore API GET {endpoint} response status={response.status}, body={response_text[:200]}")
+                    logger.info(f"🔵 Coinstore API GET {endpoint} response status={response.status}, body={response_text[:500]}")
                     
                     if response.status != 200:
                         error_text = response_text[:500]
+                        logger.error(f"❌ Coinstore API GET {endpoint} failed: HTTP {response.status}: {error_text}")
                         raise Exception(f"HTTP {response.status}: {error_text}")
                     
                     try:
-                        return await response.json()
+                        json_data = await response.json()
+                        logger.debug(f"✅ Coinstore API GET {endpoint} parsed JSON: keys={list(json_data.keys()) if isinstance(json_data, dict) else 'not dict'}")
+                        return json_data
                     except Exception as json_err:
                         logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
                         raise Exception(f"Invalid JSON response: {response_text[:200]}")
