@@ -52,26 +52,37 @@ class CoinstoreConnector:
         1. HMAC-SHA256(secret_key, expires_key) where expires_key = floor(expires/30000)
         2. HMAC-SHA256(key_from_step1, payload)
         
-        Per Coinstore API docs:
+        Per Coinstore API docs (https://coinstore-openapi.github.io/en/#signature-authentication):
         - GET with no params: payload = '' (empty string)
         - POST with empty params: payload = json.dumps({}) = '{}'
+        - Payload must be the exact string that will be sent in the request body
+        
+        Python example from docs:
+        expires = int(time.time() * 1000)
+        expires_key = str(math.floor(expires / 30000))
+        expires_key = expires_key.encode("utf-8")
+        key = hmac.new(secret_key, expires_key, hashlib.sha256).hexdigest()
+        key = key.encode("utf-8")
+        payload = json.dumps({})
+        payload = payload.encode("utf-8")
+        signature = hmac.new(key, payload, hashlib.sha256).hexdigest()
         """
-        # Step 1: Calculate expires_key
+        # Step 1: Calculate expires_key (must be string representation of floor(expires/30000))
         expires_key = str(math.floor(expires / 30000))
         
         # Step 2: First HMAC to get derived key
-        # Use api_secret as key, expires_key as message
+        # Use api_secret as key, expires_key as message (both must be bytes)
         secret_bytes = self.api_secret.encode('utf-8')
         expires_key_bytes = expires_key.encode('utf-8')
-        key = hmac.new(
+        key_hex = hmac.new(
             secret_bytes,
             expires_key_bytes,
             hashlib.sha256
         ).hexdigest()
         
         # Step 3: Second HMAC to get signature
-        # Use derived key as key, payload as message
-        key_bytes = key.encode('utf-8')
+        # Use derived key (hex string) as bytes, payload (string) as bytes
+        key_bytes = key_hex.encode('utf-8')
         payload_bytes = payload.encode('utf-8')
         signature = hmac.new(
             key_bytes,
@@ -79,7 +90,7 @@ class CoinstoreConnector:
             hashlib.sha256
         ).hexdigest()
         
-        logger.debug(f"Coinstore signature generated for endpoint")
+        logger.debug(f"Coinstore signature generated: expires={expires}, expires_key={expires_key}, payload_length={len(payload)}")
         
         return signature
     
@@ -115,7 +126,16 @@ class CoinstoreConnector:
         
         # Add authentication headers
         if authenticated:
-            expires = int(time.time() * 1000)
+            # Use timestamp from params if present (for order placement), otherwise generate new one
+            # This ensures timestamp in payload matches expires in header (critical for signature)
+            if params and 'timestamp' in params:
+                expires = params['timestamp']
+            else:
+                expires = int(time.time() * 1000)
+            
+            # Log payload before signature generation (for debugging)
+            logger.debug(f"Coinstore signature input: expires={expires}, payload='{payload}', payload_type={type(payload)}")
+            
             signature = self._generate_signature(expires, payload)
             
             headers['X-CS-APIKEY'] = self.api_key
@@ -123,7 +143,7 @@ class CoinstoreConnector:
             headers['X-CS-EXPIRES'] = str(expires)
             headers['exch-language'] = 'en_US'
             
-            logger.debug(f"Coinstore authenticated request: {method} {endpoint}")
+            logger.debug(f"Coinstore authenticated request: {method} {endpoint}, signature={signature[:16]}...")
         
         try:
             # Pass proxy per-request if configured
@@ -156,7 +176,14 @@ class CoinstoreConnector:
             elif method.upper() == 'POST':
                 # CRITICAL: Send exact payload bytes that signature was calculated on
                 # Don't let aiohttp re-serialize - use raw bytes to ensure exact match
-                body_bytes = payload.encode('utf-8') if payload else b'{}'
+                # For empty params, ensure we send '{}' not empty string
+                if not payload or payload == '':
+                    body_bytes = b'{}'
+                    payload = '{}'  # Ensure payload string matches what we send
+                else:
+                    body_bytes = payload.encode('utf-8')
+                
+                logger.debug(f"Coinstore POST payload bytes: {body_bytes[:200]}")
                 
                 async with session.post(url, data=body_bytes, **request_kwargs) as response:
                     response_text = await response.text()
@@ -261,18 +288,24 @@ class CoinstoreConnector:
           * BUY: use ordAmt (spend X USDT)
           * SELL: use ordQty (sell X tokens)
         - Must use ordType: "MARKET" (not "LIMIT")
+        - timestamp is REQUIRED in payload (per docs: https://coinstore-openapi.github.io/en/#order-related)
         """
         endpoint = "/trade/order/place"
         
         # Format symbol (SHARP/USDT -> SHARPUSDT)
         symbol_formatted = symbol.replace('/', '')
         
+        # Generate timestamp ONCE - will be used for both payload and expires header
+        # This ensures they match exactly (critical for signature validation)
+        timestamp_ms = int(time.time() * 1000)
+        
         # Build payload per Coinstore docs
+        # Note: timestamp is REQUIRED per API docs parameter table
         params = {
             'symbol': symbol_formatted,
             'side': side.upper(),  # 'BUY' or 'SELL'
             'ordType': order_type.upper(),  # 'MARKET' or 'LIMIT'
-            'timestamp': int(time.time() * 1000),  # Milliseconds timestamp
+            'timestamp': timestamp_ms,  # Milliseconds timestamp (REQUIRED per docs)
         }
         
         # For MARKET orders: BUY uses ordAmt (USDT), SELL uses ordQty (tokens)
@@ -299,6 +332,11 @@ class CoinstoreConnector:
         
         # Log payload before sending
         logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")
+        
+        # Log the exact JSON string that will be used for signature
+        import json
+        payload_json = json.dumps(params, separators=(',', ':'))
+        logger.info(f"🔵 ORDER PAYLOAD JSON (for signature): {payload_json}")
         
         response = await self._request('POST', endpoint, params, authenticated=True)
         
