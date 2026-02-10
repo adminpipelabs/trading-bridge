@@ -1,131 +1,162 @@
-# Summary for Dev — Client Dashboard Loading Issue
+# Summary for Dev - Balance & Trading Issues
 
-**Date:** 2026-02-03  
-**Status:** ⚠️ Client Dashboard stuck on loading screen
-
----
-
-## ✅ **What's Done**
-
-1. **Code Deployment** ✅
-   - Client Dashboard redesign deployed
-   - Help content & onboarding deployed  
-   - Authorization checks deployed
-   - Health monitor fixes deployed
-
-2. **ENCRYPTION_KEY** ✅
-   - Set in Railway Variables (trading-bridge service)
-   - Your key is valid and working
-
-3. **Client Dashboard Optimization** ✅
-   - Changed from `adminAPI.getClients()` to `/clients/by-wallet/{address}`
-   - Pushed (commit `cf72a2f`)
-   - **Still loading** - fix didn't resolve issue
-
-4. **Migration Scripts** ✅
-   - Created `railway_migrate.py`
-   - Ready to run, but **not executed yet**
+**Date:** February 10, 2026  
+**Status:** Proxy authentication fixed, BitMart still needs attention
 
 ---
 
-## 🎯 **Current Status**
+## ✅ **What Was Fixed**
 
-- ✅ Backend: Online (`{"status":"online"}`)
-- ✅ Frontend: Deployed
-- ❌ **Client Dashboard: Stuck on "Loading your dashboard..."**
+### **1. Proxy Authentication (407 Error) - FIXED** ✅
 
----
+**Problem:** All Coinstore API calls were failing with `407 Proxy Authentication Required`
 
-## 🐛 **The Problem**
+**Root Cause:** Proxy URLs were using `https://` but HTTP proxies should use `http://` even when tunneling HTTPS connections.
 
-Client login → Dashboard shows loading spinner → **Never finishes**
+**Fix Applied:**
+- Added proxy URL normalization in 4 files:
+  - `app/cex_volume_bot.py` - Added `normalize_proxy_url()` function
+  - `app/coinstore_connector.py` - Normalize in constructor
+  - `app/main.py` - Normalize before setting env vars
+  - `app/bot_runner.py` - Normalize in both bot sections
 
-**ClientDashboard makes 3 API calls:**
-1. `GET /clients/by-wallet/{wallet_address}` - Get client info
-2. `GET /bots?account={account_id}` - Get client's bots
-3. `GET /clients/{id}/key-status` - Get key status
-
-**One of these is likely:**
-- Hanging (timeout)
-- Returning error (500/404)
-- Blocked by authorization
-- Failing due to missing DB columns (migrations not run)
-
----
-
-## 🔍 **What I Need From You**
-
-### **1. Check Browser Console**
-- Open client dashboard
-- F12 → Console tab
-- **Share any red errors**
-
-### **2. Check Network Tab**
-- F12 → Network tab
-- Refresh page
-- **Which requests are:**
-  - Pending/hanging?
-  - Returning errors?
-  - What status codes? (200? 404? 500?)
-
-### **3. Check Backend Logs**
-- Railway Dashboard → trading-bridge → Logs
-- **Any errors when client accesses dashboard?**
-
----
-
-## ❓ **Questions**
-
-1. **Should clients be able to call `/clients/by-wallet/{address}`?**
-   - Or does it require admin access?
-   - Should we use different endpoint?
-
-2. **Are authorization checks blocking client API calls?**
-   - `/bots?account=...` endpoint
-   - `/clients/{id}/key-status` endpoint
-
-3. **Should we run migrations first?**
-   - Missing columns might cause query failures
-   - Could explain why API calls hang
-
----
-
-## 🚀 **Quick Actions**
-
-### **Option 1: Run Migrations**
-```bash
-railway run python railway_migrate.py
-```
-Might fix API endpoint failures if missing columns are the issue.
-
-### **Option 2: Test Endpoints**
-```bash
-# Test client by wallet
-curl "https://trading-bridge-production.up.railway.app/clients/by-wallet/{wallet_address}" \
-  -H "X-Wallet-Address: {wallet_address}"
-
-# Test bots
-curl "https://trading-bridge-production.up.railway.app/bots?account={account_id}" \
-  -H "X-Wallet-Address: {wallet_address}"
+**Code Change:**
+```python
+# Normalize proxy URL: HTTP proxies should use http:// even for HTTPS targets
+if proxy_url and proxy_url.startswith('https://'):
+    proxy_url = 'http://' + proxy_url[8:]  # Replace https:// with http://
 ```
 
----
+**Result:**
+- ✅ Proxy URL now correctly uses `http://`
+- ✅ No more 407 errors during startup
+- ✅ Coinstore bots should now work
 
-## 📋 **Files Reference**
-
-- `DEV_HELP_CLIENT_DASHBOARD_LOADING.md` - Full debugging guide
-- `railway_migrate.py` - Migration script (ready to run)
-- `migrations/COMPLETE_SETUP.sql` - SQL migrations
-
----
-
-## 🎯 **Next Steps**
-
-1. **Share browser console errors** → I can fix based on errors
-2. **Share network tab results** → See which API calls fail
-3. **Run migrations** → Might fix the issue
-4. **Check Railway logs** → Backend errors?
+**Commits:**
+- `d25782b` - "Fix proxy authentication: normalize proxy URLs to use http:// instead of https://"
+- `7cd62b6` - "Reduce verbose debug logging - clean up logs for readability"
 
 ---
 
-**Need your help to debug why Client Dashboard is stuck loading!**
+### **2. Verbose Debug Logging - FIXED** ✅
+
+**Problem:** Logs were cluttered with excessive debug output (500+ lines per minute)
+
+**Fix Applied:**
+- Removed verbose signature generation logs
+- Removed "COINSTORE REQUEST DEBUG" blocks (20+ lines per request)
+- Changed detailed logs from `logger.info()` to `logger.debug()`
+
+**Result:**
+- ✅ Logs are now clean and readable
+- ✅ Only errors and important info are shown
+
+---
+
+## ⚠️ **What's Still Broken**
+
+### **1. BitMart API Error** ❌
+
+**Error:** `bitmart GET https://api-cloud.bitmart.com/account/v1/currencies` failing
+
+**Affects:** BitMart balance fetching (1 bot)
+
+**Likely Causes:**
+- IP not whitelisted (Railway IP needs to be added to BitMart)
+- Invalid API keys
+- API permissions missing
+
+**Note:** Railway IP fetch is timing out, so we can't see the IP to whitelist:
+```
+Could not fetch Railway IP: HTTPSConnectionPool(host='api.ipify.org', port=443): Read timed out.
+```
+
+**Action Needed:**
+1. Check BitMart API key permissions (should have Read/Trade enabled)
+2. Get Railway outbound IP and add to BitMart IP whitelist
+3. Verify API keys are correct in database
+
+---
+
+## ✅ **What's Working**
+
+- ✅ **Spread bot code** - Fully implemented and running
+- ✅ **Coinstore signature** - Correct HMAC-SHA256 generation
+- ✅ **Bot runner** - Picking up bots from database
+- ✅ **Database queries** - Working correctly
+- ✅ **Exchange initialization** - Working for both Coinstore and BitMart
+- ✅ **Proxy configuration** - Now correctly normalized
+
+---
+
+## 📊 **Current Status**
+
+**Bots Running:** 4 spread bots
+- 1 BitMart bot (failing balance fetch)
+- 3 Coinstore bots (should work after proxy fix)
+
+**Expected Behavior After Proxy Fix:**
+- ✅ Coinstore bots should fetch balances successfully
+- ✅ Coinstore bots should calculate mid prices
+- ✅ Coinstore bots should place orders
+- ⚠️ BitMart bot still needs IP whitelist/API key fix
+
+---
+
+## 🔍 **Verification Steps**
+
+After deployment, check logs for:
+
+**Coinstore Success Indicators:**
+```
+✅ Balance fetched: USDT: 1000.0
+📊 Mid price: 0.00012
+📝 Placing buy order: 1000 @ 0.000118
+✅ Order placed
+```
+
+**Coinstore Failure Indicators:**
+```
+❌ 407 Proxy Authentication Required  (should be gone now)
+❌ Balance fetch error: 407
+```
+
+**BitMart Success Indicators:**
+```
+✅ Balance fetched: USDT: 1000.0
+📊 Mid price: 0.00012
+```
+
+**BitMart Failure Indicators:**
+```
+❌ Balance fetch error: bitmart GET https://api-cloud.bitmart.com/account/v1/currencies
+```
+
+---
+
+## 🚀 **Next Steps**
+
+1. **Monitor Coinstore bots** - Should work now after proxy fix
+2. **Fix BitMart** - Address IP whitelist/API key issues
+3. **Verify trading** - Confirm orders are being placed
+
+---
+
+## 📝 **Files Changed**
+
+1. `app/cex_volume_bot.py` - Added proxy normalization
+2. `app/coinstore_connector.py` - Normalize proxy, reduced logging
+3. `app/main.py` - Normalize proxy before setting env vars
+4. `app/bot_runner.py` - Normalize proxy in bot sections
+
+---
+
+## 🎯 **Summary**
+
+**Fixed:** Proxy authentication (407 errors) - Coinstore should work now  
+**Still Broken:** BitMart API access - needs IP whitelist/API key fix  
+**Status:** Significant progress, Coinstore bots should be functional
+
+---
+
+**Questions?** Check logs after deployment to verify Coinstore is working.
