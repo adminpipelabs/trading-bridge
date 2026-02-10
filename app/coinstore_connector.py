@@ -204,17 +204,22 @@ class CoinstoreConnector:
             raise
     
     async def get_ticker(self, symbol: str) -> Dict[str, Any]:
-        """Get ticker data for a symbol."""
-        # Format: BTCUSDT -> BTC/USDT
-        if '/' not in symbol:
-            # Assume USDT pair if no separator
-            if symbol.endswith('USDT'):
-                base = symbol[:-4]
-                symbol = f"{base}/USDT"
+        """Get ticker data for a symbol.
         
-        endpoint = "/api/v1/market/ticker"
-        params = {"symbol": symbol.replace('/', '')}
-        return await self._request('GET', endpoint, params, authenticated=False)
+        According to Coinstore docs (https://coinstore-openapi.github.io/en/):
+        - GET /v1/ticker/price?symbol=SYMBOL - returns price for specific symbol(s)
+        - Response format: {"code": 0, "data": [{"id": 1, "symbol": "btcusdt", "price": "400"}]}
+        - Even public endpoints use auth headers (X-CS-APIKEY, X-CS-SIGN, X-CS-EXPIRES) for rate limiting
+        """
+        # Format: BTC/USDT -> BTCUSDT (remove separator, uppercase)
+        symbol_formatted = symbol.replace('/', '').upper()
+        
+        # Use documented endpoint: /v1/ticker/price with symbol query parameter
+        endpoint = "/v1/ticker/price"
+        params = {"symbol": symbol_formatted}
+        
+        # Coinstore docs show all endpoints (even public) use auth headers
+        return await self._request('GET', endpoint, params, authenticated=True)
     
     async def get_balances(self) -> Dict[str, Any]:
         """Get account balances."""
