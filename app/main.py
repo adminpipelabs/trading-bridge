@@ -650,34 +650,25 @@ async def debug_env():
 
 @app.get("/test/coinstore")
 async def test_coinstore_official():
-    """Test Coinstore API using official documentation example."""
+    """Test Coinstore API signature using dev's test script logic."""
     from sqlalchemy import create_engine, text
+    from app.security import decrypt_credential
     
     DATABASE_URL = os.getenv("DATABASE_URL")
-    ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
     
-    if not DATABASE_URL or not ENCRYPTION_KEY:
-        return {"error": "DATABASE_URL or ENCRYPTION_KEY not set"}
+    if not DATABASE_URL:
+        return {"error": "DATABASE_URL not set"}
     
     try:
-        # Initialize Fernet
-        fernet = Fernet(ENCRYPTION_KEY.encode())
-        
         # Connect to database
         engine = create_engine(DATABASE_URL)
         
-        # Get API credentials from database - use the specific Coinstore bot
-        # Look for bot with name containing "Coinstore" or connector = 'coinstore'
+        # Get API credentials from database
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT ec.api_key_encrypted, ec.api_secret_encrypted, b.name, b.id
-                FROM exchange_credentials ec
-                JOIN clients cl ON cl.id = ec.client_id
-                JOIN bots b ON b.account = cl.account_identifier
-                WHERE ec.exchange = 'coinstore' 
-                  AND b.connector = 'coinstore'
-                  AND b.status = 'running'
-                ORDER BY b.name LIKE '%Coinstore%' DESC, b.created_at DESC
+                SELECT api_key_encrypted, api_secret_encrypted
+                FROM exchange_credentials
+                WHERE exchange = 'coinstore'
                 LIMIT 1
             """))
             
@@ -685,101 +676,116 @@ async def test_coinstore_official():
             if not row:
                 return {"error": "No Coinstore credentials found in database"}
             
-            api_key_encrypted = row[0]
-            api_secret_encrypted = row[1]
-            bot_name = row[2] if len(row) > 2 else "unknown"
-            bot_id = row[3] if len(row) > 3 else "unknown"
-            
-            # Decrypt
-            api_key = fernet.decrypt(api_key_encrypted.encode()).decode()
-            api_secret = fernet.decrypt(api_secret_encrypted.encode()).decode()
+            # Decrypt using app's security module (handles ENCRYPTION_KEY internally)
+            api_key = decrypt_credential(row[0])
+            api_secret = decrypt_credential(row[1])
         
-        # Official Coinstore example (exact from docs)
-        url = "https://api.coinstore.com/api/spot/accountList"
-        api_key_bytes = api_key.encode('utf-8')
-        secret_key_bytes = api_secret.encode('utf-8')
+        results = {
+            "credentials_loaded": True,
+            "api_key_preview": f"{api_key[:10]}...{api_key[-5:]}",
+            "tests": []
+        }
         
+        # TEST 1: Balance check
+        print("=" * 60)
+        print("TEST 1: Balance Check (POST /spot/accountList)")
+        print("=" * 60)
+        
+        secret_bytes = api_secret.encode('utf-8')
         expires = int(time.time() * 1000)
         expires_key = str(math.floor(expires / 30000))
-        expires_key_bytes = expires_key.encode("utf-8")
+        key = hmac.new(secret_bytes, expires_key.encode('utf-8'), hashlib.sha256).hexdigest()
+        payload = json.dumps({})
+        sig = hmac.new(key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
         
-        # Step 1: HMAC(secret, expires_key)
-        key = hmac.new(secret_key_bytes, expires_key_bytes, hashlib.sha256).hexdigest()
-        key_bytes = key.encode("utf-8")
-        
-        # Step 2: HMAC(key, payload)
-        payload_dict = {}
-        payload_json = json.dumps(payload_dict)
-        payload_bytes = payload_json.encode("utf-8")
-        
-        signature = hmac.new(key_bytes, payload_bytes, hashlib.sha256).hexdigest()
-        
-        # Headers (exact from official docs)
         headers = {
             'X-CS-APIKEY': api_key,
-            'X-CS-SIGN': signature,
+            'X-CS-SIGN': sig,
             'X-CS-EXPIRES': str(expires),
-            'exch-language': 'en_US',
             'Content-Type': 'application/json',
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
+            'exch-language': 'en_US'
         }
         
-        # Make request WITHOUT proxy (test if Coinstore needs proxy)
-        # Temporarily unset proxy env vars for this test
-        import copy
-        original_env = copy.deepcopy(os.environ)
-        if 'HTTP_PROXY' in os.environ:
-            del os.environ['HTTP_PROXY']
-        if 'HTTPS_PROXY' in os.environ:
-            del os.environ['HTTPS_PROXY']
+        r = requests.post('https://api.coinstore.com/api/spot/accountList',
+            data=payload, headers=headers, timeout=10)
         
-        try:
-            response = requests.request("POST", url, headers=headers, data=payload_bytes, timeout=30)
-        finally:
-            # Restore original env
-            os.environ.clear()
-            os.environ.update(original_env)
-        
-        # Also test proxy status - use QuotaGuard's own test endpoint
-        proxy_url = os.getenv("QUOTAGUARDSTATIC_URL", "")
-        proxy_test_result = None
-        if proxy_url:
-            try:
-                # Test proxy with QuotaGuard's own test endpoint (as shown in their dashboard)
-                # Their dashboard shows: curl -x https://... -L ip.quotaguard.com
-                proxy_test = requests.get("https://ip.quotaguard.com", proxies={
-                    "http": proxy_url,
-                    "https": proxy_url
-                }, timeout=10, allow_redirects=True)
-                proxy_test_result = {
-                    "status": "success",
-                    "ip": proxy_test.text.strip(),
-                    "status_code": proxy_test.status_code,
-                    "test_endpoint": "ip.quotaguard.com"
-                }
-            except Exception as proxy_err:
-                proxy_test_result = {
-                    "status": "failed",
-                    "error": str(proxy_err),
-                    "test_endpoint": "ip.quotaguard.com"
-                }
-        
-        return {
-            "status_code": response.status_code,
-            "response_text": response.text,
-            "success": response.status_code == 200,
-            "error_1401": response.status_code == 1401,
-            "api_key_preview": f"{api_key[:10]}...{api_key[-5:]}",
-            "api_key_full": api_key,  # Include full key to verify it's correct
-            "signature_preview": f"{signature[:20]}...{signature[-10:]}",
-            "bot_name": bot_name,
-            "bot_id": bot_id,
-            "tested_without_proxy": True,
-            "proxy_test": proxy_test_result,
-            "quotaguard_url_set": bool(proxy_url),
-            "quotaguard_url_preview": proxy_url.split('@')[0] if proxy_url and '@' in proxy_url else proxy_url[:30] if proxy_url else None
+        test1_result = {
+            "test": "Balance Check",
+            "status_code": r.status_code,
+            "response": r.text[:500],
+            "expires": expires,
+            "payload": payload,
+            "signature_preview": f"{sig[:32]}...",
+            "success": r.status_code == 200,
+            "conclusion": "Bug is in aiohttp, not signature generation" if r.status_code == 200 else "Signature issue OR account settings (IP/permissions)"
         }
+        results["tests"].append(test1_result)
+        
+        # TEST 2: Order placement (if balance works)
+        if r.status_code == 200:
+            print("\n" + "=" * 60)
+            print("TEST 2: Order Placement (POST /trade/order/place)")
+            print("=" * 60)
+            
+            expires = int(time.time() * 1000)
+            expires_key = str(math.floor(expires / 30000))
+            key = hmac.new(secret_bytes, expires_key.encode('utf-8'), hashlib.sha256).hexdigest()
+            
+            params = {
+                'symbol': 'SHARPUSDT',
+                'side': 'BUY',
+                'ordType': 'MARKET',
+                'ordAmt': '1',
+                'timestamp': expires
+            }
+            
+            # Test with compact JSON (current implementation)
+            payload = json.dumps(params, separators=(',', ':'))
+            sig = hmac.new(key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
+            
+            headers = {
+                'X-CS-APIKEY': api_key,
+                'X-CS-SIGN': sig,
+                'X-CS-EXPIRES': str(expires),
+                'Content-Type': 'application/json',
+                'exch-language': 'en_US'
+            }
+            
+            r2 = requests.post('https://api.coinstore.com/api/trade/order/place',
+                data=payload, headers=headers, timeout=10)
+            
+            test2_result = {
+                "test": "Order Placement (compact JSON)",
+                "status_code": r2.status_code,
+                "response": r2.text[:500],
+                "payload": payload,
+                "signature_preview": f"{sig[:32]}...",
+                "success": r2.status_code == 200
+            }
+            
+            if r2.status_code == 401:
+                # Test with default JSON separators
+                payload_default = json.dumps(params)
+                sig_default = hmac.new(key.encode('utf-8'), payload_default.encode('utf-8'), hashlib.sha256).hexdigest()
+                headers['X-CS-SIGN'] = sig_default
+                
+                r3 = requests.post('https://api.coinstore.com/api/trade/order/place',
+                    data=payload_default, headers=headers, timeout=10)
+                
+                test2_result["retry_with_default_json"] = {
+                    "status_code": r3.status_code,
+                    "response": r3.text[:500],
+                    "payload": payload_default,
+                    "signature_preview": f"{sig_default[:32]}...",
+                    "success": r3.status_code == 200,
+                    "fix_needed": "Remove separators=(',', ':') from json.dumps()" if r3.status_code == 200 else None
+                }
+            elif r2.status_code in [400, 500]:
+                test2_result["note"] = f"Order rejected but NOT signature issue (status {r2.status_code}) - signature WORKS"
+            
+            results["tests"].append(test2_result)
+        
+        return results
         
     except Exception as e:
         import traceback
