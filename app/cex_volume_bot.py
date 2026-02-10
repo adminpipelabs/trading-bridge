@@ -92,7 +92,8 @@ class CEXVolumeBot:
     """
     Volume generation bot for centralized exchanges.
     
-    Places alternating buy/sell market orders to generate organic-looking volume.
+    Uses MARKET orders for instant fills (creates real executed trades).
+    Based on ADAMANT tradebot approach - this is the correct way for volume generation.
     """
     
     def __init__(
@@ -586,90 +587,51 @@ class CEXVolumeBot:
         return base_amount
     
     async def execute_trade(self, side: str, amount: float) -> Optional[dict]:
-        """Execute a trade order."""
+        """
+        Execute a market order trade.
+        
+        Uses MARKET orders for instant fills (creates real executed trades).
+        This is the correct approach for volume generation - matches ADAMANT tradebot.
+        """
         try:
-            logger.info(f"Executing {side} {amount} {self.symbol}")
-            
-            # BitMart requires price for market buy orders, so use limit orders instead
-            # Get current price for limit order
-            current_price = await self.get_price()
+            # Get current price for logging/slippage check (optional)
+            ticker = await self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker.get("last") or ticker.get("close")
             if not current_price:
                 logger.error(f"Could not get current price for {self.symbol}")
                 return None
             
-            # BitMart requires type parameter for orders
+            expected_value = amount * current_price
+            
+            logger.info(f"Placing {side.upper()} market order: {amount:.6f} {self.symbol} @ ~{current_price:.6f}")
+            
+            # Exchange-specific params
             order_params = {}
             if self.exchange_name == "bitmart":
                 order_params['type'] = 'spot'
             
-            # Use limit orders for BitMart (market orders require price anyway)
-            # For buy: use current price (will fill immediately if market price)
-            # For sell: use current price (will fill immediately if market price)
-            price = current_price
-            
-            # Slight price adjustment to ensure fill:
-            # Buy: slightly above market (0.1% higher)
-            # Sell: slightly below market (0.1% lower)
+            # Place MARKET order (not limit!) - instant fill, real volume
+            # Use create_market_order for better compatibility
             if side == "buy":
-                price = current_price * 1.001  # 0.1% above market
+                order = await self.exchange.create_market_buy_order(
+                    symbol=self.symbol,
+                    amount=amount,
+                    params=order_params
+                )
             else:
-                price = current_price * 0.999  # 0.1% below market
+                order = await self.exchange.create_market_sell_order(
+                    symbol=self.symbol,
+                    amount=amount,
+                    params=order_params
+                )
             
-            logger.info(f"Placing limit {side} order: {amount} {self.symbol} @ {price}")
-            
-            order = await self.exchange.create_limit_order(
-                symbol=self.symbol,
-                side=side,
-                amount=amount,
-                price=price,
-                params=order_params,
-            )
-            
-            # For limit orders, check if filled immediately or wait for fill
+            # Get filled price and amount
             order_id = order.get("id")
-            logger.info(f"Limit order placed: {order_id}, status: {order.get('status', 'unknown')}")
+            filled_amount = float(order.get("filled", amount))
+            avg_price = float(order.get("average") or order.get("price") or current_price)
+            cost = float(order.get("cost", filled_amount * avg_price))
             
-            # Check if order was filled immediately
-            if order.get("status") == "closed" or order.get("filled", 0) > 0:
-                filled_amount = float(order.get("filled", amount))
-                avg_price = float(order.get("average", 0) or order.get("price", price))
-                cost = float(order.get("cost", filled_amount * avg_price))
-                logger.info(f"Order filled immediately: {side} {filled_amount} @ {avg_price} = ${cost:.2f}")
-            else:
-                # Order is open, wait a moment and check status
-                await asyncio.sleep(2)
-                try:
-                    order_status = await self.exchange.fetch_order(order_id, self.symbol)
-                    filled_amount = float(order_status.get("filled", 0))
-                    if filled_amount > 0:
-                        avg_price = float(order_status.get("average", 0) or order_status.get("price", price))
-                        cost = float(order_status.get("cost", filled_amount * avg_price))
-                        logger.info(f"Order filled: {side} {filled_amount} @ {avg_price} = ${cost:.2f}")
-                    else:
-                        # Cancel unfilled order
-                        try:
-                            await self.exchange.cancel_order(order_id, self.symbol)
-                            logger.warning(f"Order {order_id} not filled, cancelled")
-                        except AttributeError as cancel_attr_err:
-                            if "'NoneType' object has no attribute 'lower'" in str(cancel_attr_err):
-                                logger.warning(f"⚠️  BitMart ccxt AttributeError during cancel_order (None message) - order may still be open")
-                            else:
-                                raise
-                        return None
-                except AttributeError as check_attr_err:
-                    # Handle ccxt AttributeError bug when checking order status
-                    if "'NoneType' object has no attribute 'lower'" in str(check_attr_err):
-                        logger.warning(f"⚠️  BitMart ccxt AttributeError during fetch_order (None message) - assuming filled")
-                        filled_amount = amount
-                        avg_price = price
-                        cost = filled_amount * avg_price
-                    else:
-                        raise
-                except Exception as check_err:
-                    logger.warning(f"Could not check order status: {check_err}, assuming filled")
-                    filled_amount = amount
-                    avg_price = price
-                    cost = filled_amount * avg_price
+            logger.info(f"✅ {side.upper()} market order filled: {filled_amount:.6f} @ {avg_price:.6f} = ${cost:.2f} USDT")
             
             return {
                 "order_id": order_id,
