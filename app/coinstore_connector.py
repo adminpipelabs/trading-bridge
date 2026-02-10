@@ -115,7 +115,8 @@ class CoinstoreConnector:
         else:
             # POST: payload is JSON body
             # Coinstore docs show: payload = json.dumps({}) for empty params
-            payload = json.dumps(params, separators=(',', ':')) if params else json.dumps({})
+            # Use default json.dumps (with spaces) - Coinstore expects default JSON format
+            payload = json.dumps(params) if params else json.dumps({})
         
         # Headers matching official Coinstore API docs exactly
         headers = {
@@ -335,7 +336,7 @@ class CoinstoreConnector:
         
         # Log the exact JSON string that will be used for signature
         import json
-        payload_json = json.dumps(params, separators=(',', ':'))
+        payload_json = json.dumps(params)  # Use default JSON format (with spaces) - matches Coinstore expectation
         logger.info(f"🔵 ORDER PAYLOAD JSON (for signature): {payload_json}")
         
         response = await self._request('POST', endpoint, params, authenticated=True)
