@@ -69,13 +69,14 @@ class CEXBotRunner:
             # NOTE: exchange column may not exist, so detect CEX from bot name as fallback
             try:
                 # Try query with exchange column first
-                # For Coinstore, we need to check exchange_credentials, not connectors
+                # Use LEFT JOIN so Coinstore bots (no connectors) are still found
                 try:
                     bots = await conn.fetch("""
                         SELECT b.*, 
                                c.api_key,
                                c.api_secret,
                                c.memo,
+                               c.name as connector_name,
                                cl.id as client_id,
                                b.exchange as bot_exchange
                         FROM bots b
@@ -86,6 +87,9 @@ class CEXBotRunner:
                           AND (b.connector IS NULL OR (b.connector IS NOT NULL AND b.connector != 'jupiter'))
                           AND (b.chain IS NULL OR b.chain != 'solana')
                     """)
+                    # Filter for CEX bots (exclude Jupiter/Solana)
+                    bots = [b for b in bots if b.get("connector") != "jupiter" and b.get("chain") != "solana"]
+                    logger.info(f"Found {len(bots)} CEX bots from main query")
                 except Exception as exchange_col_error:
                     # Connector column doesn't exist - use bot name fallback
                     logger.warning(f"connector column doesn't exist, using bot name fallback: {exchange_col_error}")
