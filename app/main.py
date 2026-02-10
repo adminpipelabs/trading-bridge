@@ -709,20 +709,32 @@ async def test_coinstore_official():
         r = requests.post('https://api.coinstore.com/api/spot/accountList',
             data=payload, headers=headers, timeout=10)
         
+        # Check for error code 1401 in response (Coinstore returns HTTP 200 but error in JSON)
+        response_json = {}
+        error_code_1401 = False
+        try:
+            response_json = r.json()
+            if isinstance(response_json, dict) and response_json.get("code") == 1401:
+                error_code_1401 = True
+        except:
+            pass
+        
         test1_result = {
             "test": "Balance Check",
             "status_code": r.status_code,
             "response": r.text[:500],
+            "response_json": response_json,
             "expires": expires,
             "payload": payload,
             "signature_preview": f"{sig[:32]}...",
-            "success": r.status_code == 200,
-            "conclusion": "Bug is in aiohttp, not signature generation" if r.status_code == 200 else "Signature issue OR account settings (IP/permissions)"
+            "success": r.status_code == 200 and not error_code_1401,
+            "error_code_1401": error_code_1401,
+            "conclusion": "✅ Signature works! Bug is in aiohttp, not signature generation" if (r.status_code == 200 and not error_code_1401) else "❌ Signature rejected (code 1401) - Signature issue OR account settings (IP/permissions)"
         }
         results["tests"].append(test1_result)
         
         # TEST 2: Order placement (if balance works)
-        if r.status_code == 200:
+        if r.status_code == 200 and not error_code_1401:
             print("\n" + "=" * 60)
             print("TEST 2: Order Placement (POST /trade/order/place)")
             print("=" * 60)
@@ -754,16 +766,28 @@ async def test_coinstore_official():
             r2 = requests.post('https://api.coinstore.com/api/trade/order/place',
                 data=payload, headers=headers, timeout=10)
             
+            # Check for error code 1401 in response
+            response_json2 = {}
+            error_code_1401_2 = False
+            try:
+                response_json2 = r2.json()
+                if isinstance(response_json2, dict) and response_json2.get("code") == 1401:
+                    error_code_1401_2 = True
+            except:
+                pass
+            
             test2_result = {
                 "test": "Order Placement (compact JSON)",
                 "status_code": r2.status_code,
                 "response": r2.text[:500],
+                "response_json": response_json2,
                 "payload": payload,
                 "signature_preview": f"{sig[:32]}...",
-                "success": r2.status_code == 200
+                "success": r2.status_code == 200 and not error_code_1401_2,
+                "error_code_1401": error_code_1401_2
             }
             
-            if r2.status_code == 401:
+            if r2.status_code == 401 or error_code_1401_2:
                 # Test with default JSON separators
                 payload_default = json.dumps(params)
                 sig_default = hmac.new(key.encode('utf-8'), payload_default.encode('utf-8'), hashlib.sha256).hexdigest()
@@ -772,13 +796,25 @@ async def test_coinstore_official():
                 r3 = requests.post('https://api.coinstore.com/api/trade/order/place',
                     data=payload_default, headers=headers, timeout=10)
                 
+                # Check for error code 1401
+                response_json3 = {}
+                error_code_1401_3 = False
+                try:
+                    response_json3 = r3.json()
+                    if isinstance(response_json3, dict) and response_json3.get("code") == 1401:
+                        error_code_1401_3 = True
+                except:
+                    pass
+                
                 test2_result["retry_with_default_json"] = {
                     "status_code": r3.status_code,
                     "response": r3.text[:500],
+                    "response_json": response_json3,
                     "payload": payload_default,
                     "signature_preview": f"{sig_default[:32]}...",
-                    "success": r3.status_code == 200,
-                    "fix_needed": "Remove separators=(',', ':') from json.dumps()" if r3.status_code == 200 else None
+                    "success": r3.status_code == 200 and not error_code_1401_3,
+                    "error_code_1401": error_code_1401_3,
+                    "fix_needed": "Remove separators=(',', ':') from json.dumps()" if (r3.status_code == 200 and not error_code_1401_3) else None
                 }
             elif r2.status_code in [400, 500]:
                 test2_result["note"] = f"Order rejected but NOT signature issue (status {r2.status_code}) - signature WORKS"
