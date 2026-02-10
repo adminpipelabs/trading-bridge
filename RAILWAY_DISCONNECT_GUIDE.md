@@ -14,28 +14,30 @@
   - Contains all bot data, credentials, configs
   - **DO NOT disconnect this**
 
-### ❌ **Can Stop:**
-- **Trading Bridge App Service** - No longer needed
-  - Hetzner is running the app now
-  - Railway app was using broken proxy
-  - **Safe to stop/deploy**
+### ⚠️ **Can Keep Running (Optional):**
+- **Trading Bridge App Service** - Can run on both servers
+  - Railway now has static IP `162.220.232.99` (no proxy needed)
+  - Hetzner also running (redundancy/backup)
+  - **Both can run simultaneously** (redundancy)
+  - **Or stop Railway** to save costs (Hetzner handles it)
 
 ---
 
-## 📋 **IP Whitelisting - Only One IP**
+## 📋 **IP Whitelisting - Two IPs Required**
 
-### **Whitelist ONLY:**
+### **Whitelist BOTH:**
+- ✅ **`162.220.232.99`** - Railway static outbound IP (Railway Pro)
 - ✅ **`5.161.64.209`** - Hetzner server static IP
 
 ### **Do NOT whitelist:**
 - ❌ `3.222.129.4` - Old QuotaGuard proxy IP (not used)
 - ❌ `54.205.35.75` - Old QuotaGuard proxy IP (not used)
-- ❌ Railway dynamic IPs - Not needed
 
-**Why?**
-- Hetzner connects **directly** (no proxy)
-- Only Hetzner's static IP `5.161.64.209` makes requests
-- Proxy IPs are from Railway days (no longer used)
+**Why both?**
+- Railway Pro now provides static outbound IP `162.220.232.99`
+- Hetzner uses static IP `5.161.64.209`
+- Both servers can run Trading Bridge (redundancy/backup)
+- Both need IP whitelisted to use the same API keys
 
 ---
 
@@ -58,10 +60,12 @@ Railway
 ### **Step 1: Whitelist IPs (Do This First)**
 
 **Coinstore:**
-- Add ONLY `5.161.64.209` to IP binding list
+- Add `162.220.232.99` (Railway) to IP binding list
+- Add `5.161.64.209` (Hetzner) to IP binding list
 
 **BitMart:**
-- Add ONLY `5.161.64.209` to IP whitelist
+- Add `162.220.232.99` (Railway) to IP whitelist
+- Add `5.161.64.209` (Hetzner) to IP whitelist
 
 ### **Step 2: Verify Hetzner Works**
 
@@ -120,18 +124,21 @@ psql $DATABASE_URL
 
 | Component | Action | Reason |
 |-----------|--------|--------|
-| **IP Whitelist** | Add ONLY `5.161.64.209` | Hetzner's static IP |
-| **Railway App** | Can stop | Hetzner runs app now |
-| **Railway Postgres** | Keep running | Hetzner still uses it |
+| **IP Whitelist** | Add BOTH IPs | Railway: `162.220.232.99`<br>Hetzner: `5.161.64.209` |
+| **Railway App** | Can keep running | Static IP enabled, no proxy needed |
+| **Railway Postgres** | Keep running | Both servers use it |
 | **Proxy IPs** | Don't whitelist | Not used anymore |
 
 ---
 
 ## 🎯 **Bottom Line**
 
-1. ✅ **Whitelist ONLY `5.161.64.209`** on both exchanges
-2. ✅ **Keep Railway Postgres running** (Hetzner needs it)
-3. ⚠️ **Railway app can be stopped** (saves money, not required)
-4. ❌ **Don't whitelist proxy IPs** (not used on Hetzner)
+1. ✅ **Whitelist BOTH IPs** on both exchanges:
+   - `162.220.232.99` (Railway static IP)
+   - `5.161.64.209` (Hetzner static IP)
+2. ✅ **Keep Railway Postgres running** (both servers use it)
+3. ⚠️ **Railway app can keep running** (now has static IP, works without proxy)
+   - Or stop it to save costs (Hetzner handles it)
+4. ❌ **Don't whitelist proxy IPs** (not used anymore)
 
-**Railway Postgres is still needed until you migrate the database.**
+**Railway Pro provides static IP, so Railway app can work without proxy. Both servers can run simultaneously for redundancy, or you can stop Railway to save costs.**
