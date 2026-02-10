@@ -2270,6 +2270,15 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
             "sells": sells_24h
         }
         
+        # Also include volume in format expected by frontend (for compatibility)
+        # Frontend expects bot.volume?.value_usd or bot.balance?.volume_24h
+        result["volume"] = {
+            "type": "volume_traded",
+            "value_usd": round(volume_24h, 2),
+            "total_volume_usd": round(volume_24h, 2),
+            "total_trades": buys_24h + sells_24h
+        }
+        
         # Get recent trades for frontend display (last 10 trades)
         recent_trades = []
         try:
