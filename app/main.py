@@ -666,14 +666,18 @@ async def test_coinstore_official():
         # Connect to database
         engine = create_engine(DATABASE_URL)
         
-        # Get API credentials from database
+        # Get API credentials from database - use the specific Coinstore bot
+        # Look for bot with name containing "Coinstore" or connector = 'coinstore'
         with engine.connect() as conn:
             result = conn.execute(text("""
-                SELECT ec.api_key_encrypted, ec.api_secret_encrypted
+                SELECT ec.api_key_encrypted, ec.api_secret_encrypted, b.name, b.id
                 FROM exchange_credentials ec
                 JOIN clients cl ON cl.id = ec.client_id
                 JOIN bots b ON b.account = cl.account_identifier
-                WHERE b.connector = 'coinstore'
+                WHERE ec.exchange = 'coinstore' 
+                  AND b.connector = 'coinstore'
+                  AND b.status = 'running'
+                ORDER BY b.name LIKE '%Coinstore%' DESC, b.created_at DESC
                 LIMIT 1
             """))
             
@@ -683,6 +687,8 @@ async def test_coinstore_official():
             
             api_key_encrypted = row[0]
             api_secret_encrypted = row[1]
+            bot_name = row[2] if len(row) > 2 else "unknown"
+            bot_id = row[3] if len(row) > 3 else "unknown"
             
             # Decrypt
             api_key = fernet.decrypt(api_key_encrypted.encode()).decode()
@@ -762,7 +768,10 @@ async def test_coinstore_official():
             "success": response.status_code == 200,
             "error_1401": response.status_code == 1401,
             "api_key_preview": f"{api_key[:10]}...{api_key[-5:]}",
+            "api_key_full": api_key,  # Include full key to verify it's correct
             "signature_preview": f"{signature[:20]}...{signature[-10:]}",
+            "bot_name": bot_name,
+            "bot_id": bot_id,
             "tested_without_proxy": True,
             "proxy_test": proxy_test_result,
             "quotaguard_url_set": bool(proxy_url),
