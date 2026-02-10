@@ -359,9 +359,12 @@ class CoinstoreConnector:
             # LIMIT orders: use quantity and price
             # CRITICAL: ordPrice must be a NUMBER (not string), ordQty must be a STRING
             # Coinstore returns 1401 when payload types are wrong (misleading error code)
+            # Price must be formatted to 6 decimals (SHARPUSDT tickSz=6 per order book)
             if price:
-                params['ordPrice'] = float(price)  # NUMBER type (no quotes in JSON)
-            # Format amount as string with 2 decimal places (SHARPUSDT lotSz=2)
+                # Format to 6 decimals, then convert to float (preserves precision)
+                price_str = f"{float(price):.6f}"
+                params['ordPrice'] = float(price_str)  # NUMBER type (no quotes in JSON)
+            # Format amount as string with 2 decimal places (SHARPUSDT lotSz=2 per order book)
             params['ordQty'] = f"{amount:.2f}"  # STRING type (with quotes in JSON)
         
         # Log payload before sending

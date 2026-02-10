@@ -1346,7 +1346,7 @@ class BotRunner:
             # New: spread_percent (1.0 = 1.0% for testing), order_size_usdt (10)
             # Prefer new format if not present, fall back to old defaults for backward compatibility
             if 'spread_percent' not in config and 'spread_bps' not in config:
-                config.setdefault('spread_percent', 1.0)  # 1.0% (wider spread for testing)
+                config.setdefault('spread_percent', 3.0)  # 3.0% (wider spread for testing)
             elif 'spread_bps' in config and 'spread_percent' not in config:
                 # Keep old spread_bps if set (backward compatibility)
                 pass
@@ -1354,8 +1354,8 @@ class BotRunner:
                 config.setdefault('order_size_usdt', 10)  # $10 USD (test size)
             config.setdefault('refresh_interval_seconds', config.get('refresh_interval', 60))  # 60 seconds
             config.setdefault('poll_interval_seconds', 5)  # Check fills every 5s
-            config.setdefault('price_decimals', 8)
-            config.setdefault('amount_decimals', 6)
+            config.setdefault('price_decimals', 6)  # SHARPUSDT tickSz=6 (per order book)
+            config.setdefault('amount_decimals', 2)  # SHARPUSDT lotSz=2 (per order book)
             
             # Get proxy URL
             proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")

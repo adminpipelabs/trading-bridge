@@ -454,6 +454,83 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                         detail=f"{request.exchange} API keys not connected. Please provide API credentials (api_key, api_secret) when creating the bot. CEX bots require API credentials, not wallet addresses."
                     )
                 logger.info(f"✅ Verified exchange credentials exist for {exchange_lower} bot (CEX bot - no wallet required)")
+            
+            # CRITICAL: Validate ticker/symbol exists BEFORE creating bot
+            if is_cex and (request.base_asset and request.quote_asset):
+                symbol = f"{request.base_asset}/{request.quote_asset}"
+                logger.info(f"🔍 Validating ticker {symbol} exists on {exchange_lower} before bot creation...")
+                try:
+                    # Get API credentials for validation
+                    creds_row = db.execute(text("""
+                        SELECT api_key_encrypted, api_secret_encrypted, passphrase_encrypted
+                        FROM exchange_credentials 
+                        WHERE client_id = :client_id AND exchange = :exchange
+                    """), {
+                        "client_id": client_id,
+                        "exchange": exchange_lower
+                    }).first()
+                    
+                    if creds_row:
+                        from app.cex_volume_bot import decrypt_credential
+                        api_key = decrypt_credential(creds_row.api_key_encrypted)
+                        api_secret = decrypt_credential(creds_row.api_secret_encrypted)
+                        
+                        # Validate ticker exists
+                        if exchange_lower == "coinstore":
+                            from app.coinstore_adapter import create_coinstore_exchange
+                            import os
+                            proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+                            exchange_instance = await create_coinstore_exchange(
+                                api_key=api_key,
+                                api_secret=api_secret,
+                                proxy_url=proxy_url
+                            )
+                            try:
+                                ticker = await exchange_instance.fetch_ticker(symbol)
+                                if not ticker or not ticker.get('last'):
+                                    raise HTTPException(
+                                        status_code=400,
+                                        detail=f"Ticker {symbol} not found or invalid on {request.exchange}. Please verify the symbol exists and is tradeable."
+                                    )
+                                logger.info(f"✅ Ticker {symbol} validated successfully on {exchange_lower} (price: {ticker.get('last')})")
+                            finally:
+                                await exchange_instance.close()
+                        else:
+                            # For other exchanges, use ccxt
+                            import ccxt
+                            from app.core.config import get_exchange_config
+                            exchange_config = get_exchange_config(exchange_lower)
+                            if exchange_config:
+                                ccxt_id = exchange_config.get("ccxt_id")
+                                if ccxt_id:
+                                    exchange_class = getattr(ccxt, ccxt_id, None)
+                                    if exchange_class:
+                                        exchange_params = {
+                                            'apiKey': api_key,
+                                            'secret': api_secret,
+                                            'enableRateLimit': True,
+                                        }
+                                        if proxy_url:
+                                            exchange_params['proxies'] = {'http': proxy_url, 'https': proxy_url}
+                                        exchange_instance = exchange_class(exchange_params)
+                                        try:
+                                            ticker = await exchange_instance.fetch_ticker(symbol)
+                                            if not ticker or not ticker.get('last'):
+                                                raise HTTPException(
+                                                    status_code=400,
+                                                    detail=f"Ticker {symbol} not found or invalid on {request.exchange}. Please verify the symbol exists and is tradeable."
+                                                )
+                                            logger.info(f"✅ Ticker {symbol} validated successfully on {exchange_lower} (price: {ticker.get('last')})")
+                                        finally:
+                                            await exchange_instance.close()
+                except HTTPException:
+                    raise
+                except Exception as ticker_error:
+                    logger.error(f"Failed to validate ticker {symbol} on {exchange_lower}: {ticker_error}", exc_info=True)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Failed to validate ticker {symbol} on {request.exchange}: {str(ticker_error)}. Please verify the symbol exists and API credentials are correct."
+                    )
         
         # For DEX bots, require private key
         if not is_cex:

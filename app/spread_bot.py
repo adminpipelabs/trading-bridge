@@ -51,7 +51,7 @@ class SpreadBot:
             spread_bps = Decimal(str(config.get('spread_bps', 200)))
             self.spread_percent = spread_bps / Decimal('10000') * Decimal('100')  # Convert to percentage
         else:
-            self.spread_percent = Decimal('1.0')  # Default 1.0% (wider spread for testing)
+            self.spread_percent = Decimal('3.0')  # Default 3.0% (wider spread for testing)
         
         # Order size: support both order_size_usdt and order_size
         if 'order_size_usdt' in config:
@@ -74,8 +74,8 @@ class SpreadBot:
         # Refresh interval: support both refresh_interval_seconds and refresh_interval
         self.refresh_interval = config.get('refresh_interval_seconds', config.get('refresh_interval', 60))
         
-        self.price_decimals = config.get('price_decimals', 8)
-        self.amount_decimals = config.get('amount_decimals', 6)
+        self.price_decimals = config.get('price_decimals', 6)  # SHARPUSDT tickSz=6 (per order book)
+        self.amount_decimals = config.get('amount_decimals', 2)  # SHARPUSDT lotSz=2 (per order book)
         
         # State tracking
         self.active_bid_id: Optional[str] = None
