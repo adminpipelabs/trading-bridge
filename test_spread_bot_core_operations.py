@@ -250,5 +250,5 @@ if __name__ == "__main__":
         sys.exit(1)
     
     # Run tests
-    success = asyncio.run(test_spread_bot_core_operations())
+    success = asyncio.run(test_spread_bot_operations())
     sys.exit(0 if success else 1)
