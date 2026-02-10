@@ -132,7 +132,11 @@ class SpreadBot:
     async def _fetch_balance(self) -> Optional[dict]:
         """Fetch current balance from exchange."""
         try:
-            balance = await self.exchange.fetch_balance()
+            # BitMart requires type parameter
+            if hasattr(self.exchange, 'id') and self.exchange.id == 'bitmart':
+                balance = await self.exchange.fetch_balance({'type': 'spot'})
+            else:
+                balance = await self.exchange.fetch_balance()
             
             # Parse symbol to get base/quote
             base, quote = self.symbol.split('/')
@@ -147,7 +151,21 @@ class SpreadBot:
                 'quote_used': Decimal(str(balance.get('used', {}).get(quote, 0))),
             }
         except Exception as e:
-            logger.error(f"❌ Balance fetch error: {e}", exc_info=True)
+            # Log full error details for BitMart IP whitelist errors
+            error_str = str(e)
+            error_type = type(e).__name__
+            
+            # Check if it's a BitMart error with code
+            if 'bitmart' in error_str.lower() or (hasattr(self.exchange, 'id') and self.exchange.id == 'bitmart'):
+                logger.error(f"❌ Balance fetch error: {error_type}: {error_str}")
+                # Try to get more details from ccxt exception
+                if hasattr(e, 'args') and e.args:
+                    logger.error(f"   Error args: {e.args}")
+                if hasattr(e, 'response') and e.response:
+                    logger.error(f"   HTTP response: {e.response}")
+                logger.error(f"   Full traceback:", exc_info=True)
+            else:
+                logger.error(f"❌ Balance fetch error: {error_type}: {error_str}", exc_info=True)
             return None
     
     async def _get_mid_price(self) -> Optional[Decimal]:
