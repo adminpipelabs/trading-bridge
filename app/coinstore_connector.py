@@ -347,14 +347,15 @@ class CoinstoreConnector:
             # LIMIT orders: use quantity and price
             # Per Coinstore docs: LIMIT orders do NOT include timestamp in payload
             # Only ordPrice, ordQty, symbol, side, ordType
-            # Format numbers as strings without decimal if whole number
+            # CRITICAL: Must match symbol precision requirements
+            # SHARPUSDT: tickSz=6 (price needs 6 decimals), lotSz=2 (quantity needs 2 decimals)
             if price:
-                # Remove trailing zeros and decimal point if whole number
-                price_str = f"{price:.8f}".rstrip('0').rstrip('.')
-                params['ordPrice'] = price_str
-            # Format amount similarly
-            amount_str = f"{amount:.6f}".rstrip('0').rstrip('.')
-            params['ordQty'] = amount_str
+                # Format price with 6 decimal places (SHARPUSDT tickSz=6)
+                # Always include trailing zeros to match precision
+                params['ordPrice'] = f"{price:.6f}"
+            # Format amount with 2 decimal places (SHARPUSDT lotSz=2)
+            # Always include trailing zeros to match precision
+            params['ordQty'] = f"{amount:.2f}"
         
         # Log payload before sending
         logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")

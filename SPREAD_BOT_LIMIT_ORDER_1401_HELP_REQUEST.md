@@ -167,9 +167,16 @@ order = await self.exchange.create_limit_order(
 
 ---
 
-**Status:** ⏸️ **CONFIRMED: NOT A CODE ISSUE**
+**Status:** ⏸️ **CONFIRMED: NOT CODE OR PRECISION ISSUE**
 
-**CRITICAL FINDING:** Ran the exact standalone script (direct `requests.post`, no connector code) and **still getting 1401**.
+**CRITICAL FINDINGS:**
+
+1. **Not a code issue:** Ran exact standalone script (direct `requests.post`) → still 1401
+2. **Not a precision issue:** Tested with correct precision (6 decimals price, 2 decimals quantity) → still 1401
+3. **Symbol config confirmed:**
+   - SHARPUSDT tickSz: 6 (price needs 6 decimals)
+   - SHARPUSDT lotSz: 2 (quantity needs 2 decimals)
+   - Test used: `"ordPrice": "0.006000"`, `"ordQty": "1700.00"` → still 1401
 
 **Exact Test Result:**
 ```python
