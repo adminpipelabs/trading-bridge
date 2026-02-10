@@ -719,8 +719,42 @@ async def test_coinstore_official():
             'Connection': 'keep-alive'
         }
         
-        # Make request (exact from official docs)
-        response = requests.request("POST", url, headers=headers, data=payload_bytes, timeout=30)
+        # Make request WITHOUT proxy (test if Coinstore needs proxy)
+        # Temporarily unset proxy env vars for this test
+        import copy
+        original_env = copy.deepcopy(os.environ)
+        if 'HTTP_PROXY' in os.environ:
+            del os.environ['HTTP_PROXY']
+        if 'HTTPS_PROXY' in os.environ:
+            del os.environ['HTTPS_PROXY']
+        
+        try:
+            response = requests.request("POST", url, headers=headers, data=payload_bytes, timeout=30)
+        finally:
+            # Restore original env
+            os.environ.clear()
+            os.environ.update(original_env)
+        
+        # Also test proxy status
+        proxy_url = os.getenv("QUOTAGUARDSTATIC_URL", "")
+        proxy_test_result = None
+        if proxy_url:
+            try:
+                # Test proxy with api.ipify.org
+                proxy_test = requests.get("https://api.ipify.org", proxies={
+                    "http": proxy_url,
+                    "https": proxy_url
+                }, timeout=10)
+                proxy_test_result = {
+                    "status": "success",
+                    "ip": proxy_test.text,
+                    "status_code": proxy_test.status_code
+                }
+            except Exception as proxy_err:
+                proxy_test_result = {
+                    "status": "failed",
+                    "error": str(proxy_err)
+                }
         
         return {
             "status_code": response.status_code,
@@ -728,7 +762,11 @@ async def test_coinstore_official():
             "success": response.status_code == 200,
             "error_1401": response.status_code == 1401,
             "api_key_preview": f"{api_key[:10]}...{api_key[-5:]}",
-            "signature_preview": f"{signature[:20]}...{signature[-10:]}"
+            "signature_preview": f"{signature[:20]}...{signature[-10:]}",
+            "tested_without_proxy": True,
+            "proxy_test": proxy_test_result,
+            "quotaguard_url_set": bool(proxy_url),
+            "quotaguard_url_preview": proxy_url.split('@')[0] if proxy_url and '@' in proxy_url else proxy_url[:30] if proxy_url else None
         }
         
     except Exception as e:
