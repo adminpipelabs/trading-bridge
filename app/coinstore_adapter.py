@@ -64,22 +64,37 @@ class CoinstoreExchange:
         """Fetch ticker data."""
         try:
             data = await self.connector.get_ticker(symbol)
-            if data.get('code') == 0:
+            logger.debug(f"Ticker API response for {symbol}: code={data.get('code')}, keys={list(data.keys())}")
+            
+            # Coinstore returns code as 0 (int) or "0" (string) for success
+            code = data.get('code')
+            if code == 0 or code == "0":
                 ticker_data = data.get('data', {})
+                if not ticker_data:
+                    logger.error(f"Ticker response has no data field: {data}")
+                    raise Exception(f"API error: No data in response")
+                
+                last_price = ticker_data.get('lastPrice') or ticker_data.get('last')
+                if not last_price:
+                    logger.error(f"Ticker data missing lastPrice: {ticker_data}")
+                    raise Exception(f"API error: No lastPrice in ticker data")
+                
                 return {
                     'symbol': symbol,
-                    'last': float(ticker_data.get('lastPrice', 0)),
-                    'bid': float(ticker_data.get('bidPrice', 0)),
-                    'ask': float(ticker_data.get('askPrice', 0)),
-                    'high': float(ticker_data.get('high24h', 0)),
-                    'low': float(ticker_data.get('low24h', 0)),
-                    'volume': float(ticker_data.get('volume24h', 0)),
+                    'last': float(last_price),
+                    'bid': float(ticker_data.get('bidPrice', 0) or ticker_data.get('bid', 0)),
+                    'ask': float(ticker_data.get('askPrice', 0) or ticker_data.get('ask', 0)),
+                    'high': float(ticker_data.get('high24h', 0) or ticker_data.get('high', 0)),
+                    'low': float(ticker_data.get('low24h', 0) or ticker_data.get('low', 0)),
+                    'volume': float(ticker_data.get('volume24h', 0) or ticker_data.get('volume', 0)),
                     'timestamp': int(time.time() * 1000),
                 }
             else:
-                raise Exception(f"API error: {data.get('msg')}")
+                error_msg = data.get('msg') or data.get('message') or f"Code {code}"
+                logger.error(f"Ticker API error for {symbol}: code={code}, msg={error_msg}, full response: {data}")
+                raise Exception(f"API error: {error_msg}")
         except Exception as e:
-            logger.error(f"Error fetching ticker for {symbol}: {e}")
+            logger.error(f"Error fetching ticker for {symbol}: {e}", exc_info=True)
             raise
     
     async def fetch_balance(self, params: Optional[Dict] = None) -> Dict[str, Any]:
