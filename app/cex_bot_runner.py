@@ -421,7 +421,10 @@ class CEXBotRunner:
                         
                         elapsed = (datetime.now(timezone.utc) - last_trade).total_seconds()
                         should_trade = elapsed >= interval
-                        logger.info(f"🔍 Bot {bot_id} - Elapsed: {elapsed:.0f}s / {interval}s - {'WILL TRADE' if should_trade else 'WAITING'}")
+                        if should_trade:
+                            logger.info(f"✅✅✅ Bot {bot_id} - Interval elapsed ({elapsed:.0f}s >= {interval}s) - WILL EXECUTE MARKET ORDER NOW ✅✅✅")
+                        else:
+                            logger.info(f"⏳ Bot {bot_id} - Waiting: {elapsed:.0f}s / {interval}s ({interval-elapsed:.0f}s remaining)")
                     except Exception as e:
                         logger.error(f"Error calculating trade interval for bot {bot_id}: {e}")
                         # If datetime comparison fails, allow trade (safer)
