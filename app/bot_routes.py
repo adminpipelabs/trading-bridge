@@ -2269,9 +2269,54 @@ async def get_bot_stats(bot_id: str, db: Session = Depends(get_db)):
             "buys": buys_24h,
             "sells": sells_24h
         }
+        
+        # Get recent trades for frontend display (last 10 trades)
+        recent_trades = []
+        try:
+            # Get from trade_logs (CEX bots)
+            recent_trade_logs = db.execute(text("""
+                SELECT side, amount, price, cost_usd, order_id, created_at
+                FROM trade_logs
+                WHERE bot_id = :bot_id
+                ORDER BY created_at DESC
+                LIMIT 10
+            """), {"bot_id": bot_id}).fetchall()
+            
+            for t in recent_trade_logs:
+                recent_trades.append({
+                    "side": t.side,
+                    "amount": float(t.amount) if t.amount else 0,
+                    "price": float(t.price) if t.price else 0,
+                    "value_usd": float(t.cost_usd) if t.cost_usd else 0,
+                    "order_id": t.order_id,
+                    "created_at": t.created_at.isoformat() if t.created_at else None
+                })
+            
+            # Get from bot_trades (DEX bots)
+            recent_dex_trades = db.query(BotTrade).filter(
+                BotTrade.bot_id == bot_id
+            ).order_by(BotTrade.created_at.desc()).limit(10).all()
+            
+            for t in recent_dex_trades:
+                recent_trades.append({
+                    "side": t.side,
+                    "amount": float(t.amount) if t.amount else 0,
+                    "price": float(t.price) if t.price else 0,
+                    "value_usd": float(t.value_usd) if t.value_usd else 0,
+                    "tx_signature": t.tx_signature,
+                    "created_at": t.created_at.isoformat() if t.created_at else None
+                })
+            
+            # Sort by created_at descending
+            recent_trades.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+            result["recent_trades"] = recent_trades[:10]  # Limit to 10 most recent
+        except Exception as e:
+            logger.error(f"Error fetching recent trades for bot {bot_id}: {e}")
+            result["recent_trades"] = []
     except Exception as e:
         logger.error(f"Error calculating 24h stats for bot {bot_id}: {e}")
         # Return defaults if query fails
+        result["recent_trades"] = []
     
     return result
 
