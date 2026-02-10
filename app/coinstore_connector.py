@@ -210,10 +210,10 @@ class CoinstoreConnector:
         """Get ticker data for a symbol.
         
         According to Coinstore docs (https://coinstore-openapi.github.io/en/):
-        - GET /v1/ticker/price?symbol=SYMBOL - returns price for specific symbol(s)
+        - GET /v1/ticker/price?symbol=SYMBOL - PUBLIC endpoint, NO authentication needed
         - Response format: {"code": 0, "data": [{"id": 1, "symbol": "btcusdt", "price": "400"}]}
-        - Docs say "Public interfaces can be called without authentication" but examples show auth headers
-        - Try without auth first, fallback to auth if needed
+        - "Public interface can be used to obtain basic information and ticker data. 
+           Public interfaces can be called without authentication."
         """
         # Format: BTC/USDT -> BTCUSDT (remove separator, uppercase)
         symbol_formatted = symbol.replace('/', '').upper()
@@ -222,13 +222,8 @@ class CoinstoreConnector:
         endpoint = "/v1/ticker/price"
         params = {"symbol": symbol_formatted}
         
-        # Try without authentication first (docs say public endpoints don't require auth)
-        try:
-            return await self._request('GET', endpoint, params, authenticated=False)
-        except Exception as no_auth_error:
-            # If that fails, try with authentication (some endpoints may require it for rate limiting)
-            logger.warning(f"Ticker request without auth failed: {no_auth_error}, trying with auth...")
-            return await self._request('GET', endpoint, params, authenticated=True)
+        # Ticker is a PUBLIC endpoint - NO authentication headers!
+        return await self._request('GET', endpoint, params, authenticated=False)
     
     async def get_balances(self) -> Dict[str, Any]:
         """Get account balances."""
