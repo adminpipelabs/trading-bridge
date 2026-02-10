@@ -26,12 +26,22 @@
 
 ## Current Problem
 
-**Spread Bot is still getting `1401 Unauthorized` errors** when calling `fetch_balance()`:
+**Spread Bot is getting `1401` application-level error** when calling `fetch_balance()`:
 
+**IMPORTANT:** `1401` is NOT an HTTP status code - it's a Coinstore application-level error code. If HTTP status is `200` with `{"code": 1401}`, that means:
+- ✅ **Authentication/signature passed** (HTTP 200 OK)
+- ❌ **Application-level error** (could be wrong endpoint, missing params, account permissions, etc.)
+
+**Current Error Logs:**
 ```
-{"timestamp": "2026-02-10T18:59:38.819780", "level": "info", "logger": "app.coinstore_adapter", "message": "💰 Coinstore balance API response: code=1401, data type=<class 'NoneType'>"}
-{"timestamp": "2026-02-10T18:59:38.819955", "level": "error", "logger": "app.coinstore_adapter", "message": "Coinstore API error: code=1401, msg=Unauthorized, full response={'message': 'Unauthorized', 'code': 1401}"}
+{"timestamp": "2026-02-10T19:04:42.214607", "level": "info", "logger": "app.coinstore_adapter", "message": "💰 Coinstore balance API response: code=1401, data type=<class 'NoneType'>"}
+{"timestamp": "2026-02-10T19:04:42.214741", "level": "error", "logger": "app.coinstore_adapter", "message": "Coinstore API error: code=1401, msg=Unauthorized, full response={'message': 'Unauthorized', 'code': 1401}"}
 ```
+
+**⚠️ MISSING CRITICAL INFO:**
+- **HTTP Status Code:** Not logged (need to verify if it's 200 or 401)
+- **Full Request Details:** Headers, payload, exact endpoint URL
+- **Raw Response Body:** Full JSON response
 
 **Key Observations:**
 - Volume Bot uses the **same connector** (`CoinstoreConnector`) and **works perfectly**

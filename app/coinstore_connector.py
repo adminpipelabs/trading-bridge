@@ -188,43 +188,59 @@ class CoinstoreConnector:
                 
                 async with session.post(url, data=body_bytes, **request_kwargs) as response:
                     response_text = await response.text()
-                    logger.debug(f"Coinstore API POST {endpoint} response status={response.status}")
+                    http_status = response.status
+                    logger.info(f"🔵 Coinstore API POST {endpoint} - HTTP Status: {http_status}, Response length: {len(response_text)}")
                     
-                    if response.status != 200:
+                    # Log full response for debugging (truncated if too long)
+                    if len(response_text) < 1000:
+                        logger.info(f"🔵 Full response body: {response_text}")
+                    else:
+                        logger.info(f"🔵 Response body (first 500 chars): {response_text[:500]}")
+                    
+                    if http_status != 200:
                         error_text = response_text[:500]
                         # Try to parse error response
                         try:
                             error_json = await response.json()
-                            error_code = error_json.get('code', response.status)
+                            error_code = error_json.get('code', http_status)
                             error_msg = error_json.get('msg') or error_json.get('message') or error_text
                             
-                            # Detailed error logging for 1401
-                            if error_code == 1401:
-                                logger.error("=" * 80)
-                                logger.error("❌ COINSTORE 1401 UNAUTHORIZED")
-                                logger.error("=" * 80)
-                                logger.error(f"   Error: {error_msg}")
-                                logger.error(f"   API Key: {self.api_key[:10]}...{self.api_key[-5:]}")
-                                logger.error(f"   Using proxy: {bool(self.proxy_url)}")
-                                if self.proxy_url:
-                                    logger.error(f"   Proxy URL: {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:50]}")
-                                logger.error("")
-                                logger.error("   CHECK THESE:")
-                                logger.error("   1. IP Whitelist: Is server IP whitelisted on Coinstore dashboard?")
-                                logger.error("   2. API Secret: Does secret in database match Coinstore dashboard?")
-                                logger.error("   3. API Permissions: Does API key have 'Read' and 'Spot Trading' enabled?")
-                                logger.error("=" * 80)
-                            else:
-                                logger.error(f"❌ Coinstore API error (code {error_code}): {error_msg}")
-                                logger.error(f"   Full error response: {error_json}")
+                            logger.error(f"❌ Coinstore API HTTP {http_status} with application error code {error_code}: {error_msg}")
+                            logger.error(f"   Full error response: {error_json}")
                             
-                            raise Exception(f"HTTP {response.status}: Coinstore API error (code {error_code}): {error_msg}")
+                            raise Exception(f"HTTP {http_status}: Coinstore API error (code {error_code}): {error_msg}")
                         except:
-                            logger.error(f"❌ Coinstore API HTTP {response.status}: {error_text}")
-                            raise Exception(f"HTTP {response.status}: {error_text}")
+                            logger.error(f"❌ Coinstore API HTTP {http_status}: {error_text}")
+                            raise Exception(f"HTTP {http_status}: {error_text}")
                     
+                    # HTTP 200 - parse JSON response
                     try:
-                        return await response.json()
+                        json_data = await response.json()
+                        # Check for application-level error codes in 200 response
+                        app_error_code = json_data.get('code')
+                        if app_error_code and app_error_code != 0 and app_error_code != "0":
+                            error_msg = json_data.get('msg') or json_data.get('message') or 'Unknown error'
+                            logger.error("=" * 80)
+                            logger.error(f"❌ COINSTORE APPLICATION ERROR: HTTP {http_status} OK but code={app_error_code}")
+                            logger.error("=" * 80)
+                            logger.error(f"   HTTP Status: {http_status} (authentication passed)")
+                            logger.error(f"   Application Error Code: {app_error_code}")
+                            logger.error(f"   Error Message: {error_msg}")
+                            logger.error(f"   Endpoint: {endpoint}")
+                            logger.error(f"   Payload: {payload[:200] if len(payload) < 200 else payload[:200] + '...'}")
+                            logger.error(f"   API Key: {self.api_key[:10]}...{self.api_key[-5:]}")
+                            logger.error(f"   Full response: {json_data}")
+                            logger.error("")
+                            logger.error("   NOTE: HTTP 200 means signature/auth passed.")
+                            logger.error("   Application error could be:")
+                            logger.error("   - Wrong endpoint or missing required params")
+                            logger.error("   - Account permissions issue")
+                            logger.error("   - Account status/restriction")
+                            logger.error("=" * 80)
+                            
+                            raise Exception(f"HTTP {http_status}: Coinstore API error (code {app_error_code}): {error_msg}")
+                        
+                        return json_data
                     except Exception as json_err:
                         logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
                         raise Exception(f"Invalid JSON response: {response_text[:200]}")
