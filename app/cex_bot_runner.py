@@ -69,15 +69,18 @@ class CEXBotRunner:
             # NOTE: exchange column may not exist, so detect CEX from bot name as fallback
             try:
                 # Try query with exchange column first
+                # For Coinstore, we need to check exchange_credentials, not connectors
                 try:
                     bots = await conn.fetch("""
                         SELECT b.*, 
                                c.api_key,
                                c.api_secret,
-                               c.memo
+                               c.memo,
+                               cl.id as client_id,
+                               b.exchange as bot_exchange
                         FROM bots b
                         JOIN clients cl ON cl.account_identifier = b.account
-                        JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.connector, 'bitmart'))
+                        LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.connector, 'bitmart'))
                         WHERE b.status = 'running'
                           AND b.bot_type = 'volume'
                           AND (b.connector IS NULL OR (b.connector IS NOT NULL AND b.connector != 'jupiter'))
@@ -193,12 +196,16 @@ class CEXBotRunner:
                     api_secret = bot_record.get("api_secret")
                     memo = bot_record.get("memo")
                     
-                    # If no keys OR connector doesn't match expected exchange, check exchange_credentials
-                    if (not api_key or not api_secret) or (expected_exchange and connector_name and connector_name != expected_exchange):
-                        if expected_exchange:
-                            logger.warning(f"⚠️  Bot {bot_id} - connector '{connector_name}' doesn't match expected '{expected_exchange}' or missing keys, checking exchange_credentials...")
+                    # For Coinstore, ALWAYS check exchange_credentials first (not connectors)
+                    # For other exchanges, check exchange_credentials if keys missing or connector doesn't match
+                    client_id = bot_record.get("client_id")
+                    if expected_exchange == "coinstore" or (not api_key or not api_secret) or (expected_exchange and connector_name and connector_name != expected_exchange):
+                        if expected_exchange and client_id:
+                            if expected_exchange == "coinstore":
+                                logger.info(f"🔍 Bot {bot_id} - Coinstore bot, checking exchange_credentials table...")
+                            else:
+                                logger.warning(f"⚠️  Bot {bot_id} - connector '{connector_name}' doesn't match expected '{expected_exchange}' or missing keys, checking exchange_credentials...")
                             # Query exchange_credentials table
-                            client_id = bot_record.get("client_id")
                             if client_id:
                                 # Try exact match first
                                 creds_result = await conn.fetchrow("""
