@@ -23,6 +23,10 @@ class CoinstoreConnector:
         # Strip whitespace (common issue with copy-paste)
         self.api_key = api_key.strip() if api_key else ''
         self.api_secret = api_secret.strip() if api_secret else ''
+        # Normalize proxy URL: HTTP proxies should use http:// even for HTTPS targets
+        if proxy_url and proxy_url.startswith('https://'):
+            proxy_url = 'http://' + proxy_url[8:]  # Replace https:// with http://
+            logger.debug("Normalized proxy URL: changed https:// to http://")
         self.proxy_url = proxy_url
         self.session: Optional[aiohttp.ClientSession] = None
         

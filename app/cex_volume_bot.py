@@ -31,6 +31,24 @@ except Exception as e:
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
 
+def normalize_proxy_url(proxy_url: str) -> str:
+    """
+    Normalize proxy URL for aiohttp.
+    
+    HTTP proxies should use http:// even if the target URL is HTTPS.
+    This fixes 407 Proxy Authentication Required errors.
+    """
+    if not proxy_url:
+        return proxy_url
+    
+    # Replace https:// with http:// for proxy URLs (proxies use HTTP even for HTTPS targets)
+    if proxy_url.startswith('https://'):
+        proxy_url = 'http://' + proxy_url[8:]  # Remove 'https://' and add 'http://'
+        logger.debug("Normalized proxy URL: changed https:// to http://")
+    
+    return proxy_url
+
+
 def extract_proxy_url_from_quotaguard_info(connection_info: str) -> Optional[str]:
     """
     Extract the proxy URL from QuotaGuard connection information.
@@ -42,11 +60,12 @@ def extract_proxy_url_from_quotaguard_info(connection_info: str) -> Optional[str
     3.222.129.4
     ...
     
-    We need to extract just the URL line.
+    We need to extract just the URL line and normalize it.
     """
     if not connection_info:
         return None
     
+    url = None
     # Look for "CONNECTION URL" line
     for line in connection_info.split('\n'):
         line = line.strip()
@@ -56,12 +75,16 @@ def extract_proxy_url_from_quotaguard_info(connection_info: str) -> Optional[str
             if len(parts) > 1:
                 url = parts[1].strip()
                 if url.startswith(('http://', 'https://')):
-                    return url
+                    break
         elif line.startswith(('http://', 'https://')):
             # Direct URL found
-            return line
+            url = line
+            break
     
-    # If no URL found, return None
+    # Normalize the URL (use http:// for proxy even if original was https://)
+    if url:
+        return normalize_proxy_url(url)
+    
     return None
 
 

@@ -112,6 +112,12 @@ async def lifespan(app: FastAPI):
         # Extract proxy URL if it's in QuotaGuard connection info format
         proxy_url = extract_proxy_url_from_quotaguard_info(quotaguard_url) or quotaguard_url
         
+        # Normalize proxy URL: HTTP proxies should use http:// even for HTTPS targets
+        # This fixes 407 Proxy Authentication Required errors
+        if proxy_url.startswith('https://'):
+            proxy_url = 'http://' + proxy_url[8:]  # Replace https:// with http://
+            logger.debug("Normalized proxy URL: changed https:// to http://")
+        
         # Set environment variables for aiohttp to pick up automatically
         os.environ["HTTP_PROXY"] = proxy_url
         os.environ["HTTPS_PROXY"] = proxy_url

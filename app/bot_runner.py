@@ -480,6 +480,11 @@ class BotRunner:
             import os
             proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
             
+            # Normalize proxy URL: HTTP proxies should use http:// even for HTTPS targets
+            # This fixes 407 Proxy Authentication Required errors
+            if proxy_url and proxy_url.startswith('https://'):
+                proxy_url = 'http://' + proxy_url[8:]  # Replace https:// with http://
+            
             cex_bot = CEXVolumeBot(
                 bot_id=bot_id,
                 exchange_name=exchange_name,
@@ -1345,6 +1350,11 @@ class BotRunner:
             
             # Get proxy URL
             proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+            
+            # Normalize proxy URL: HTTP proxies should use http:// even for HTTPS targets
+            # This fixes 407 Proxy Authentication Required errors
+            if proxy_url and proxy_url.startswith('https://'):
+                proxy_url = 'http://' + proxy_url[8:]  # Replace https:// with http://
             
             # Create exchange instance (same way as CEXVolumeBot)
             from app.cex_volume_bot import get_exchange_config
