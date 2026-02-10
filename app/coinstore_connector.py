@@ -124,10 +124,14 @@ class CoinstoreConnector:
         
         try:
             # Pass proxy per-request if configured
-            # Coinstore API key has IP 54.205.35.75 whitelisted, so we need proxy
+            # On Hetzner (static IP 5.161.64.209), proxy is NOT needed
+            # On Railway, proxy was needed for IP 54.205.35.75
             request_kwargs = {'headers': headers}
             if self.proxy_url:
+                logger.debug(f"Using proxy for Coinstore request: {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:30]}...")
                 request_kwargs['proxy'] = self.proxy_url
+            else:
+                logger.debug("No proxy configured - using direct connection (Hetzner static IP)")
             
             if method.upper() == 'GET':
                 async with session.get(url, params=params, **request_kwargs) as response:
@@ -159,8 +163,27 @@ class CoinstoreConnector:
                             error_json = await response.json()
                             error_code = error_json.get('code', response.status)
                             error_msg = error_json.get('msg') or error_json.get('message') or error_text
-                            logger.error(f"❌ Coinstore API error (code {error_code}): {error_msg}")
-                            logger.error(f"   Full error response: {error_json}")
+                            
+                            # Detailed error logging for 1401
+                            if error_code == 1401:
+                                logger.error("=" * 80)
+                                logger.error("❌ COINSTORE 1401 UNAUTHORIZED")
+                                logger.error("=" * 80)
+                                logger.error(f"   Error: {error_msg}")
+                                logger.error(f"   API Key: {self.api_key[:10]}...{self.api_key[-5:]}")
+                                logger.error(f"   Using proxy: {bool(self.proxy_url)}")
+                                if self.proxy_url:
+                                    logger.error(f"   Proxy URL: {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:50]}")
+                                logger.error("")
+                                logger.error("   CHECK THESE:")
+                                logger.error("   1. IP Whitelist: Is server IP whitelisted on Coinstore dashboard?")
+                                logger.error("   2. API Secret: Does secret in database match Coinstore dashboard?")
+                                logger.error("   3. API Permissions: Does API key have 'Read' and 'Spot Trading' enabled?")
+                                logger.error("=" * 80)
+                            else:
+                                logger.error(f"❌ Coinstore API error (code {error_code}): {error_msg}")
+                                logger.error(f"   Full error response: {error_json}")
+                            
                             raise Exception(f"HTTP {response.status}: Coinstore API error (code {error_code}): {error_msg}")
                         except:
                             logger.error(f"❌ Coinstore API HTTP {response.status}: {error_text}")
