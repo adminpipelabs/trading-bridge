@@ -167,29 +167,30 @@ order = await self.exchange.create_limit_order(
 
 ---
 
-**Status:** ⏸️ **STILL FAILING AFTER TIMESTAMP REMOVAL**
+**Status:** ⏸️ **CONFIRMED: NOT A CODE ISSUE**
 
-**Update:** Removed `timestamp` from LIMIT order payload as suggested, but still getting 1401.
+**CRITICAL FINDING:** Ran the exact standalone script (direct `requests.post`, no connector code) and **still getting 1401**.
 
-**Current LIMIT order payload (no timestamp):**
-```json
-{
-    "symbol": "SHARPUSDT",
-    "side": "BUY",
-    "ordType": "LIMIT",
-    "ordQty": "1200",
-    "ordPrice": "0.009"
-}
+**Exact Test Result:**
+```python
+# Exact script from Dev
+payload = json.dumps({"ordPrice": "0.009", "ordQty": "1200", "symbol": "SHARPUSDT", "side": "BUY", "ordType": "LIMIT"})
+r = requests.post("https://api.coinstore.com/api/trade/order/place", data=payload, headers={...})
+
+# Result:
+Status Code: 200
+Response Text: {"message":"Unauthorized","code":1401}
 ```
 
-**Still getting:** `{"message":"Unauthorized","code":1401}`
+**Conclusion:** This is **NOT a code issue**. The problem is:
+- ❓ API key permissions (LIMIT orders require different permission than MARKET?)
+- ❓ Pair-level restrictions (SHARPUSDT may not allow LIMIT orders?)
+- ❓ Account-level restrictions (account may be restricted from LIMIT orders?)
 
-**Questions:**
-1. Is the parameter order important? (symbol, side, ordType, ordQty, ordPrice)
-2. Should `ordQty` and `ordPrice` be integers vs strings?
-3. Are there any other required fields we're missing?
-4. Could this be an API key permission issue specific to LIMIT orders?
+**Next Steps:**
+1. Check Coinstore dashboard for API key granular permissions (beyond just "Read/Trade")
+2. Check if SHARPUSDT pair has any trading restrictions
+3. Verify account-level trading permissions
+4. Test with a different trading pair (e.g., BTCUSDT) to see if it's pair-specific
 
-**Please verify:**
-- Exact payload format from a working Coinstore LIMIT order implementation
-- Any Coinstore-specific requirements we might be missing
+**The code is correct. This is an API key/permission/account restriction issue.**
