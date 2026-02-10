@@ -263,11 +263,22 @@ response = requests.request("POST", url, headers=headers, data=payload)
 
 ## 🎯 Next Steps (Pending Dev Input)
 
-1. Get confirmation on API key/secret format requirements
-2. Test with Coinstore Python SDK example to verify credentials
-3. Compare our signature calculation with working example
-4. Verify API key permissions and IP whitelisting
-5. Test with `requests` library to isolate aiohttp vs signature issue
+**Dev Suggestion:** Issue is likely NOT code-related, but account settings/permissions.
+
+### Immediate Actions:
+1. ✅ **Check Coinstore Dashboard** → API Management → API Keys
+2. ✅ **Verify "Spot Trading" permission is ENABLED** (most common issue)
+3. ✅ **Check IP Whitelist** - ensure `5.161.64.209` is whitelisted OR disable IP whitelist
+4. ✅ **Verify API Key Status** - must be ACTIVE
+5. ✅ **Check Account Trading Authority** - account must have trading enabled
+
+### If Still Failing:
+1. Test with Coinstore Python SDK example to verify credentials
+2. Compare our signature calculation with working example
+3. Try creating a NEW API key with all permissions enabled
+4. Test with `requests` library to isolate aiohttp vs signature issue
+
+**See:** `COINSTORE_ACCOUNT_SETTINGS_CHECKLIST.md` for detailed checklist
 
 ---
 
