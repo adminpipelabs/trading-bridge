@@ -210,21 +210,25 @@ class CoinstoreConnector:
         """Get ticker data for a symbol.
         
         According to Coinstore docs (https://coinstore-openapi.github.io/en/):
-        - GET /v1/ticker/price;symbol=SYMBOL - returns price for specific symbol(s) (semicolon format!)
+        - GET /v1/ticker/price?symbol=SYMBOL - returns price for specific symbol(s)
         - Response format: {"code": 0, "data": [{"id": 1, "symbol": "btcusdt", "price": "400"}]}
-        - Even public endpoints use auth headers (X-CS-APIKEY, X-CS-SIGN, X-CS-EXPIRES) for rate limiting
+        - Docs say "Public interfaces can be called without authentication" but examples show auth headers
+        - Try without auth first, fallback to auth if needed
         """
         # Format: BTC/USDT -> BTCUSDT (remove separator, uppercase)
         symbol_formatted = symbol.replace('/', '').upper()
         
-        # Coinstore docs show semicolon format: /v1/ticker/price;symbol=btcusdt
-        # For signature, payload should be "symbol=SHARPUSDT" (query string format)
-        endpoint = f"/v1/ticker/price;symbol={symbol_formatted}"
-        params = {}  # No params - symbol is in URL path
+        # Use standard query parameter format: /v1/ticker/price?symbol=SHARPUSDT
+        endpoint = "/v1/ticker/price"
+        params = {"symbol": symbol_formatted}
         
-        # Payload for signature is the query string part: "symbol=SHARPUSDT"
-        # We'll override the payload calculation in _request for this special case
-        return await self._request('GET', endpoint, params, authenticated=True, custom_payload=f"symbol={symbol_formatted}")
+        # Try without authentication first (docs say public endpoints don't require auth)
+        try:
+            return await self._request('GET', endpoint, params, authenticated=False)
+        except Exception as no_auth_error:
+            # If that fails, try with authentication (some endpoints may require it for rate limiting)
+            logger.warning(f"Ticker request without auth failed: {no_auth_error}, trying with auth...")
+            return await self._request('GET', endpoint, params, authenticated=True)
     
     async def get_balances(self) -> Dict[str, Any]:
         """Get account balances."""
