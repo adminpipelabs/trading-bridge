@@ -476,10 +476,11 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                         api_secret = decrypt_credential(creds_row.api_secret_encrypted)
                         
                         # Validate ticker exists
+                        import os
+                        proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
+                        
                         if exchange_lower == "coinstore":
                             from app.coinstore_adapter import create_coinstore_exchange
-                            import os
-                            proxy_url = os.getenv("QUOTAGUARDSTATIC_URL") or os.getenv("QUOTAGUARD_PROXY_URL")
                             exchange_instance = await create_coinstore_exchange(
                                 api_key=api_key,
                                 api_secret=api_secret,
