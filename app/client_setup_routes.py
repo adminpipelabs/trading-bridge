@@ -523,7 +523,9 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                                                 )
                                             logger.info(f"✅ Ticker {symbol} validated successfully on {exchange_lower} (price: {ticker.get('last')})")
                                         finally:
-                                            await exchange_instance.close()
+                                            # ccxt exchanges don't have close() method
+                                            if hasattr(exchange_instance, 'close'):
+                                                await exchange_instance.close()
                 except HTTPException:
                     raise
                 except Exception as ticker_error:
