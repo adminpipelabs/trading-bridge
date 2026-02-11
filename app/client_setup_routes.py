@@ -498,18 +498,22 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                                 await exchange_instance.close()
                         elif exchange_lower == "bitmart":
                             # BitMart: use public ticker API (no auth needed)
+                            # Best-effort validation - don't block bot creation on timeout
                             import requests as req
                             bitmart_symbol = symbol.replace("/", "_")
-                            resp = req.get(f"https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol={bitmart_symbol}", timeout=10)
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                if data.get("code") == 1000 and data.get("data"):
-                                    last_price = data["data"].get("last")
-                                    logger.info(f"✅ Ticker {symbol} validated on BitMart (price: {last_price})")
+                            try:
+                                resp = req.get(f"https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol={bitmart_symbol}", timeout=10)
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    if data.get("code") == 1000 and data.get("data"):
+                                        last_price = data["data"].get("last")
+                                        logger.info(f"✅ Ticker {symbol} validated on BitMart (price: {last_price})")
+                                    else:
+                                        raise HTTPException(status_code=400, detail=f"Ticker {symbol} not found on BitMart.")
                                 else:
-                                    raise HTTPException(status_code=400, detail=f"Ticker {symbol} not found on BitMart.")
-                            else:
-                                raise HTTPException(status_code=400, detail=f"Could not validate {symbol} on BitMart (HTTP {resp.status_code}).")
+                                    logger.warning(f"BitMart ticker validation returned HTTP {resp.status_code}, proceeding anyway")
+                            except req.exceptions.Timeout:
+                                logger.warning(f"BitMart ticker validation timed out for {symbol}, proceeding with bot creation")
                         else:
                             # Other exchanges: use ccxt public endpoint
                             import ccxt
