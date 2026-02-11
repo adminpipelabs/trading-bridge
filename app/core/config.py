@@ -12,8 +12,12 @@ class Settings(BaseSettings):
     APP_NAME: str = "Trading Bridge"
     DEBUG: bool = False
     
+    # Database
+    DATABASE_URL: str = ""
+    
     # Security
     API_KEY: str = ""  # Optional API key for securing the bridge
+    ENCRYPTION_KEY: str = ""
     
     # Rate limiting
     RATE_LIMIT_REQUESTS: int = 100
@@ -26,6 +30,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"
 
 
 settings = Settings()
