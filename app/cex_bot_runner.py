@@ -86,7 +86,7 @@ class CEXBotRunner:
                                c.memo,
                                c.name as connector_name,
                                cl.id as client_id,
-                               b.exchange as bot_exchange
+                               COALESCE(b.connector, 'bitmart') as bot_exchange
                         FROM bots b
                         JOIN clients cl ON cl.account_identifier = b.account
                         LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.connector, 'bitmart'))
