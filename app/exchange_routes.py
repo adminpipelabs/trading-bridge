@@ -254,42 +254,25 @@ async def get_dashboard(account: str, db: Session = Depends(get_db)):
         total_volume = sum(float(t.get("cost", 0)) for t in trades)
         
         # Transform balances to array format for frontend
-        # Returns individual token balances as a list (e.g., [{asset: "SHARP", total: 8000000}, {asset: "USDT", total: 1500}])
-        # Frontend should display each token separately, not just a total
         balances_array = []
         balances_dict = balance_data.get("balances", {})
-        total_usd_calculated = 0.0
-        
         for exchange_name, exchange_balances in balances_dict.items():
             if isinstance(exchange_balances, dict):
                 for asset, balance_info in exchange_balances.items():
-                    total = float(balance_info.get("total", 0))
-                    free = float(balance_info.get("free", 0))
-                    used = float(balance_info.get("used", 0))
-                    
-                    # Only include tokens with non-zero balance
-                    if total > 0 or free > 0:
-                        # USD value: USDT/USDC = 1:1, others = 0 (frontend can fetch prices if needed)
-                        usd_value = total if asset in ["USDT", "USDC"] else 0
-                        total_usd_calculated += usd_value
-                        
-                        balances_array.append({
-                            "exchange": exchange_name,
-                            "asset": asset,
-                            "free": free,
-                            "total": total,
-                            "used": used,
-                            "usd_value": usd_value
-                        })
-        
-        # Sort by USD value (descending), then by asset name
-        balances_array.sort(key=lambda x: (-x["usd_value"], x["asset"]))
+                    balances_array.append({
+                        "exchange": exchange_name,
+                        "asset": asset,
+                        "free": balance_info.get("free", 0),
+                        "total": balance_info.get("total", 0),
+                        "used": balance_info.get("used", 0),
+                        "usd_value": balance_info.get("total", 0) if asset == "USDT" else 0
+                    })
         
         return {
             "account": account,
             "balance": {
-                "total_usdt": total_usd_calculated,  # Calculated from balances array
-                "balances": balances_array  # Array of individual token balances - frontend should display each token
+                "total_usdt": balance_data.get("total_usdt", 0),
+                "balances": balances_array
             },
             "pnl": {
                 "total": pnl_data.get("total", 0),
