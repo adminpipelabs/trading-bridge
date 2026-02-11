@@ -38,8 +38,8 @@ class SpreadBot:
         else:
             self.spread_pct = 0.03  # 3% default
 
-        self.order_size_usd = config.get('order_size_usdt', config.get('order_size_usd', 10))
-        self.refresh_seconds = config.get('refresh_interval_seconds', config.get('refresh_seconds', 60))
+        self.order_size_usd = config.get('order_size_usd', config.get('order_size_usdt', 10))
+        self.refresh_seconds = config.get('refresh_seconds', config.get('refresh_interval_seconds', config.get('refresh_interval', 60)))
         self.price_decimals = config.get('price_decimals', 6)
         self.amount_decimals = config.get('amount_decimals', 2)
 
@@ -47,10 +47,12 @@ class SpreadBot:
         self.exchange_name = ""
         if hasattr(exchange, 'id'):
             self.exchange_name = exchange.id  # ccxt
+        elif hasattr(exchange, 'name'):
+            self.exchange_name = exchange.name  # CoinstoreExchange uses .name
         elif hasattr(exchange, 'exchange_name'):
             self.exchange_name = exchange.exchange_name
-        # Check for coinstore adapter
-        if hasattr(exchange, '_connector'):
+        # Check for coinstore adapter (attribute is 'connector', not '_connector')
+        if hasattr(exchange, 'connector') and hasattr(exchange.connector, '_request'):
             self.exchange_name = "coinstore"
 
         logger.info(f"SpreadBot {bot_id} created: {symbol} on {self.exchange_name}")
@@ -173,10 +175,10 @@ class SpreadBot:
         try:
             # Coinstore uses its own adapter; get the connector
             connector = None
-            if hasattr(self.exchange, '_connector'):
-                connector = self.exchange._connector
-            elif hasattr(self.exchange, 'connector'):
+            if hasattr(self.exchange, 'connector'):
                 connector = self.exchange.connector
+            elif hasattr(self.exchange, '_connector'):
+                connector = self.exchange._connector
 
             if not connector:
                 # Try create_limit_order on the adapter directly
@@ -185,18 +187,15 @@ class SpreadBot:
                 logger.info(f"  Coinstore {side.upper()} LIMIT placed: id={order_id}")
                 return str(order_id) if order_id else None
 
-            # Direct connector path
-            coinstore_symbol = self.symbol.replace("/", "")  # SHARP/USDT -> SHARPUSDT
-            params = {
-                "symbol": coinstore_symbol,
-                "side": side.upper(),
-                "ordType": "LIMIT",
-                "ordPrice": str(price),
-                "ordQty": str(amount),
-                "timestamp": int(time.time() * 1000),
-            }
-
-            result = await connector._request("POST", "/trade/order/place", params, authenticated=True)
+            # Direct connector path — use place_order which handles payload format
+            result = await connector.place_order(
+                symbol=self.symbol,
+                side=side.lower(),
+                order_type="limit",
+                amount=amount,
+                price=price
+            )
+            logger.info(f"  Coinstore {side.upper()} LIMIT response: {result}")
             code = result.get("code", -1)
 
             if code == 0:
@@ -249,7 +248,7 @@ class SpreadBot:
 
     async def _cancel_coinstore_order(self, order_id: str):
         """Cancel a single Coinstore order by ID."""
-        connector = getattr(self.exchange, '_connector', None) or getattr(self.exchange, 'connector', None)
+        connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
         if connector:
             await connector._request("POST", "/trade/order/cancel", {"ordId": int(order_id)}, authenticated=True)
         else:
@@ -257,7 +256,7 @@ class SpreadBot:
 
     async def _cancel_all_coinstore_orders(self):
         """Cancel all open orders on Coinstore for this symbol."""
-        connector = getattr(self.exchange, '_connector', None) or getattr(self.exchange, 'connector', None)
+        connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
         if not connector:
             return
 
