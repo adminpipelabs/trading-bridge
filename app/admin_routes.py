@@ -16,7 +16,7 @@ from app.services.exchange import exchange_manager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 @router.get("/clients/overview")
