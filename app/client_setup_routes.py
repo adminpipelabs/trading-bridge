@@ -498,7 +498,7 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                         else:
                             # For other exchanges, use ccxt
                             import ccxt
-                            from app.core.config import get_exchange_config
+                            from app.cex_exchanges import get_exchange_config
                             exchange_config = get_exchange_config(exchange_lower)
                             if exchange_config:
                                 ccxt_id = exchange_config.get("ccxt_id")

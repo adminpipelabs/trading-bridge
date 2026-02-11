@@ -186,75 +186,45 @@ class CoinstoreConnector:
                 
                 logger.debug(f"Coinstore POST payload bytes: {body_bytes[:200]}")
                 
-                # DEBUG: Print exact payload and headers right before request (Dev requested)
-                logger.info("=" * 80)
-                logger.info("🔍 DEBUG: EXACT REQUEST BEING SENT (right before HTTP call)")
-                logger.info("=" * 80)
-                logger.info(f"URL: {url}")
-                logger.info(f"Method: POST")
-                logger.info(f"Payload (string): {payload}")
-                logger.info(f"Payload (bytes): {body_bytes}")
-                logger.info(f"Payload length: {len(body_bytes)} bytes")
-                logger.info(f"Headers: {headers}")
-                logger.info(f"Request kwargs: {request_kwargs}")
-                logger.info("=" * 80)
-                
                 async with session.post(url, data=body_bytes, **request_kwargs) as response:
                     response_text = await response.text()
-                    http_status = response.status
-                    logger.info(f"🔵 Coinstore API POST {endpoint} - HTTP Status: {http_status}, Response length: {len(response_text)}")
+                    logger.debug(f"Coinstore API POST {endpoint} response status={response.status}")
                     
-                    # Log full response for debugging (truncated if too long)
-                    if len(response_text) < 1000:
-                        logger.info(f"🔵 Full response body: {response_text}")
-                    else:
-                        logger.info(f"🔵 Response body (first 500 chars): {response_text[:500]}")
-                    
-                    if http_status != 200:
+                    if response.status != 200:
                         error_text = response_text[:500]
                         # Try to parse error response
                         try:
                             error_json = await response.json()
-                            error_code = error_json.get('code', http_status)
+                            error_code = error_json.get('code', response.status)
                             error_msg = error_json.get('msg') or error_json.get('message') or error_text
                             
-                            logger.error(f"❌ Coinstore API HTTP {http_status} with application error code {error_code}: {error_msg}")
-                            logger.error(f"   Full error response: {error_json}")
+                            # Detailed error logging for 1401
+                            if error_code == 1401:
+                                logger.error("=" * 80)
+                                logger.error("❌ COINSTORE 1401 UNAUTHORIZED")
+                                logger.error("=" * 80)
+                                logger.error(f"   Error: {error_msg}")
+                                logger.error(f"   API Key: {self.api_key[:10]}...{self.api_key[-5:]}")
+                                logger.error(f"   Using proxy: {bool(self.proxy_url)}")
+                                if self.proxy_url:
+                                    logger.error(f"   Proxy URL: {self.proxy_url.split('@')[0] if '@' in self.proxy_url else self.proxy_url[:50]}")
+                                logger.error("")
+                                logger.error("   CHECK THESE:")
+                                logger.error("   1. IP Whitelist: Is server IP whitelisted on Coinstore dashboard?")
+                                logger.error("   2. API Secret: Does secret in database match Coinstore dashboard?")
+                                logger.error("   3. API Permissions: Does API key have 'Read' and 'Spot Trading' enabled?")
+                                logger.error("=" * 80)
+                            else:
+                                logger.error(f"❌ Coinstore API error (code {error_code}): {error_msg}")
+                                logger.error(f"   Full error response: {error_json}")
                             
-                            raise Exception(f"HTTP {http_status}: Coinstore API error (code {error_code}): {error_msg}")
+                            raise Exception(f"HTTP {response.status}: Coinstore API error (code {error_code}): {error_msg}")
                         except:
-                            logger.error(f"❌ Coinstore API HTTP {http_status}: {error_text}")
-                            raise Exception(f"HTTP {http_status}: {error_text}")
+                            logger.error(f"❌ Coinstore API HTTP {response.status}: {error_text}")
+                            raise Exception(f"HTTP {response.status}: {error_text}")
                     
-                    # HTTP 200 - parse JSON response
                     try:
-                        json_data = await response.json()
-                        # Check for application-level error codes in 200 response
-                        app_error_code = json_data.get('code')
-                        if app_error_code and app_error_code != 0 and app_error_code != "0":
-                            error_msg = json_data.get('msg') or json_data.get('message') or 'Unknown error'
-                            logger.error("=" * 80)
-                            logger.error(f"❌ COINSTORE APPLICATION ERROR: HTTP {http_status} OK but code={app_error_code}")
-                            logger.error("=" * 80)
-                            logger.error(f"   HTTP Status: {http_status} (authentication passed)")
-                            logger.error(f"   Application Error Code: {app_error_code}")
-                            logger.error(f"   Error Message: {error_msg}")
-                            logger.error(f"   Endpoint: {endpoint}")
-                            logger.error(f"   Payload: {payload[:200] if len(payload) < 200 else payload[:200] + '...'}")
-                            logger.error(f"   API Key: {self.api_key[:10]}...{self.api_key[-5:]}")
-                            logger.error(f"   Full response: {json_data}")
-                            logger.error(f"   FULL JSON RESPONSE BODY: {response_text}")  # Developer requested
-                            logger.error("")
-                            logger.error("   NOTE: HTTP 200 means signature/auth passed.")
-                            logger.error("   Application error could be:")
-                            logger.error("   - Wrong endpoint or missing required params")
-                            logger.error("   - Account permissions issue")
-                            logger.error("   - Account status/restriction")
-                            logger.error("=" * 80)
-                            
-                            raise Exception(f"HTTP {http_status}: Coinstore API error (code {app_error_code}): {error_msg}")
-                        
-                        return json_data
+                        return await response.json()
                     except Exception as json_err:
                         logger.error(f"Failed to parse JSON response: {json_err}, response text: {response_text[:500]}")
                         raise Exception(f"Invalid JSON response: {response_text[:200]}")
@@ -326,17 +296,17 @@ class CoinstoreConnector:
         # Format symbol (SHARP/USDT -> SHARPUSDT)
         symbol_formatted = symbol.replace('/', '')
         
-        # Generate timestamp ONCE - will be used for expires header
-        # Note: timestamp goes in HEADER (X-CS-EXPIRES), NOT in payload for LIMIT orders
+        # Generate timestamp ONCE - will be used for both payload and expires header
+        # This ensures they match exactly (critical for signature validation)
         timestamp_ms = int(time.time() * 1000)
         
         # Build payload per Coinstore docs
-        # CRITICAL: Both MARKET and LIMIT orders require timestamp in payload
+        # Note: timestamp is REQUIRED per API docs parameter table
         params = {
             'symbol': symbol_formatted,
             'side': side.upper(),  # 'BUY' or 'SELL'
             'ordType': order_type.upper(),  # 'MARKET' or 'LIMIT'
-            'timestamp': timestamp_ms,  # REQUIRED for both MARKET and LIMIT orders
+            'timestamp': timestamp_ms,  # Milliseconds timestamp (REQUIRED per docs)
         }
         
         # For MARKET orders: BUY uses ordAmt (USDT), SELL uses ordQty (tokens)
@@ -357,15 +327,9 @@ class CoinstoreConnector:
                 params['ordQty'] = str(amount)
         else:
             # LIMIT orders: use quantity and price
-            # CRITICAL: ordPrice must be a NUMBER (not string), ordQty must be a STRING
-            # Coinstore returns 1401 when payload types are wrong (misleading error code)
-            # Price must be formatted to 6 decimals (SHARPUSDT tickSz=6 per order book)
+            params['ordQty'] = str(amount)
             if price:
-                # Format to 6 decimals, then convert to float (preserves precision)
-                price_str = f"{float(price):.6f}"
-                params['ordPrice'] = float(price_str)  # NUMBER type (no quotes in JSON)
-            # Format amount as string with 2 decimal places (SHARPUSDT lotSz=2 per order book)
-            params['ordQty'] = f"{amount:.2f}"  # STRING type (with quotes in JSON)
+                params['price'] = str(price)
         
         # Log payload before sending
         logger.info(f"🔵 PLACING COINSTORE ORDER: endpoint={endpoint}, payload={params}")
@@ -374,15 +338,6 @@ class CoinstoreConnector:
         import json
         payload_json = json.dumps(params)  # Use default JSON format (with spaces) - matches Coinstore expectation
         logger.info(f"🔵 ORDER PAYLOAD JSON (for signature): {payload_json}")
-        
-        # DEBUG: Log exact payload types and values for LIMIT orders
-        if order_type.lower() == 'limit':
-            logger.info(f"🔍 DEBUG LIMIT ORDER PAYLOAD:")
-            logger.info(f"   ordPrice type: {type(params.get('ordPrice'))}, value: {params.get('ordPrice')}")
-            logger.info(f"   ordQty type: {type(params.get('ordQty'))}, value: {params.get('ordQty')}")
-            logger.info(f"   timestamp type: {type(params.get('timestamp'))}, value: {params.get('timestamp')}")
-            logger.info(f"   Full payload dict: {params}")
-            logger.info(f"   Full payload JSON: {payload_json}")
         
         response = await self._request('POST', endpoint, params, authenticated=True)
         
