@@ -462,22 +462,49 @@ class BotHealthMonitor:
                 )
         else:
             # No trades at all in 3 hours
-            reason = "No trades found in last 3 hours"
             if balance_info and balance_info['no_funds']:
-                reason = f"NO FUNDS — {balance_info['summary']}. {reason}"
+                # Confirmed no funds — stop the bot
+                reason = f"NO FUNDS — {balance_info['summary']}. No trades found in last 3 hours"
+                await self._update_health(
+                    conn, bot_id, bot['status'],
+                    health_status='stopped',
+                    new_status='stopped',
+                    reason=reason,
+                    trade_count=0,
+                    last_trade=None
+                )
             elif balance_info and balance_info['low_balance']:
-                reason = f"LOW BALANCE — {balance_info['summary']}. {reason}"
+                reason = f"LOW BALANCE — {balance_info['summary']}. No trades found in last 3 hours"
+                await self._update_health(
+                    conn, bot_id, bot['status'],
+                    health_status='stale',
+                    new_status=bot['status'],  # Keep current status
+                    reason=reason,
+                    trade_count=0,
+                    last_trade=None
+                )
             else:
-                reason += " — bot appears stopped"
-
-            await self._update_health(
-                conn, bot_id, bot['status'],
-                health_status='stopped',
-                new_status='stopped',
-                reason=reason,
-                trade_count=0,
-                last_trade=None
-            )
+                # Balance check failed or bot is new — don't override running status
+                if bot['status'] == 'running':
+                    reason = "Bot is running, waiting for first trades"
+                    await self._update_health(
+                        conn, bot_id, bot['status'],
+                        health_status='healthy',
+                        new_status='running',
+                        reason=reason,
+                        trade_count=0,
+                        last_trade=None
+                    )
+                else:
+                    reason = "No trades found in last 3 hours — bot appears stopped"
+                    await self._update_health(
+                        conn, bot_id, bot['status'],
+                        health_status='stopped',
+                        new_status='stopped',
+                        reason=reason,
+                        trade_count=0,
+                        last_trade=None
+                    )
 
     # ──────────────────────────────────────────────────────────
     # Balance checking
