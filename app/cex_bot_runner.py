@@ -206,14 +206,17 @@ class CEXBotRunner:
                             expected_exchange = connector_name
                             logger.info(f"✅ Bot {bot_id} - Using connector '{connector_name}' as exchange (fallback)")
                     
+                    # Convert immutable asyncpg Record to mutable dict for key assignment
+                    bot_data = dict(bot_record)
+                    
                     # Check if API keys exist and if connector matches expected exchange
-                    api_key = bot_record.get("api_key")
-                    api_secret = bot_record.get("api_secret")
-                    memo = bot_record.get("memo")
+                    api_key = bot_data.get("api_key")
+                    api_secret = bot_data.get("api_secret")
+                    memo = bot_data.get("memo")
                     
                     # For Coinstore, ALWAYS check exchange_credentials first (not connectors)
                     # For other exchanges, check exchange_credentials if keys missing or connector doesn't match
-                    client_id = bot_record.get("client_id")
+                    client_id = bot_data.get("client_id")
                     if expected_exchange == "coinstore" or (not api_key or not api_secret) or (expected_exchange and connector_name and connector_name != expected_exchange):
                         if expected_exchange and client_id:
                             if expected_exchange == "coinstore":
@@ -245,10 +248,10 @@ class CEXBotRunner:
                                         api_secret = decrypt_credential(creds_result["api_secret_encrypted"])
                                         memo = decrypt_credential(creds_result["passphrase_encrypted"]) if creds_result.get("passphrase_encrypted") else None
                                         logger.info(f"✅ Found API keys in exchange_credentials table for {expected_exchange}")
-                                        # Update bot_record with decrypted keys
-                                        bot_record["api_key"] = api_key
-                                        bot_record["api_secret"] = api_secret
-                                        bot_record["memo"] = memo
+                                        # Update bot_data dict with decrypted keys
+                                        bot_data["api_key"] = api_key
+                                        bot_data["api_secret"] = api_secret
+                                        bot_data["memo"] = memo
                                         # Clear health error status since we found credentials
                                         await conn.execute("""
                                             UPDATE bots SET 
@@ -269,7 +272,7 @@ class CEXBotRunner:
                                     logger.warning(f"   Client ID: {client_id}")
                                     logger.warning(f"   Expected exchange: {expected_exchange}")
                                     logger.warning(f"   Connector name: {connector_name}")
-                                    logger.warning(f"   Bot name: {bot_record.get('name')}")
+                                    logger.warning(f"   Bot name: {bot_data.get('name')}")
                                     
                                     # Check what credentials exist for this client
                                     all_creds = await conn.fetch("""
@@ -283,7 +286,7 @@ class CEXBotRunner:
                     # Final check if API keys exist
                     if not api_key or not api_secret:
                         logger.warning(f"Bot {bot_id} missing API keys (checked connectors and exchange_credentials)")
-                        logger.warning(f"   Bot name: {bot_record.get('name')}")
+                        logger.warning(f"   Bot name: {bot_data.get('name')}")
                         logger.warning(f"   Connector: {connector_name}")
                         logger.warning(f"   Expected exchange: {expected_exchange}")
                         logger.warning(f"   Client ID: {client_id}")
@@ -299,10 +302,10 @@ class CEXBotRunner:
                         continue
                     
                     # Build symbol from base/quote or pair
-                    if bot_record.get("base_asset") and bot_record.get("quote_asset"):
-                        symbol = f"{bot_record['base_asset']}/{bot_record['quote_asset']}"
+                    if bot_data.get("base_asset") and bot_data.get("quote_asset"):
+                        symbol = f"{bot_data['base_asset']}/{bot_data['quote_asset']}"
                     else:
-                        symbol = bot_record.get("pair", "").replace("_", "/").replace("-", "/")
+                        symbol = bot_data.get("pair", "").replace("_", "/").replace("-", "/")
                     
                     if not symbol:
                         logger.warning(f"Bot {bot_id} missing symbol (need base_asset/quote_asset or pair)")
@@ -313,16 +316,16 @@ class CEXBotRunner:
                         """, bot_id)
                         continue
                     
-                    config = bot_record.get("config", {})
+                    config = bot_data.get("config", {})
                     if isinstance(config, str):
                         config = json.loads(config)
                     
                     # Ensure exchange_name is never None
                     # Try to detect from bot name if exchange column doesn't exist
-                    exchange_name = bot_record.get("exchange") or bot_record.get("connector")
+                    exchange_name = bot_data.get("exchange") or bot_data.get("connector")
                     if not exchange_name or not isinstance(exchange_name, str):
                         # Fallback: detect from bot name
-                        bot_name_lower = (bot_record.get("name") or "").lower()
+                        bot_name_lower = (bot_data.get("name") or "").lower()
                         cex_keywords = ['bitmart', 'coinstore', 'binance', 'kucoin', 'gateio', 'mexc', 'bybit', 'okx']
                         exchange_name = "bitmart"  # default
                         for kw in cex_keywords:
@@ -352,29 +355,29 @@ class CEXBotRunner:
                         logger.warning(f"⚠️  No proxy URL found! Checked: QUOTAGUARDSTATIC_URL={bool(os.getenv('QUOTAGUARDSTATIC_URL'))}, QUOTAGUARD_PROXY_URL={bool(os.getenv('QUOTAGUARD_PROXY_URL'))}, HTTP_PROXY={bool(os.getenv('HTTP_PROXY'))}, HTTPS_PROXY={bool(os.getenv('HTTPS_PROXY'))}")
                     
                     bot = CEXVolumeBot(
-                        bot_id=bot_record["id"],
+                        bot_id=bot_data["id"],
                         exchange_name=exchange_name.lower(),  # Ensure lowercase
                         symbol=symbol,
-                        api_key=bot_record["api_key"],  # Plaintext from connectors table
-                        api_secret=bot_record["api_secret"],  # Plaintext from connectors table
+                        api_key=bot_data["api_key"],  # From connectors or exchange_credentials
+                        api_secret=bot_data["api_secret"],  # From connectors or exchange_credentials
                         passphrase=None,  # BitMart doesn't use passphrase
-                        memo=bot_record.get("memo"),  # BitMart memo/uid from connectors table
+                        memo=bot_data.get("memo"),  # BitMart memo/uid
                         config=config,
                         proxy_url=proxy_url,  # Explicitly pass proxy for IP whitelisting
                     )
                     
                     if proxy_url:
-                        logger.info(f"Bot {bot_record['id']} will use proxy for IP whitelisting: {proxy_url.split('@')[0]}@...")
+                        logger.info(f"Bot {bot_data['id']} will use proxy for IP whitelisting: {proxy_url.split('@')[0]}@...")
                     else:
-                        logger.warning(f"⚠️  No proxy URL configured for bot {bot_record['id']} - IP whitelisting may not work")
+                        logger.warning(f"⚠️  No proxy URL configured for bot {bot_data['id']} - IP whitelisting may not work")
                     
-                    logger.info(f"🔄 Attempting to initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')})")
+                    logger.info(f"🔄 Attempting to initialize CEX bot: {bot_id} ({bot_data.get('name', 'Unknown')})")
                     init_result = await bot.initialize()
                     if init_result:
                         self.active_bots[bot_id] = bot
-                        logger.info(f"✅ SUCCESS: Initialized CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')}) - Bot is now active")
+                        logger.info(f"✅ SUCCESS: Initialized CEX bot: {bot_id} ({bot_data.get('name', 'Unknown')}) - Bot is now active")
                     else:
-                        logger.error(f"❌ FAILED: Could not initialize CEX bot: {bot_id} ({bot_record.get('name', 'Unknown')}) - check logs above for initialization errors")
+                        logger.error(f"❌ FAILED: Could not initialize CEX bot: {bot_id} ({bot_data.get('name', 'Unknown')}) - check logs above for initialization errors")
                         # Mark bot as error
                         await conn.execute("""
                             UPDATE bots SET health_status = 'error', 
