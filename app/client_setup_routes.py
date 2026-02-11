@@ -496,8 +496,22 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                                 logger.info(f"✅ Ticker {symbol} validated successfully on {exchange_lower} (price: {ticker.get('last')})")
                             finally:
                                 await exchange_instance.close()
+                        elif exchange_lower == "bitmart":
+                            # BitMart: use public ticker API (no auth needed)
+                            import requests as req
+                            bitmart_symbol = symbol.replace("/", "_")
+                            resp = req.get(f"https://api-cloud.bitmart.com/spot/quotation/v3/ticker?symbol={bitmart_symbol}", timeout=10)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                if data.get("code") == 1000 and data.get("data"):
+                                    last_price = data["data"].get("last")
+                                    logger.info(f"✅ Ticker {symbol} validated on BitMart (price: {last_price})")
+                                else:
+                                    raise HTTPException(status_code=400, detail=f"Ticker {symbol} not found on BitMart.")
+                            else:
+                                raise HTTPException(status_code=400, detail=f"Could not validate {symbol} on BitMart (HTTP {resp.status_code}).")
                         else:
-                            # For other exchanges, use ccxt
+                            # Other exchanges: use ccxt public endpoint
                             import ccxt
                             from app.cex_exchanges import get_exchange_config
                             exchange_config = get_exchange_config(exchange_lower)
@@ -506,26 +520,11 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                                 if ccxt_id:
                                     exchange_class = getattr(ccxt, ccxt_id, None)
                                     if exchange_class:
-                                        exchange_params = {
-                                            'apiKey': api_key,
-                                            'secret': api_secret,
-                                            'enableRateLimit': True,
-                                        }
-                                        if proxy_url:
-                                            exchange_params['proxies'] = {'http': proxy_url, 'https': proxy_url}
-                                        exchange_instance = exchange_class(exchange_params)
-                                        try:
-                                            ticker = await exchange_instance.fetch_ticker(symbol)
-                                            if not ticker or not ticker.get('last'):
-                                                raise HTTPException(
-                                                    status_code=400,
-                                                    detail=f"Ticker {symbol} not found or invalid on {request.exchange}. Please verify the symbol exists and is tradeable."
-                                                )
-                                            logger.info(f"✅ Ticker {symbol} validated successfully on {exchange_lower} (price: {ticker.get('last')})")
-                                        finally:
-                                            # ccxt exchanges don't have close() method
-                                            if hasattr(exchange_instance, 'close'):
-                                                await exchange_instance.close()
+                                        exchange_instance = exchange_class({'enableRateLimit': True})
+                                        ticker = await exchange_instance.fetch_ticker(symbol)
+                                        if not ticker or not ticker.get('last'):
+                                            raise HTTPException(status_code=400, detail=f"Ticker {symbol} not found on {request.exchange}.")
+                                        logger.info(f"✅ Ticker {symbol} validated on {exchange_lower} (price: {ticker.get('last')})")
                 except HTTPException:
                     raise
                 except Exception as ticker_error:
