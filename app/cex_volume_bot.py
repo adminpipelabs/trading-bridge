@@ -696,20 +696,22 @@ class CEXVolumeBot:
             return None
         logger.info(f"✅ Current price: ${price:.6f}")
         
-        # SKIP BALANCE CHECK - Try to place order directly
-        # If balance check fails but credentials are valid, we can still try trading
-        # The exchange will reject with InsufficientFunds if needed
+        # Balance check — skip entirely for Coinstore (their /spot/accountList returns 1401
+        # even with valid credentials; market orders still work fine)
         base_balance = None
         quote_balance = None
-        try:
-            base_balance, quote_balance = await self.get_balances()
-            logger.info(f"Balance check successful: base={base_balance}, quote={quote_balance}")
-        except Exception as balance_error:
-            logger.warning(f"⚠️  Balance check failed: {balance_error}. Skipping balance check and trying direct trade.")
-            logger.info(f"This is OK - we'll try placing order and exchange will reject if insufficient funds")
-            # Set default balances to allow trade attempt
+        if self.exchange_name == "coinstore":
+            logger.info(f"Coinstore: skipping balance check (known 1401 on accountList). Using minimum trade size.")
             base_balance = 0.0
             quote_balance = 0.0
+        else:
+            try:
+                base_balance, quote_balance = await self.get_balances()
+                logger.info(f"Balance check successful: base={base_balance}, quote={quote_balance}")
+            except Exception as balance_error:
+                logger.warning(f"⚠️  Balance check failed: {balance_error}. Trying direct trade.")
+                base_balance = 0.0
+                quote_balance = 0.0
         
         # Decide trade
         side = self.decide_side()
