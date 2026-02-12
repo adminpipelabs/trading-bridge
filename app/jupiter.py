@@ -83,21 +83,19 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
         logger.info(f"Trying Jupiter API: {url} with params: {params}")
         
         # Configure proxy if available (for QuotaGuard static IP)
+        # httpx 0.28+ uses `proxy` (single URL string) instead of `proxies` dict
         import os
         proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
-        proxies = None
+        proxy_kwargs = {}
         if proxy_url:
-            proxies = {
-                "http://": proxy_url,
-                "https://": proxy_url,
-            }
+            proxy_kwargs["proxy"] = proxy_url
         
         async with httpx.AsyncClient(
             timeout=timeout, 
             follow_redirects=True,
             limits=limits,
             trust_env=True,  # Use system DNS settings
-            proxies=proxies  # Add proxy if configured
+            **proxy_kwargs
         ) as client:
             try:
                 res = await client.get(url, params=params)

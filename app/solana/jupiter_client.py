@@ -79,18 +79,14 @@ class JupiterClient:
         headers = {"x-api-key": self.api_key} if self.api_key else {}
         
         # Configure proxy if available (for QuotaGuard static IP)
-        proxies = None
+        # httpx 0.28+ uses `proxy` (single URL string) instead of `proxies` dict
+        self.logger = logging.getLogger(__name__)
+        proxy_kwargs = {}
         if PROXY_URL:
-            proxies = {
-                "http://": PROXY_URL,
-                "https://": PROXY_URL,
-            }
-            self.logger = logging.getLogger(__name__)
+            proxy_kwargs["proxy"] = PROXY_URL
             self.logger.info(f"Using proxy for Jupiter API: {PROXY_URL.split('@')[0]}@...")
-        else:
-            self.logger = logging.getLogger(__name__)
         
-        self.client = httpx.AsyncClient(timeout=30.0, headers=headers, proxies=proxies)
+        self.client = httpx.AsyncClient(timeout=30.0, headers=headers, **proxy_kwargs)
     
     async def close(self):
         await self.client.aclose()
