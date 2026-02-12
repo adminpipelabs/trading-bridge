@@ -616,18 +616,19 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
                         encrypted_key = :encrypted_key, chain = :chain,
                         wallet_address = :wallet_address, added_by = 'client', updated_at = NOW()
                 """), {"client_id": client_id, "encrypted_key": encrypted_key, "chain": chain, "wallet_address": wallet_address})
+                db.commit()
+                logger.info(f"Stored new wallet {wallet_address} for client {client_id}")
 
+                # Non-critical notification — separate transaction so it can't roll back the key storage
                 try:
                     wallet_short = f"{wallet_address[:6]}...{wallet_address[-4:]}" if wallet_address else "unknown"
                     db.execute(text("""
                         INSERT INTO admin_notifications (type, client_id, message, created_at)
                         VALUES ('key_connected', :client_id, :message, NOW())
                     """), {"client_id": client_id, "message": f"Client '{client.name}' connected wallet {wallet_short}"})
+                    db.commit()
                 except Exception:
-                    pass
-
-                db.commit()
-                logger.info(f"Stored new wallet {wallet_address} for client {client_id}")
+                    db.rollback()
 
         # Create bot record
         import uuid
