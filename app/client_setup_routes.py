@@ -289,12 +289,14 @@ BOT_TYPE_CONFIGS = {
     },
     "spread": {
         "label": "Spread Bot",
-        "description": "Market making bot that places bid/ask orders around the current price.",
-        "chain": "evm",
+        "description": "Market making bot that places GTC limit buy/sell orders around the mid price.",
+        "chain": "cex",
         "default_config": {
-            "bid_spread": 0.3,
-            "ask_spread": 0.3,
-            "order_amount": 1600,
+            "spread_percent": 3.0,
+            "order_size_usd": 10,
+            "poll_interval_seconds": 5,
+            "price_decimals": 6,
+            "amount_decimals": 2,
         }
     }
 }

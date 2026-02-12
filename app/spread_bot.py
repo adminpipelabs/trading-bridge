@@ -1,14 +1,12 @@
 """
-Spread Bot — Places LIMIT buy and sell orders around the mid price.
+Spread Bot — Two-sided market maker using GTC limit orders.
 
 Each cycle:
-1. Cancel ALL existing open orders for this symbol
-2. Get current mid price
-3. Place a BUY limit order at (mid - spread)
-4. Place a SELL limit order at (mid + spread)
-5. Sleep for refresh_interval_seconds, then repeat
-
-This is cancel-and-replace — no orders are left behind between cycles.
+1. If no active orders: get mid price, place BUY below and SELL above
+2. If orders exist: check if either side filled
+3. On fill: cancel the unfilled side, re-quote around new mid
+4. On price drift beyond threshold: cancel stale orders, re-quote
+5. Otherwise: do nothing, let orders sit
 """
 import asyncio
 import logging
@@ -27,10 +25,15 @@ class SpreadBot:
         self.config = config
         self.db_session = db_session
         self._running = False
-        self._active_order_ids: list[str] = []
+
+        # Active order tracking
+        self._buy_order_id: Optional[str] = None
+        self._sell_order_id: Optional[str] = None
+        self._buy_price: Optional[float] = None
+        self._sell_price: Optional[float] = None
+        self._last_mid: Optional[float] = None
 
         # Parse config
-        # spread: support both spread_bps (basis points) and spread_percent
         if 'spread_percent' in config:
             self.spread_pct = config['spread_percent'] / 100.0
         elif 'spread_bps' in config:
@@ -39,28 +42,32 @@ class SpreadBot:
             self.spread_pct = 0.03  # 3% default
 
         self.order_size_usd = config.get('order_size_usd', config.get('order_size_usdt', 10))
-        self.refresh_seconds = config.get('refresh_seconds', config.get('refresh_interval_seconds', config.get('refresh_interval', 60)))
+        self.poll_seconds = config.get('poll_interval_seconds', config.get('refresh_seconds',
+                            config.get('refresh_interval_seconds', config.get('refresh_interval', 30))))
         self.price_decimals = config.get('price_decimals', 6)
         self.amount_decimals = config.get('amount_decimals', 2)
 
-        # Detect exchange name from the exchange object
+        # Drift threshold: re-quote if mid moves more than this fraction of spread
+        # Default: half the spread — e.g. 0.5% spread, re-quote if mid moves 0.25%
+        self.drift_threshold_pct = config.get('drift_threshold_pct', self.spread_pct / 2)
+
+        # Detect exchange
         self.exchange_name = ""
         if hasattr(exchange, 'id'):
-            self.exchange_name = exchange.id  # ccxt
+            self.exchange_name = exchange.id
         elif hasattr(exchange, 'name'):
-            self.exchange_name = exchange.name  # CoinstoreExchange uses .name
+            self.exchange_name = exchange.name
         elif hasattr(exchange, 'exchange_name'):
             self.exchange_name = exchange.exchange_name
-        # Check for coinstore adapter (attribute is 'connector', not '_connector')
         if hasattr(exchange, 'connector') and hasattr(exchange.connector, '_request'):
             self.exchange_name = "coinstore"
 
         logger.info(f"SpreadBot {bot_id} created: {symbol} on {self.exchange_name}")
-        logger.info(f"  Spread: {self.spread_pct*100:.2f}%, Order size: ${self.order_size_usd}")
-        logger.info(f"  Refresh: {self.refresh_seconds}s, Price decimals: {self.price_decimals}, Amount decimals: {self.amount_decimals}")
+        logger.info(f"  Spread: {self.spread_pct*100:.2f}%, Size: ${self.order_size_usd}, Poll: {self.poll_seconds}s")
+        logger.info(f"  Drift threshold: {self.drift_threshold_pct*100:.3f}%, Price decimals: {self.price_decimals}, Amount decimals: {self.amount_decimals}")
 
     async def start(self):
-        """Main loop: cancel-and-replace each cycle."""
+        """Main loop: poll for fills, re-quote when needed."""
         self._running = True
         logger.info(f"SpreadBot {self.bot_id} starting main loop")
 
@@ -72,64 +79,114 @@ class SpreadBot:
                 break
             except Exception as e:
                 logger.error(f"SpreadBot {self.bot_id} cycle error: {e}", exc_info=True)
-                # Update health but keep running
                 await self._update_health(f"Cycle error: {str(e)[:100]}", status='stale')
 
             if self._running:
-                logger.info(f"SpreadBot {self.bot_id} sleeping {self.refresh_seconds}s")
-                await asyncio.sleep(self.refresh_seconds)
+                await asyncio.sleep(self.poll_seconds)
 
-        # Final cleanup: cancel all orders when stopping
-        await self._cancel_all_orders()
+        # Cleanup
+        await self._cancel_all()
         logger.info(f"SpreadBot {self.bot_id} stopped, all orders cancelled")
 
     async def stop(self):
         """Stop the bot and cancel all open orders."""
         logger.info(f"SpreadBot {self.bot_id} stop requested")
         self._running = False
-        await self._cancel_all_orders()
+        await self._cancel_all()
+
+    # ── Main cycle ─────────────────────────────────────────────────
 
     async def _run_cycle(self):
-        """Single cycle: cancel old orders, get price, place new orders."""
+        """Single poll cycle."""
 
-        # Step 1: Cancel ALL open orders for this symbol
-        await self._cancel_all_orders()
-
-        # Step 2: Get current mid price
-        price = await self._get_mid_price()
-        if not price:
-            logger.warning(f"SpreadBot {self.bot_id} — could not get price, skipping cycle")
+        # No active orders — place fresh spread
+        if not self._buy_order_id and not self._sell_order_id:
+            await self._place_spread()
             return
 
-        # Step 3: Calculate buy and sell prices
-        buy_price = round(price * (1 - self.spread_pct / 2), self.price_decimals)
-        sell_price = round(price * (1 + self.spread_pct / 2), self.price_decimals)
+        # Check fills
+        buy_filled = False
+        sell_filled = False
 
-        # Step 4: Calculate quantity from USD size
+        if self._buy_order_id:
+            buy_filled = await self._is_filled(self._buy_order_id)
+        if self._sell_order_id:
+            sell_filled = await self._is_filled(self._sell_order_id)
+
+        # Both filled (rare — happened between polls)
+        if buy_filled and sell_filled:
+            logger.info(f"SpreadBot {self.bot_id} — both sides filled! Re-quoting.")
+            self._buy_order_id = None
+            self._sell_order_id = None
+            await self._place_spread()
+            return
+
+        # One side filled — cancel the other, re-quote
+        if buy_filled:
+            logger.info(f"SpreadBot {self.bot_id} — BUY filled @ {self._buy_price}. Cancelling SELL, re-quoting.")
+            await self._cancel_order(self._sell_order_id)
+            self._buy_order_id = None
+            self._sell_order_id = None
+            await self._update_health(f"BUY filled @ {self._buy_price}", status='healthy')
+            await self._place_spread()
+            return
+
+        if sell_filled:
+            logger.info(f"SpreadBot {self.bot_id} — SELL filled @ {self._sell_price}. Cancelling BUY, re-quoting.")
+            await self._cancel_order(self._buy_order_id)
+            self._buy_order_id = None
+            self._sell_order_id = None
+            await self._update_health(f"SELL filled @ {self._sell_price}", status='healthy')
+            await self._place_spread()
+            return
+
+        # Neither filled — check if price drifted too far
+        mid = await self._get_mid_price()
+        if mid and self._last_mid:
+            drift = abs(mid - self._last_mid) / self._last_mid
+            if drift >= self.drift_threshold_pct:
+                logger.info(f"SpreadBot {self.bot_id} — mid drifted {drift*100:.3f}% ({self._last_mid:.6f} -> {mid:.6f}), re-quoting")
+                await self._cancel_all()
+                await self._place_spread()
+                return
+
+        # Orders still live, price hasn't drifted. Do nothing.
+
+    # ── Place spread ───────────────────────────────────────────────
+
+    async def _place_spread(self):
+        """Get mid price, place BUY and SELL limit orders around it."""
+        mid = await self._get_mid_price()
+        if not mid:
+            logger.warning(f"SpreadBot {self.bot_id} — could not get price, skipping")
+            return
+
+        buy_price = round(mid * (1 - self.spread_pct / 2), self.price_decimals)
+        sell_price = round(mid * (1 + self.spread_pct / 2), self.price_decimals)
         buy_qty = round(self.order_size_usd / buy_price, self.amount_decimals)
         sell_qty = round(self.order_size_usd / sell_price, self.amount_decimals)
 
-        logger.info(f"SpreadBot {self.bot_id} placing orders:")
-        logger.info(f"  Mid: {price:.6f} | BUY {buy_qty} @ {buy_price} | SELL {sell_qty} @ {sell_price}")
+        logger.info(f"SpreadBot {self.bot_id} placing spread:")
+        logger.info(f"  Mid: {mid:.6f} | BUY {buy_qty} @ {buy_price} | SELL {sell_qty} @ {sell_price}")
 
-        # Step 5: Place orders (skip balance check — let exchange reject if insufficient)
-        buy_order_id = await self._place_limit_order("buy", buy_qty, buy_price)
-        sell_order_id = await self._place_limit_order("sell", sell_qty, sell_price)
+        self._buy_order_id = await self._place_limit_order("buy", buy_qty, buy_price)
+        self._sell_order_id = await self._place_limit_order("sell", sell_qty, sell_price)
+        self._buy_price = buy_price
+        self._sell_price = sell_price
+        self._last_mid = mid
 
         placed = []
-        if buy_order_id:
-            self._active_order_ids.append(buy_order_id)
+        if self._buy_order_id:
             placed.append(f"BUY {buy_qty}@{buy_price}")
-        if sell_order_id:
-            self._active_order_ids.append(sell_order_id)
+        if self._sell_order_id:
             placed.append(f"SELL {sell_qty}@{sell_price}")
 
         if placed:
-            msg = f"Orders placed: {', '.join(placed)}"
+            msg = f"Spread live: {', '.join(placed)}"
             await self._update_health(msg, status='healthy')
             logger.info(f"SpreadBot {self.bot_id} — {msg}")
         else:
-            await self._update_health("No orders placed this cycle", status='stale')
+            await self._update_health("Failed to place orders", status='stale')
             logger.warning(f"SpreadBot {self.bot_id} — no orders placed")
 
     # ── Price ──────────────────────────────────────────────────────
@@ -138,7 +195,6 @@ class SpreadBot:
         """Get current mid price for the symbol."""
         try:
             ticker = await self.exchange.fetch_ticker(self.symbol)
-            # Try bid/ask mid first, fall back to last
             bid = ticker.get("bid")
             ask = ticker.get("ask")
             if bid and ask and bid > 0 and ask > 0:
@@ -148,6 +204,42 @@ class SpreadBot:
             logger.error(f"SpreadBot {self.bot_id} — fetch_ticker error: {e}")
             return None
 
+    # ── Fill detection ─────────────────────────────────────────────
+
+    async def _is_filled(self, order_id: str) -> bool:
+        """Check if an order has been fully filled."""
+        try:
+            if self.exchange_name == "coinstore":
+                return await self._is_coinstore_order_filled(order_id)
+            else:
+                order = await self.exchange.fetch_order(order_id, self.symbol)
+                status = order.get("status", "")
+                return status in ("closed", "filled")
+        except Exception as e:
+            # If we can't check, assume not filled (safe — we'll check again next cycle)
+            logger.debug(f"SpreadBot {self.bot_id} — could not check order {order_id}: {e}")
+            return False
+
+    async def _is_coinstore_order_filled(self, order_id: str) -> bool:
+        """Check Coinstore order status. If not in active orders, it's filled or cancelled."""
+        connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
+        if not connector:
+            return False
+
+        try:
+            coinstore_symbol = self.symbol.replace("/", "")
+            result = await connector._request("GET", "/trade/order/active", {"symbol": coinstore_symbol}, authenticated=True)
+            active_orders = result.get("data", [])
+
+            # If our order ID is NOT in the active list, it was filled or cancelled
+            for o in active_orders:
+                if str(o.get("ordId")) == str(order_id):
+                    return False  # Still active
+            return True  # Not found — filled (or cancelled, but we only cancel explicitly)
+        except Exception as e:
+            logger.debug(f"SpreadBot {self.bot_id} — Coinstore active orders check failed: {e}")
+            return False
+
     # ── Order placement ────────────────────────────────────────────
 
     async def _place_limit_order(self, side: str, amount: float, price: float) -> Optional[str]:
@@ -156,12 +248,8 @@ class SpreadBot:
             if self.exchange_name == "coinstore":
                 return await self._place_coinstore_limit(side, amount, price)
             else:
-                # ccxt path
                 order = await self.exchange.create_limit_order(
-                    symbol=self.symbol,
-                    side=side,
-                    amount=amount,
-                    price=price,
+                    symbol=self.symbol, side=side, amount=amount, price=price,
                 )
                 order_id = order.get("id") or order.get("orderId")
                 logger.info(f"  {side.upper()} LIMIT placed: id={order_id}")
@@ -173,33 +261,23 @@ class SpreadBot:
     async def _place_coinstore_limit(self, side: str, amount: float, price: float) -> Optional[str]:
         """Place a LIMIT order on Coinstore via the connector."""
         try:
-            # Coinstore uses its own adapter; get the connector
-            connector = None
-            if hasattr(self.exchange, 'connector'):
-                connector = self.exchange.connector
-            elif hasattr(self.exchange, '_connector'):
-                connector = self.exchange._connector
+            connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
 
             if not connector:
-                # Try create_limit_order on the adapter directly
                 order = await self.exchange.create_limit_order(self.symbol, side, amount, price)
-                order_id = order.get("id") or order.get("orderId") or order.get("data", {}).get("ordId")
+                order_id = order.get("id") or order.get("orderId") or (order.get("data", {}) or {}).get("ordId")
                 logger.info(f"  Coinstore {side.upper()} LIMIT placed: id={order_id}")
                 return str(order_id) if order_id else None
 
-            # Direct connector path — use place_order which handles payload format
             result = await connector.place_order(
-                symbol=self.symbol,
-                side=side.lower(),
-                order_type="limit",
-                amount=amount,
-                price=price
+                symbol=self.symbol, side=side.lower(), order_type="limit",
+                amount=amount, price=price
             )
             logger.info(f"  Coinstore {side.upper()} LIMIT response: {result}")
             code = result.get("code", -1)
 
-            if code == 0:
-                order_id = result.get("data", {}).get("ordId")
+            if code == 0 or code == "0":
+                order_id = (result.get("data", {}) or {}).get("ordId")
                 logger.info(f"  Coinstore {side.upper()} LIMIT placed: id={order_id}")
                 return str(order_id) if order_id else None
             else:
@@ -212,67 +290,31 @@ class SpreadBot:
 
     # ── Cancel orders ──────────────────────────────────────────────
 
-    async def _cancel_all_orders(self):
-        """Cancel ALL open orders for this symbol. Belt-and-suspenders approach."""
-        cancelled = 0
-
-        # 1. Cancel tracked order IDs
-        for order_id in list(self._active_order_ids):
-            try:
-                if self.exchange_name == "coinstore":
-                    await self._cancel_coinstore_order(order_id)
-                else:
-                    await self.exchange.cancel_order(order_id, self.symbol)
-                cancelled += 1
-            except Exception as e:
-                logger.debug(f"Cancel order {order_id} failed (may already be filled/cancelled): {e}")
-        self._active_order_ids.clear()
-
-        # 2. Fetch and cancel any remaining open orders (catch stragglers)
+    async def _cancel_order(self, order_id: Optional[str]):
+        """Cancel a single order by ID."""
+        if not order_id:
+            return
         try:
             if self.exchange_name == "coinstore":
-                await self._cancel_all_coinstore_orders()
+                connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
+                if connector:
+                    await connector._request("POST", "/trade/order/cancel", {"ordId": int(order_id)}, authenticated=True)
+                else:
+                    await self.exchange.cancel_order(order_id, self.symbol)
             else:
-                open_orders = await self.exchange.fetch_open_orders(self.symbol)
-                for order in open_orders:
-                    try:
-                        await self.exchange.cancel_order(order['id'], self.symbol)
-                        cancelled += 1
-                    except Exception:
-                        pass
+                await self.exchange.cancel_order(order_id, self.symbol)
+            logger.debug(f"SpreadBot {self.bot_id} — cancelled order {order_id}")
         except Exception as e:
-            logger.debug(f"Fetch open orders failed: {e}")
+            logger.debug(f"SpreadBot {self.bot_id} — cancel {order_id} failed (may already be filled): {e}")
 
-        if cancelled > 0:
-            logger.info(f"SpreadBot {self.bot_id} — cancelled {cancelled} orders")
-
-    async def _cancel_coinstore_order(self, order_id: str):
-        """Cancel a single Coinstore order by ID."""
-        connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
-        if connector:
-            await connector._request("POST", "/trade/order/cancel", {"ordId": int(order_id)}, authenticated=True)
-        else:
-            await self.exchange.cancel_order(order_id, self.symbol)
-
-    async def _cancel_all_coinstore_orders(self):
-        """Cancel all open orders on Coinstore for this symbol."""
-        connector = getattr(self.exchange, 'connector', None) or getattr(self.exchange, '_connector', None)
-        if not connector:
-            return
-
-        coinstore_symbol = self.symbol.replace("/", "")
-        try:
-            result = await connector._request("GET", "/trade/order/active", {"symbol": coinstore_symbol}, authenticated=True)
-            orders = result.get("data", [])
-            for o in orders:
-                oid = o.get("ordId")
-                if oid:
-                    try:
-                        await connector._request("POST", "/trade/order/cancel", {"ordId": oid}, authenticated=True)
-                    except Exception:
-                        pass
-        except Exception as e:
-            logger.debug(f"Coinstore fetch open orders failed: {e}")
+    async def _cancel_all(self):
+        """Cancel both active orders and clear state."""
+        await self._cancel_order(self._buy_order_id)
+        await self._cancel_order(self._sell_order_id)
+        self._buy_order_id = None
+        self._sell_order_id = None
+        self._buy_price = None
+        self._sell_price = None
 
     # ── Health updates ─────────────────────────────────────────────
 
