@@ -627,18 +627,29 @@ class CEXVolumeBot:
                     params=order_params
                 )
             
-            logger.info(f"✅ Order placed successfully - Order result: {order}")
+            logger.info(f"Order response: {order}")
+            
+            # Check for exchange-level error codes (e.g. Coinstore returns HTTP 200 with code!=0)
+            response_code = order.get("code")
+            if response_code is not None and response_code != 0 and response_code != "0":
+                error_msg = order.get("message") or order.get("msg") or f"code {response_code}"
+                logger.error(f"❌ ORDER REJECTED by exchange: code={response_code}, msg={error_msg}")
+                return None
             
             # Get filled price and amount
-            order_id = order.get("id")
+            order_id = order.get("id") or order.get("ordId") or (order.get("data", {}) or {}).get("ordId")
             filled_amount = float(order.get("filled", amount))
             avg_price = float(order.get("average") or order.get("price") or current_price)
             cost = float(order.get("cost", filled_amount * avg_price))
             
-            logger.info(f"✅ {side.upper()} market order filled: {filled_amount:.6f} @ {avg_price:.6f} = ${cost:.2f} USDT")
+            if not order_id:
+                logger.error(f"❌ ORDER FAILED: No order ID in response — trade did not execute. Response: {order}")
+                return None
+            
+            logger.info(f"✅ {side.upper()} market order filled: id={order_id}, {filled_amount:.6f} @ {avg_price:.6f} = ${cost:.2f} USDT")
             
             return {
-                "order_id": order_id,
+                "order_id": str(order_id),
                 "side": side,
                 "amount": filled_amount,
                 "price": avg_price,

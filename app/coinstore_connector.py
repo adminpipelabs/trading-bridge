@@ -344,6 +344,12 @@ class CoinstoreConnector:
         # Log response
         logger.info(f"🔵 COINSTORE ORDER RESPONSE: {response}")
         
+        # Check for exchange-level errors (Coinstore returns HTTP 200 with code!=0 on failure)
+        response_code = response.get("code")
+        if response_code is not None and response_code != 0 and response_code != "0":
+            error_msg = response.get("message") or response.get("msg") or f"code {response_code}"
+            raise Exception(f"Coinstore order rejected: code={response_code}, msg={error_msg}")
+        
         return response
     
     async def cancel_order(self, order_id: str, symbol: str) -> Dict[str, Any]:
