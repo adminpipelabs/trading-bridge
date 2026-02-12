@@ -214,8 +214,8 @@ async def lifespan(app: FastAPI):
                     del _cfg[_old_key]
                     _changed = True
             # Remove dead fields
-            for _dead in ('order_expiry_seconds', 'slippage_bps', 'refresh_seconds',
-                          'refresh_interval', 'bid_spread', 'ask_spread'):
+            for _dead in ('order_expiry_seconds', 'expire_seconds', 'slippage_bps',
+                          'refresh_seconds', 'refresh_interval', 'bid_spread', 'ask_spread'):
                 if _dead in _cfg:
                     del _cfg[_dead]
                     _changed = True
