@@ -182,6 +182,57 @@ async def lifespan(app: FastAPI):
         # Don't raise - allow app to start so /health endpoint works
         # But database endpoints will return 503 errors
     
+    # Migrate spread bot configs: remove dead fields, normalize to new schema
+    try:
+        from app.database import get_db_session
+        import json as _json
+        _db = get_db_session()
+        from sqlalchemy import text as _text
+        _spread_bots = _db.execute(_text(
+            "SELECT id, config FROM bots WHERE LOWER(name) LIKE '%spread%' OR strategy = 'spread'"
+        )).fetchall()
+        for _row in _spread_bots:
+            _bid = getattr(_row, 'id', _row[0])
+            _cfg_raw = getattr(_row, 'config', _row[1])
+            if not _cfg_raw:
+                continue
+            _cfg = _json.loads(_cfg_raw) if isinstance(_cfg_raw, str) else _cfg_raw
+            _changed = False
+            # Convert spread_bps -> spread_percent
+            if 'spread_bps' in _cfg and 'spread_percent' not in _cfg:
+                _cfg['spread_percent'] = _cfg.pop('spread_bps') / 100.0
+                _changed = True
+            elif 'spread_bps' in _cfg:
+                del _cfg['spread_bps']
+                _changed = True
+            # Normalize order size field
+            for _old_key in ('order_size_usdt', 'order_size', 'order_amount'):
+                if _old_key in _cfg and 'order_size_usd' not in _cfg:
+                    _cfg['order_size_usd'] = _cfg.pop(_old_key)
+                    _changed = True
+                elif _old_key in _cfg:
+                    del _cfg[_old_key]
+                    _changed = True
+            # Remove dead fields
+            for _dead in ('order_expiry_seconds', 'slippage_bps', 'refresh_seconds',
+                          'refresh_interval', 'bid_spread', 'ask_spread'):
+                if _dead in _cfg:
+                    del _cfg[_dead]
+                    _changed = True
+            # Set defaults if missing
+            _cfg.setdefault('poll_interval_seconds', 5)
+            _cfg.setdefault('price_decimals', 6)
+            _cfg.setdefault('amount_decimals', 2)
+            if _changed or 'poll_interval_seconds' not in (_cfg_raw if isinstance(_cfg_raw, dict) else {}):
+                _db.execute(_text("UPDATE bots SET config = :cfg WHERE id = :bid"),
+                            {"cfg": _json.dumps(_cfg), "bid": _bid})
+                logger.info(f"Migrated spread bot {_bid} config: {_cfg}")
+        _db.commit()
+        _db.close()
+        logger.info(f"Spread bot config migration complete ({len(_spread_bots)} bots checked)")
+    except Exception as e:
+        logger.warning(f"Spread bot config migration skipped: {e}")
+    
     # Create asyncpg connection pool for health monitor
     db_pool = None
     health_monitor = None
