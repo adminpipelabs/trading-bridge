@@ -379,7 +379,6 @@ async def setup_bot(client_id: str, request: SetupBotRequest, db: Session = Depe
         
         # For CEX bots, save API credentials if provided, or verify they exist
         if is_cex:
-            from sqlalchemy import text
             from app.cex_volume_bot import encrypt_credential
             from datetime import datetime, timezone
             
