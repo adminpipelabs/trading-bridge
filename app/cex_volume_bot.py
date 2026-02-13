@@ -197,6 +197,19 @@ class CEXVolumeBot:
                 logger.info(f"✅ Coinstore exchange initialized successfully")
                 return True
             
+            # Handle BitMart specially (ccxt has bugs with their API responses)
+            if self.exchange_name == "bitmart":
+                from app.bitmart_adapter import create_bitmart_exchange
+                logger.info("Using custom BitMart adapter (bypassing ccxt)")
+                self.exchange = await create_bitmart_exchange(
+                    api_key=self.api_key,
+                    api_secret=self.api_secret,
+                    memo=self.memo or "",
+                    proxy_url=self.proxy_url
+                )
+                logger.info(f"✅ BitMart exchange initialized successfully")
+                return True
+            
             # Get exchange class from ccxt
             exchange_class = getattr(ccxt, ccxt_id, None)
             if exchange_class is None:
@@ -622,20 +635,9 @@ class CEXVolumeBot:
             if self.exchange_name == "bitmart":
                 order_params['type'] = 'spot'
             
-            # Place order for instant fill / real volume
-            logger.info(f"🚀 CALLING {side} order NOW - This should execute immediately")
-            if self.exchange_name == "bitmart":
-                # BitMart requires price for all orders (code 50028 on market sell)
-                # Use IOC (immediate-or-cancel) limit orders at market price for instant fills
-                order = await self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='limit',
-                    side=side,
-                    amount=amount,
-                    price=current_price,
-                    params={**order_params, 'timeInForce': 'IOC'}
-                )
-            elif side == "buy":
+            # Place MARKET order for instant fill / real volume
+            logger.info(f"🚀 CALLING create_market_{side}_order() NOW - This should execute immediately")
+            if side == "buy":
                 order = await self.exchange.create_market_buy_order(
                     symbol=self.symbol,
                     amount=amount,

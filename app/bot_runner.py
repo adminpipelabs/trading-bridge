@@ -1398,9 +1398,6 @@ class BotRunner:
             
             # Create exchange instance (same way as CEXVolumeBot)
             from app.cex_volume_bot import get_exchange_config
-            import ccxt.async_support as ccxt_async
-            import aiohttp
-            import socket as _socket
             
             exchange_config = get_exchange_config(exchange_name)
             if not exchange_config:
@@ -1415,8 +1412,29 @@ class BotRunner:
                     api_secret=api_secret,
                     proxy_url=proxy_url
                 )
+            elif exchange_name == "bitmart":
+                # Use direct BitMart adapter (bypasses ccxt bugs)
+                from app.bitmart_adapter import create_bitmart_exchange
+                memo = ""
+                memo_row = db.execute(text("""
+                    SELECT passphrase_encrypted FROM exchange_credentials
+                    WHERE client_id = (SELECT client_id FROM bots WHERE id = :bot_id)
+                    AND LOWER(exchange) = 'bitmart'
+                """), {'bot_id': bot_id}).fetchone()
+                if memo_row and memo_row[0]:
+                    memo = decrypt_credential(memo_row[0])
+                    logger.info(f"  BitMart memo loaded")
+                exchange = await create_bitmart_exchange(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    memo=memo,
+                    proxy_url=proxy_url
+                )
             else:
                 # Use async ccxt for other exchanges
+                import ccxt.async_support as ccxt_async
+                import aiohttp
+                import socket as _socket
                 ccxt_id = exchange_config.get("ccxt_id")
                 exchange_class = getattr(ccxt_async, ccxt_id)
                 
@@ -1427,34 +1445,19 @@ class BotRunner:
                     'options': exchange_config.get('options', {})
                 }
                 
-                # BitMart requires uid (memo)
-                if exchange_name == "bitmart":
-                    # Get memo from exchange_credentials
-                    memo_row = db.execute(text("""
-                        SELECT passphrase_encrypted FROM exchange_credentials
-                        WHERE client_id = (SELECT client_id FROM bots WHERE id = :bot_id)
-                        AND LOWER(exchange) = 'bitmart'
-                    """), {'bot_id': bot_id}).fetchone()
-                    if memo_row and memo_row[0]:
-                        exchange_params['uid'] = decrypt_credential(memo_row[0])
-                        logger.info(f"  BitMart memo loaded")
-                
                 if proxy_url:
                     exchange_params['aiohttp_proxy'] = proxy_url
                 
                 exchange = exchange_class(exchange_params)
                 
-                # Force IPv4 — exchanges whitelist our IPv4, aiohttp defaults to IPv6
+                # Force IPv4
                 try:
                     ipv4_connector = aiohttp.TCPConnector(family=_socket.AF_INET)
                     exchange.session = aiohttp.ClientSession(connector=ipv4_connector)
-                    logger.info(f"  Forced IPv4 on aiohttp session")
                 except Exception as ipv4_err:
                     logger.warning(f"  Could not force IPv4: {ipv4_err}")
                 
-                # Load markets
                 await exchange.load_markets()
-                logger.info(f"  Markets loaded")
             
             logger.info(f"✅ Exchange initialized: {exchange_name}")
             
