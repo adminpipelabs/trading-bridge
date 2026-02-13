@@ -59,8 +59,8 @@ class SpreadBot:
             self.exchange_name = exchange.name
         elif hasattr(exchange, 'exchange_name'):
             self.exchange_name = exchange.exchange_name
-        if hasattr(exchange, 'connector') and hasattr(exchange.connector, '_request'):
-            self.exchange_name = "coinstore"
+        # Both custom adapters set .id ("coinstore" / "bitmart"), so the
+        # detection above via exchange.id / exchange.name is sufficient.
 
         logger.info(f"SpreadBot {bot_id} created: {symbol} on {self.exchange_name}")
         logger.info(f"  Spread: {self.spread_pct*100:.2f}%, Size: ${self.order_size_usd}, Poll: {self.poll_seconds}s")

@@ -15,6 +15,7 @@ class CoinstoreExchange:
     
     def __init__(self, config: Dict[str, Any]):
         self.name = "coinstore"
+        self.id = "coinstore"
         self.apiKey = config.get('apiKey', '')
         self.secret = config.get('secret', '')
         self.proxy_url = config.get('aiohttp_proxy') or config.get('proxy') or config.get('proxies', {}).get('https')
