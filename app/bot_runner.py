@@ -759,6 +759,28 @@ class BotRunner:
                         
                         logger.info(f"  Wallet address: {wallet_address[:8]}...{wallet_address[-8:]}")
                         
+                        # Check SOL balance before trading
+                        try:
+                            sol_lamports = await signer.get_balance(wallet_address)
+                            sol_balance = sol_lamports / 1e9
+                            # Need at least 0.01 SOL for tx fees + some for the trade
+                            min_sol_required = max(0.01, trade_size_usd / 200)  # rough estimate
+                            logger.info(f"  SOL balance: {sol_balance:.4f} SOL (min required: ~{min_sol_required:.4f})")
+                            
+                            if sol_balance < 0.005:
+                                error_msg = f"Insufficient SOL balance ({sol_balance:.4f} SOL). Please deposit SOL to wallet {wallet_address[:6]}...{wallet_address[-4:]} to cover transaction fees."
+                                logger.error(f"  ❌ {error_msg}")
+                                # Update bot with clear error visible to client
+                                bot.error = error_msg
+                                bot.health_status = "unhealthy"
+                                bot.health_message = error_msg
+                                db.commit()
+                                await asyncio.sleep(300)  # Wait 5 min before rechecking
+                                continue
+                        except Exception as bal_err:
+                            logger.warning(f"  ⚠️ Could not check balance: {bal_err}")
+                            # Continue anyway — let the trade attempt fail naturally
+                        
                         # Execute swap
                         await self._execute_volume_trade(
                             bot_id=bot_id,
@@ -1178,7 +1200,18 @@ class BotRunner:
                 )
                 
                 if not result.success:
-                    logger.error(f"  ❌ Trade failed: {result.error}")
+                    error_str = str(result.error or "")
+                    logger.error(f"  ❌ Trade failed: {error_str}")
+                    
+                    # Detect insufficient funds from simulation errors
+                    insufficient_keywords = ["insufficient", "0x1", "InsufficientFunds", "not enough", "custom program error: 0x1"]
+                    if any(kw.lower() in error_str.lower() for kw in insufficient_keywords):
+                        bot_obj = db.query(Bot).filter(Bot.id == bot_id).first()
+                        if bot_obj:
+                            bot_obj.error = f"Insufficient funds in wallet {wallet_address[:6]}...{wallet_address[-4:]}. Please deposit more SOL or tokens."
+                            bot_obj.health_status = "unhealthy"
+                            bot_obj.health_message = bot_obj.error
+                            db.commit()
                     return
                 
                 signature = result.signature
