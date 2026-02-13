@@ -8,6 +8,7 @@ import hashlib
 import time
 import math
 import logging
+import socket
 from typing import Dict, Any, Optional
 from urllib.parse import urlencode
 
@@ -34,10 +35,12 @@ class CoinstoreConnector:
         logger.debug(f"CoinstoreConnector initialized: api_key length={len(self.api_key)}, api_secret length={len(self.api_secret)}")
     
     async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
+        """Get or create aiohttp session. Forces IPv4 to match IP whitelist."""
         if self.session is None or self.session.closed:
-            # Proxy is passed per-request, not at session level
-            self.session = aiohttp.ClientSession()
+            # Force IPv4 — exchanges whitelist our IPv4 (5.161.64.209),
+            # but aiohttp defaults to IPv6 on dual-stack servers
+            connector = aiohttp.TCPConnector(family=socket.AF_INET)
+            self.session = aiohttp.ClientSession(connector=connector)
         return self.session
     
     async def close(self):

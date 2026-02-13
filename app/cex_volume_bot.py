@@ -10,6 +10,7 @@ import json
 import random
 import asyncio
 import logging
+import socket
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 from decimal import Decimal, ROUND_DOWN
@@ -308,6 +309,16 @@ class CEXVolumeBot:
                 return False
             
             logger.info(f"✅ Exchange instance created (async verified)")
+            
+            # Force IPv4 on the underlying aiohttp session — exchanges whitelist
+            # our IPv4 (5.161.64.209) but aiohttp defaults to IPv6 on dual-stack servers
+            try:
+                import aiohttp
+                ipv4_connector = aiohttp.TCPConnector(family=socket.AF_INET)
+                self.exchange.session = aiohttp.ClientSession(connector=ipv4_connector)
+                logger.info(f"✅ Forced IPv4 on aiohttp session for {self.exchange_name}")
+            except Exception as ipv4_err:
+                logger.warning(f"⚠️  Could not force IPv4 on aiohttp session: {ipv4_err}")
             
             # Verify options were set correctly
             if self.exchange_name == "bitmart" and hasattr(self.exchange, 'options'):
