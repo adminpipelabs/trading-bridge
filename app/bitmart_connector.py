@@ -65,8 +65,6 @@ class BitmartConnector:
         session = await self._get_session()
         url = f"{BASE_URL}{path}"
         body_str = json.dumps(body, separators=(',', ':')) if body else ""  # Compact JSON for signature
-        if authenticated:
-            logger.info(f"🔑 Signing: key_len={len(self.api_key)}, memo='{self.memo}', body_len={len(body_str)}, body={body_str[:100]}")
         headers = self._auth_headers(body_str) if authenticated else {"Content-Type": "application/json"}
 
         kwargs: Dict[str, Any] = {"headers": headers}
