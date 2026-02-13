@@ -327,10 +327,11 @@ class CoinstoreConnector:
             else:
                 # Market SELL: sell X tokens (ordQty)
                 # amount is in base currency (tokens)
-                params['ordQty'] = str(amount)
+                # Round to integer to avoid precision errors (code 3104)
+                params['ordQty'] = str(int(amount))
         else:
             # LIMIT orders: use quantity and price
-            params['ordQty'] = str(amount)
+            params['ordQty'] = str(int(amount))
             if price:
                 params['price'] = str(price)
         

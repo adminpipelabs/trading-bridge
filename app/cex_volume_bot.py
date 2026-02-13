@@ -623,7 +623,6 @@ class CEXVolumeBot:
                 order_params['type'] = 'spot'
             
             # Place MARKET order (not limit!) - instant fill, real volume
-            # Use create_market_order for better compatibility
             logger.info(f"🚀 CALLING create_market_{side}_order() NOW - This should execute immediately")
             if side == "buy":
                 order = await self.exchange.create_market_buy_order(
@@ -632,11 +631,23 @@ class CEXVolumeBot:
                     params=order_params
                 )
             else:
-                order = await self.exchange.create_market_sell_order(
-                    symbol=self.symbol,
-                    amount=amount,
-                    params=order_params
-                )
+                # BitMart requires price even for market sell orders (code 50028)
+                # Use create_order with price to satisfy the API
+                if self.exchange_name == "bitmart":
+                    order = await self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='market',
+                        side='sell',
+                        amount=amount,
+                        price=current_price,
+                        params=order_params
+                    )
+                else:
+                    order = await self.exchange.create_market_sell_order(
+                        symbol=self.symbol,
+                        amount=amount,
+                        params=order_params
+                    )
             
             logger.info(f"Order response: {order}")
             
