@@ -24,6 +24,7 @@ from app.health_routes import router as health_router
 from app.client_setup_routes import router as client_setup_router
 from app.admin_routes import router as admin_router
 from app.cex_credential_routes import router as cex_credential_router
+from app.spot_routes import router as spot_router
 from app.database import init_db
 from app.services.exchange import exchange_manager
 from app.cex_volume_bot import extract_proxy_url_from_quotaguard_info
@@ -483,6 +484,7 @@ app.include_router(health_router)
 app.include_router(client_setup_router)
 app.include_router(admin_router)
 app.include_router(cex_credential_router)
+app.include_router(spot_router)
 
 @app.get("/")
 async def root():
