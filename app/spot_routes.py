@@ -5,6 +5,7 @@ Self-contained — does not modify any existing bot logic.
 """
 import logging
 import os
+from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -28,6 +29,59 @@ def _check_auth(request: Request):
     auth = request.headers.get("X-Spot-Token", "")
     if auth != SPOT_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ── Trade history table (auto-created) ───────────────────────────────────────
+
+def _ensure_history_table():
+    """Create spot_trades table if it doesn't exist."""
+    db = get_db_session()
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS spot_trades (
+                id SERIAL PRIMARY KEY,
+                ts TIMESTAMPTZ DEFAULT NOW(),
+                exchange VARCHAR(32),
+                symbol VARCHAR(32),
+                side VARCHAR(8),
+                order_type VARCHAR(16),
+                amount DOUBLE PRECISION,
+                price DOUBLE PRECISION,
+                cost DOUBLE PRECISION,
+                order_id VARCHAR(64),
+                status VARCHAR(16) DEFAULT 'ok',
+                error TEXT
+            )
+        """))
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+_ensure_history_table()
+
+
+def _save_trade(exchange: str, symbol: str, side: str, order_type: str,
+                amount: float, price: float, cost: float,
+                order_id: str = "", status: str = "ok", error: str = ""):
+    """Save a trade to the history table."""
+    db = get_db_session()
+    try:
+        db.execute(text("""
+            INSERT INTO spot_trades (exchange, symbol, side, order_type, amount, price, cost, order_id, status, error)
+            VALUES (:exchange, :symbol, :side, :order_type, :amount, :price, :cost, :order_id, :status, :error)
+        """), {
+            "exchange": exchange, "symbol": symbol, "side": side, "order_type": order_type,
+            "amount": amount, "price": price, "cost": cost,
+            "order_id": order_id, "status": status, "error": error,
+        })
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Failed to save trade history: {e}")
+    finally:
+        db.close()
 
 
 # ── Helpers: create exchange adapters on-the-fly ─────────────────────────────
@@ -139,15 +193,50 @@ async def spot_order(order: SpotOrder, request: Request):
             result = await ex.create_limit_order(order.symbol, order.side.lower(), order.amount, order.price)
 
         logger.info(f"SPOT ORDER: {order.side} {order.amount} {order.symbol} on {order.exchange} → {result.get('id', 'unknown')}")
+        _save_trade(
+            exchange=order.exchange, symbol=order.symbol, side=order.side,
+            order_type=order.order_type, amount=order.amount,
+            price=result.get("price", result.get("average", 0)),
+            cost=result.get("cost", order.amount * result.get("price", 0)),
+            order_id=str(result.get("id", "")), status="ok",
+        )
         return {"ok": True, "order": result}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Spot order failed: {e}")
+        _save_trade(
+            exchange=order.exchange, symbol=order.symbol, side=order.side,
+            order_type=order.order_type, amount=order.amount,
+            price=order.price or 0, cost=0, status="error", error=str(e)[:200],
+        )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if hasattr(ex, "close"):
             await ex.close()
+
+
+@router.get("/history")
+async def spot_history(limit: int = 50, request: Request = None):
+    """Get recent spot trade history."""
+    _check_auth(request)
+    db = get_db_session()
+    try:
+        rows = db.execute(text(
+            "SELECT ts, exchange, symbol, side, order_type, amount, price, cost, order_id, status, error "
+            "FROM spot_trades ORDER BY ts DESC LIMIT :lim"
+        ), {"lim": limit}).fetchall()
+        trades = []
+        for r in rows:
+            trades.append({
+                "ts": r[0].isoformat() if r[0] else "",
+                "exchange": r[1], "symbol": r[2], "side": r[3],
+                "order_type": r[4], "amount": r[5], "price": r[6],
+                "cost": r[7], "order_id": r[8], "status": r[9], "error": r[10],
+            })
+        return {"trades": trades}
+    finally:
+        db.close()
 
 
 @router.get("/orderbook")
@@ -306,8 +395,11 @@ TRADE_HTML = """<!DOCTYPE html>
 
   <!-- Activity Log -->
   <div class="card p-4">
-    <label class="text-xs text-slate-400 block mb-2">Activity</label>
-    <div id="log" class="space-y-1 max-h-48 overflow-y-auto text-xs font-mono"></div>
+    <div class="flex items-center justify-between mb-2">
+      <label class="text-xs text-slate-400">Trade History</label>
+      <button onclick="loadHistory()" class="text-xs text-blue-400 hover:text-blue-300">Refresh</button>
+    </div>
+    <div id="log" class="space-y-1 max-h-64 overflow-y-auto text-xs font-mono"></div>
   </div>
 </div>
 
@@ -354,6 +446,7 @@ function showTradeScreen() {
   refreshPrice();
   refreshBalance();
   refreshOrderbook();
+  loadHistory();
   priceInterval = setInterval(refreshPrice, 5000);
   balInterval = setInterval(refreshBalance, 15000);
   setInterval(refreshOrderbook, 5000);
@@ -499,22 +592,38 @@ function placeOrder() {
   api('POST', '/spot/order', body)
     .then(d => {
       const o = d.order || {};
-      addLog('success', currentSide.toUpperCase() + ' ' + body.amount + ' SHARP @ ' + (o.price || lastPrice).toFixed(6) + ' — ID: ' + (o.id || 'ok'));
+      addLog('success', currentSide.toUpperCase() + ' ' + body.amount + ' SHARP @ ' + (o.price || lastPrice).toFixed(6) + ' on ' + body.exchange + ' — ID: ' + (o.id || 'ok'));
       refreshBalance();
+      setTimeout(loadHistory, 1000);
     })
     .catch(e => addLog('error', e.message))
     .finally(() => { btn.disabled = false; btn.textContent = origText; });
 }
 
-function addLog(type, msg) {
+function addLog(type, msg, time) {
   const el = document.createElement('div');
-  const time = new Date().toLocaleTimeString();
+  const t = time || new Date().toLocaleTimeString();
   const color = type === 'success' ? 'text-emerald-400' : type === 'error' ? 'text-red-400' : 'text-slate-400';
   el.className = color;
-  el.textContent = time + '  ' + msg;
+  el.textContent = t + '  ' + msg;
   $('log').prepend(el);
-  // Keep max 50 entries
-  while ($('log').children.length > 50) $('log').lastChild.remove();
+  while ($('log').children.length > 100) $('log').lastChild.remove();
+}
+
+function loadHistory() {
+  api('GET', '/spot/history?limit=50')
+    .then(d => {
+      $('log').innerHTML = '';
+      (d.trades || []).reverse().forEach(t => {
+        const time = new Date(t.ts).toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        const type = t.status === 'ok' ? 'success' : 'error';
+        const msg = t.status === 'ok'
+          ? t.side.toUpperCase() + ' ' + Number(t.amount).toLocaleString(undefined,{maximumFractionDigits:0}) + ' ' + t.symbol.split('/')[0] + ' @ ' + Number(t.price).toFixed(6) + ' on ' + t.exchange + ' — ID: ' + (t.order_id || '-')
+          : t.side.toUpperCase() + ' FAILED: ' + (t.error || 'unknown');
+        addLog(type, msg, time);
+      });
+    })
+    .catch(() => {});
 }
 
 // ── Init ──
