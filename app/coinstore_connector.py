@@ -323,14 +323,11 @@ class CoinstoreConnector:
         if order_type.lower() == 'market':
             if side.lower() == 'buy':
                 # Market BUY: spend X USDT (ordAmt)
-                # amount is already in USDT if is_usdt_amount=True, otherwise convert
+                # Round to 2 decimals to avoid 3106 Amount precision error
                 if is_usdt_amount:
-                    params['ordAmt'] = str(amount)
+                    params['ordAmt'] = str(round(amount, 2))
                 else:
-                    # If amount is in base currency, we need price to convert
-                    # This shouldn't happen if called from adapter correctly
-                    logger.warning(f"MARKET BUY received base amount without USDT conversion - using as-is")
-                    params['ordAmt'] = str(amount)
+                    params['ordAmt'] = str(round(amount, 2))
             else:
                 # Market SELL: sell X tokens (ordQty)
                 # amount is in base currency (tokens)

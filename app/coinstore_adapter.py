@@ -265,7 +265,8 @@ class CoinstoreExchange:
         logger.info(f"🔵 MARKET BUY: {amount} tokens @ {current_price} = {usdt_amount} USDT")
         
         # Pass USDT amount (Coinstore expects ordAmt for MARKET BUY)
-        return await self.connector.place_order(symbol, 'buy', 'market', usdt_amount, is_usdt_amount=True)
+        data = await self.connector.place_order(symbol, 'buy', 'market', usdt_amount, is_usdt_amount=True)
+        return self._parse_response(data, symbol, 'buy', amount, current_price)
     
     async def create_market_sell_order(self, symbol: str, amount: float, params: Optional[Dict] = None) -> Dict[str, Any]:
         """
@@ -275,16 +276,39 @@ class CoinstoreExchange:
         - amount is in base currency (tokens)
         - Use ordQty directly (sell X tokens)
         """
-        logger.info(f"🔵 MARKET SELL: {amount} tokens")
-        return await self.connector.place_order(symbol, 'sell', 'market', amount, is_usdt_amount=False)
+        ticker = await self.fetch_ticker(symbol)
+        current_price = ticker.get('last') or ticker.get('close') or 0
+        logger.info(f"🔵 MARKET SELL: {amount} tokens @ ~{current_price}")
+        data = await self.connector.place_order(symbol, 'sell', 'market', amount, is_usdt_amount=False)
+        return self._parse_response(data, symbol, 'sell', amount, current_price)
     
     async def create_limit_buy_order(self, symbol: str, amount: float, price: float, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Create limit buy order."""
-        return await self.connector.place_order(symbol, 'buy', 'limit', amount, price)
+        data = await self.connector.place_order(symbol, 'buy', 'limit', amount, price)
+        return self._parse_response(data, symbol, 'buy', amount, price)
     
     async def create_limit_sell_order(self, symbol: str, amount: float, price: float, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Create limit sell order."""
-        return await self.connector.place_order(symbol, 'sell', 'limit', amount, price)
+        data = await self.connector.place_order(symbol, 'sell', 'limit', amount, price)
+        return self._parse_response(data, symbol, 'sell', amount, price)
+    
+    @staticmethod
+    def _parse_response(data: Dict, symbol: str, side: str, amount: float, price: float) -> Dict[str, Any]:
+        """Parse Coinstore response into ccxt-style dict."""
+        order_id = data.get("data", {}).get("ordId", "") if isinstance(data.get("data"), dict) else ""
+        return {
+            "id": str(order_id),
+            "orderId": str(order_id),
+            "symbol": symbol,
+            "side": side,
+            "amount": amount,
+            "filled": amount,
+            "price": price,
+            "average": price,
+            "cost": amount * price,
+            "status": "closed",
+            "timestamp": int(time.time() * 1000),
+        }
     
     async def create_limit_order(self, symbol: str, side: str, amount: float, price: float, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Create limit order (generic ccxt interface)."""
