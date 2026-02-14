@@ -312,7 +312,8 @@ class CoinstoreExchange:
     
     async def create_limit_order(self, symbol: str, side: str, amount: float, price: float, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Create limit order (generic ccxt interface)."""
-        return await self.connector.place_order(symbol, side, 'limit', amount, price)
+        data = await self.connector.place_order(symbol, side, 'limit', amount, price)
+        return self._parse_response(data, symbol, side, amount, price)
     
     async def cancel_order(self, order_id: str, symbol: Optional[str] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Cancel an order."""
