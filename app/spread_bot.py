@@ -51,6 +51,22 @@ class SpreadBot:
         # Default: half the spread — e.g. 0.5% spread, re-quote if mid moves 0.25%
         self.drift_threshold_pct = config.get('drift_threshold_pct', self.spread_pct / 2)
 
+        # ── Safety: circuit breaker ──
+        self.circuit_breaker_pct = config.get('circuit_breaker_pct', 30.0)  # Pause if price drops >30%
+        self._session_start_price: Optional[float] = None
+        self._circuit_breaker_triggered = False
+
+        # ── Volatility-aware spread widening ──
+        self._recent_mids: list = []  # Track recent mid prices for volatility calc
+        self._max_recent_mids = 60    # ~5 minutes of data at 5s polls
+        self._base_spread_pct = self.spread_pct  # Original configured spread
+        self._vol_widen_factor = config.get('volatility_widen_factor', 2.0)  # Max spread multiplier
+
+        # ── Stats tracking ──
+        self._buy_fills = 0
+        self._sell_fills = 0
+        self._cycles = 0
+
         # Detect exchange
         self.exchange_name = ""
         if hasattr(exchange, 'id'):
@@ -98,6 +114,22 @@ class SpreadBot:
 
     async def _run_cycle(self):
         """Single poll cycle."""
+        self._cycles += 1
+
+        # ── CIRCUIT BREAKER ──
+        if self._circuit_breaker_triggered:
+            # Check if price recovered (every 12 cycles = ~60s)
+            if self._cycles % 12 == 0:
+                mid = await self._get_mid_price()
+                if mid and self._session_start_price:
+                    change = ((mid - self._session_start_price) / self._session_start_price) * 100
+                    if change >= -(self.circuit_breaker_pct * 0.5):
+                        self._circuit_breaker_triggered = False
+                        self._session_start_price = mid
+                        logger.info(f"SpreadBot {self.bot_id} — circuit breaker reset, price recovered to ${mid:.6f}")
+                    else:
+                        logger.debug(f"SpreadBot {self.bot_id} — circuit breaker still active ({change:.1f}%)")
+            return  # Skip cycle while breaker is active
 
         # No active orders — place fresh spread
         if not self._buy_order_id and not self._sell_order_id:
@@ -115,7 +147,9 @@ class SpreadBot:
 
         # Both filled (rare — happened between polls)
         if buy_filled and sell_filled:
-            logger.info(f"SpreadBot {self.bot_id} — both sides filled! Re-quoting.")
+            self._buy_fills += 1
+            self._sell_fills += 1
+            logger.info(f"SpreadBot {self.bot_id} — both sides filled! Re-quoting. (total fills: {self._buy_fills}B/{self._sell_fills}S)")
             self._buy_order_id = None
             self._sell_order_id = None
             await self._place_spread()
@@ -123,20 +157,22 @@ class SpreadBot:
 
         # One side filled — cancel the other, re-quote
         if buy_filled:
-            logger.info(f"SpreadBot {self.bot_id} — BUY filled @ {self._buy_price}. Cancelling SELL, re-quoting.")
+            self._buy_fills += 1
+            logger.info(f"SpreadBot {self.bot_id} — BUY filled @ {self._buy_price}. Cancelling SELL, re-quoting. (total fills: {self._buy_fills}B/{self._sell_fills}S)")
             await self._cancel_order(self._sell_order_id)
             self._buy_order_id = None
             self._sell_order_id = None
-            await self._update_health(f"BUY filled @ {self._buy_price}", status='healthy')
+            await self._update_health(f"BUY filled @ {self._buy_price} ({self._buy_fills}B/{self._sell_fills}S)", status='healthy')
             await self._place_spread()
             return
 
         if sell_filled:
-            logger.info(f"SpreadBot {self.bot_id} — SELL filled @ {self._sell_price}. Cancelling BUY, re-quoting.")
+            self._sell_fills += 1
+            logger.info(f"SpreadBot {self.bot_id} — SELL filled @ {self._sell_price}. Cancelling BUY, re-quoting. (total fills: {self._buy_fills}B/{self._sell_fills}S)")
             await self._cancel_order(self._buy_order_id)
             self._buy_order_id = None
             self._sell_order_id = None
-            await self._update_health(f"SELL filled @ {self._sell_price}", status='healthy')
+            await self._update_health(f"SELL filled @ {self._sell_price} ({self._buy_fills}B/{self._sell_fills}S)", status='healthy')
             await self._place_spread()
             return
 
@@ -155,14 +191,62 @@ class SpreadBot:
     # ── Place spread ───────────────────────────────────────────────
 
     async def _place_spread(self):
-        """Get mid price, place BUY and SELL limit orders around it."""
+        """Get mid price, place BUY and SELL limit orders around it.
+        
+        Safety features:
+        - Circuit breaker: pauses if price drops >X% from session start
+        - Volatility-aware spread: widens spread during high volatility
+        """
         mid = await self._get_mid_price()
         if not mid:
             logger.warning(f"SpreadBot {self.bot_id} — could not get price, skipping")
             return
 
-        buy_price = round(mid * (1 - self.spread_pct / 2), self.price_decimals)
-        sell_price = round(mid * (1 + self.spread_pct / 2), self.price_decimals)
+        # ── Record session start price for circuit breaker ──
+        if self._session_start_price is None:
+            self._session_start_price = mid
+            logger.info(f"SpreadBot {self.bot_id} — session start price: ${mid:.6f}")
+
+        # ── Circuit breaker check ──
+        if self.circuit_breaker_pct > 0 and self._session_start_price > 0:
+            change_pct = ((mid - self._session_start_price) / self._session_start_price) * 100
+            if change_pct < -self.circuit_breaker_pct:
+                if not self._circuit_breaker_triggered:
+                    self._circuit_breaker_triggered = True
+                    await self._cancel_all()
+                    logger.warning(
+                        f"🛑 SpreadBot {self.bot_id} CIRCUIT BREAKER: price dropped {change_pct:.1f}% "
+                        f"(${self._session_start_price:.6f} → ${mid:.6f}, threshold: -{self.circuit_breaker_pct}%). "
+                        f"Orders cancelled, bot paused. Stats: {self._buy_fills} buy fills, {self._sell_fills} sell fills"
+                    )
+                return
+
+        # ── Volatility-aware spread widening ──
+        self._recent_mids.append(mid)
+        if len(self._recent_mids) > self._max_recent_mids:
+            self._recent_mids = self._recent_mids[-self._max_recent_mids:]
+
+        effective_spread = self._base_spread_pct
+        if len(self._recent_mids) >= 10:
+            # Calculate recent volatility (std dev of % changes)
+            changes = []
+            for i in range(1, len(self._recent_mids)):
+                if self._recent_mids[i - 1] > 0:
+                    changes.append(abs(self._recent_mids[i] - self._recent_mids[i - 1]) / self._recent_mids[i - 1])
+            if changes:
+                avg_change = sum(changes) / len(changes)
+                # If average tick-to-tick change > half the base spread, widen
+                if avg_change > self._base_spread_pct / 2:
+                    widen_ratio = min(avg_change / (self._base_spread_pct / 2), self._vol_widen_factor)
+                    effective_spread = self._base_spread_pct * widen_ratio
+                    logger.info(
+                        f"SpreadBot {self.bot_id} — volatility widening: "
+                        f"base {self._base_spread_pct*100:.2f}% → {effective_spread*100:.2f}% "
+                        f"(avg tick change: {avg_change*100:.3f}%)"
+                    )
+
+        buy_price = round(mid * (1 - effective_spread / 2), self.price_decimals)
+        sell_price = round(mid * (1 + effective_spread / 2), self.price_decimals)
         buy_qty = round(self.order_size_usd / buy_price, self.amount_decimals)
         sell_qty = round(self.order_size_usd / sell_price, self.amount_decimals)
 

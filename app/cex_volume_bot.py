@@ -143,6 +143,9 @@ class CEXVolumeBot:
             "interval_min_seconds": 900,   # 15 min
             "interval_max_seconds": 2700,  # 45 min
             "max_position_imbalance": 0.2,  # Max 20% imbalance before forcing opposite side
+            # ── Safety: circuit breaker ──
+            "circuit_breaker_pct": 30.0,     # Pause if price drops >30% from session start
+            "max_consecutive_same_side": 3,  # Max trades in a row on the same side
             **( config or {})
         }
         
@@ -152,6 +155,15 @@ class CEXVolumeBot:
         self.daily_volume = 0
         self.daily_reset_date = None
         self.position_imbalance = 0  # Positive = long, negative = short
+        
+        # ── Safety state ──
+        self.session_start_price: Optional[float] = None  # Price when bot started
+        self.consecutive_same_side = 0  # Counter for consecutive same-side trades
+        self.circuit_breaker_triggered = False
+        self.total_buys = 0
+        self.total_sells = 0
+        self.total_buy_usd = 0.0
+        self.total_sell_usd = 0.0
         
     async def initialize(self) -> bool:
         """Initialize exchange connection."""
@@ -540,22 +552,34 @@ class CEXVolumeBot:
     def decide_side(self) -> str:
         """
         Decide whether to buy or sell.
-        
-        Alternates sides but respects position imbalance limits.
-        Adds randomness to look organic.
+
+        Safety-first approach:
+        1. Hard limit on consecutive same-side trades (default 3).
+        2. Strict alternation as the baseline (buy-sell-buy-sell).
+        3. Small randomness (10%) to look organic, but NEVER exceeds the
+           consecutive-same-side cap.
+        4. Position imbalance still forces the minority side when lopsided.
         """
-        # If too imbalanced, force the opposite side
+        max_consec = self.config.get("max_consecutive_same_side", 3)
+
+        # ── 1. If we've hit the consecutive-same-side cap, FORCE alternate ──
+        if self.consecutive_same_side >= max_consec and self.last_side:
+            forced = "sell" if self.last_side == "buy" else "buy"
+            logger.info(f"🔒 Safety: forcing {forced.upper()} after {self.consecutive_same_side} consecutive {self.last_side}s")
+            return forced
+
+        # ── 2. If too imbalanced, force the minority side ──
         if self.position_imbalance > self.config["max_position_imbalance"]:
             return "sell"
         if self.position_imbalance < -self.config["max_position_imbalance"]:
             return "buy"
-        
-        # Otherwise, alternate with some randomness
+
+        # ── 3. Strict alternation with small randomness ──
         if self.last_side is None:
             return random.choice(["buy", "sell"])
-        
-        # 80% chance to alternate, 20% to repeat
-        if random.random() < 0.8:
+
+        # 90% alternate, 10% repeat (but only if under consecutive cap)
+        if random.random() < 0.9:
             return "sell" if self.last_side == "buy" else "buy"
         else:
             return self.last_side
@@ -716,13 +740,19 @@ class CEXVolumeBot:
         Run a single trade cycle.
         
         Returns trade info if successful, None if skipped or failed.
+        
+        Safety features:
+        - Price circuit breaker: pauses bot if price drops >X% from session start
+        - Strict alternation: never silently flips side on balance failure
+        - Consecutive-side cap: hard limit on same-side trades in a row
+        - Trade stats logging: tracks buy/sell counts for transparency
         """
         logger.info(f"🔄 Starting trade cycle for bot {self.bot_id} - Checking if should continue...")
         if not self.should_continue():
             logger.info(f"⏸️  Trade cycle skipped - Daily target reached or bot stopped")
             return None
         
-        # Get current state
+        # Get current price
         logger.info(f"📊 Getting current price for {self.symbol}...")
         price = await self.get_price()
         if not price:
@@ -730,8 +760,31 @@ class CEXVolumeBot:
             return None
         logger.info(f"✅ Current price: ${price:.6f}")
         
-        # Balance check — skip entirely for Coinstore (their /spot/accountList returns 1401
-        # even with valid credentials; market orders still work fine)
+        # ── CIRCUIT BREAKER: record session start price, check for crash ──
+        if self.session_start_price is None:
+            self.session_start_price = price
+            logger.info(f"📌 Session start price recorded: ${price:.6f}")
+        
+        cb_pct = self.config.get("circuit_breaker_pct", 30.0)
+        if cb_pct > 0 and self.session_start_price > 0:
+            price_change_pct = ((price - self.session_start_price) / self.session_start_price) * 100
+            if price_change_pct < -cb_pct:
+                if not self.circuit_breaker_triggered:
+                    self.circuit_breaker_triggered = True
+                    logger.warning(
+                        f"🛑 CIRCUIT BREAKER TRIGGERED: price dropped {price_change_pct:.1f}% "
+                        f"(from ${self.session_start_price:.6f} to ${price:.6f}, threshold: -{cb_pct}%). "
+                        f"Bot paused. Session stats: {self.total_buys} buys, {self.total_sells} sells, "
+                        f"buy ${self.total_buy_usd:.2f}, sell ${self.total_sell_usd:.2f}"
+                    )
+                return None
+            elif self.circuit_breaker_triggered and price_change_pct >= -(cb_pct * 0.5):
+                # Reset circuit breaker if price recovers to within half the threshold
+                self.circuit_breaker_triggered = False
+                self.session_start_price = price  # Reset baseline
+                logger.info(f"✅ Circuit breaker reset — price recovered to ${price:.6f}")
+        
+        # Balance check
         base_balance = None
         quote_balance = None
         if self.exchange_name == "coinstore":
@@ -747,12 +800,11 @@ class CEXVolumeBot:
                 base_balance = 0.0
                 quote_balance = 0.0
         
-        # Decide trade
+        # ── Decide side (safety-aware) ──
         side = self.decide_side()
         
-        # Calculate trade size (use defaults if balance check failed)
+        # Calculate trade size
         if base_balance is None or quote_balance is None:
-            # Use minimum trade size if we don't know balance
             min_usd = self.config["min_trade_usd"]
             amount = min_usd / price
             logger.info(f"Using minimum trade size (balance check skipped): ${min_usd} = {amount} {self.symbol.split('/')[0]}")
@@ -760,23 +812,42 @@ class CEXVolumeBot:
             amount = self.calculate_trade_size(side, base_balance, quote_balance, price)
             
             if not amount:
-                # Try opposite side if this side has no balance
-                side = "buy" if side == "sell" else "sell"
-                amount = self.calculate_trade_size(side, base_balance, quote_balance, price)
-                if not amount:
-                    # If balance check worked but no valid size, use minimum
-                    min_usd = self.config["min_trade_usd"]
-                    amount = min_usd / price
-                    logger.info(f"Using minimum trade size (no valid size calculated): ${min_usd} = {amount} {self.symbol.split('/')[0]}")
+                # ── SAFETY: Do NOT silently flip to opposite side ──
+                # Instead, log and SKIP this cycle. This prevents the balance-driven
+                # sell bias that caused the SHARP incident.
+                logger.warning(
+                    f"⚠️  Insufficient balance for {side.upper()}. "
+                    f"SKIPPING trade (not flipping to opposite side). "
+                    f"Session: {self.total_buys} buys, {self.total_sells} sells"
+                )
+                return None
         
         # Execute trade
-        logger.info(f"🚀 EXECUTING TRADE NOW - Side: {side.upper()}, Amount: {amount:.6f}, Price: ${price:.6f}")
+        logger.info(
+            f"🚀 EXECUTING TRADE - Side: {side.upper()}, Amount: {amount:.6f}, Price: ${price:.6f} "
+            f"| Session: {self.total_buys}B/{self.total_sells}S, "
+            f"consec_same={self.consecutive_same_side}, imbalance={self.position_imbalance:+.3f}"
+        )
         result = await self.execute_trade(side, amount)
         
         if result:
             # Update tracking
-            self.last_side = side
             self.daily_volume += result["cost_usd"]
+            
+            # ── Track consecutive same-side trades ──
+            if side == self.last_side:
+                self.consecutive_same_side += 1
+            else:
+                self.consecutive_same_side = 1
+            self.last_side = side
+            
+            # Track buy/sell counts
+            if side == "buy":
+                self.total_buys += 1
+                self.total_buy_usd += result["cost_usd"]
+            else:
+                self.total_sells += 1
+                self.total_sell_usd += result["cost_usd"]
             
             # Update position imbalance (normalized estimate)
             imbalance_delta = (result["cost_usd"] / self.config["daily_volume_usd"])
@@ -788,6 +859,18 @@ class CEXVolumeBot:
             result["daily_volume_total"] = self.daily_volume
             result["daily_target"] = self.config["daily_volume_usd"]
             result["progress_pct"] = (self.daily_volume / self.config["daily_volume_usd"]) * 100
+            
+            # Log session stats every 10 trades
+            total_trades = self.total_buys + self.total_sells
+            if total_trades % 10 == 0:
+                buy_pct = (self.total_buys / total_trades * 100) if total_trades else 0
+                sell_pct = (self.total_sells / total_trades * 100) if total_trades else 0
+                logger.info(
+                    f"📊 SESSION STATS [{self.exchange_name}]: {total_trades} trades | "
+                    f"{self.total_buys} buys ({buy_pct:.0f}%) ${self.total_buy_usd:.0f} | "
+                    f"{self.total_sells} sells ({sell_pct:.0f}%) ${self.total_sell_usd:.0f} | "
+                    f"imbalance={self.position_imbalance:+.3f}"
+                )
         
         return result
     
