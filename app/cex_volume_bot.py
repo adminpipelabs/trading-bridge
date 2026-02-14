@@ -792,7 +792,40 @@ class CEXVolumeBot:
         return result
     
     def get_next_interval(self) -> int:
-        """Get random interval until next trade."""
+        """Calculate interval to hit daily volume target.
+
+        Auto-computes from daily_volume_usd and trade sizes so the user
+        only needs to set the target — no manual interval tuning needed.
+        Falls back to the configured min/max if the target is very small.
+        """
+        avg_trade = (self.config["min_trade_usd"] + self.config["max_trade_usd"]) / 2
+        daily_target = self.config["daily_volume_usd"]
+
+        if daily_target > 0 and avg_trade > 0:
+            trades_needed = daily_target / avg_trade
+            base_interval = 86400 / trades_needed  # seconds per trade to hit target
+
+            # Add ±20% randomness for natural-looking patterns
+            calc_min = max(5, int(base_interval * 0.8))
+            calc_max = max(10, int(base_interval * 1.2))
+
+            # Use the SHORTER of calculated vs configured interval
+            # so raising daily_volume_usd actually speeds up trading
+            cfg_min = self.config["interval_min_seconds"]
+            cfg_max = self.config["interval_max_seconds"]
+            use_min = min(calc_min, cfg_min)
+            use_max = min(calc_max, cfg_max)
+
+            if use_max < use_min:
+                use_max = use_min + 1
+
+            interval = random.randint(use_min, use_max)
+            logger.debug(f"Interval: target=${daily_target}, avg_trade=${avg_trade}, "
+                         f"calc={calc_min}-{calc_max}s, cfg={cfg_min}-{cfg_max}s, "
+                         f"using={use_min}-{use_max}s, picked={interval}s")
+            return interval
+
+        # Fallback to configured intervals
         return random.randint(
             self.config["interval_min_seconds"],
             self.config["interval_max_seconds"]
