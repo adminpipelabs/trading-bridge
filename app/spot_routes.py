@@ -150,6 +150,24 @@ async def spot_order(order: SpotOrder, request: Request):
             await ex.close()
 
 
+@router.get("/orderbook")
+async def spot_orderbook(exchange: str, symbol: str = "SHARP/USDT", limit: int = 15, request: Request = None):
+    """Get orderbook depth."""
+    _check_auth(request)
+    ex = await _get_exchange(exchange)
+    try:
+        ob = await ex.fetch_order_book(symbol, limit)
+        return {
+            "exchange": exchange,
+            "symbol": symbol,
+            "bids": ob.get("bids", [])[:limit],
+            "asks": ob.get("asks", [])[:limit],
+        }
+    finally:
+        if hasattr(ex, "close"):
+            await ex.close()
+
+
 # ── HTML page ────────────────────────────────────────────────────────────────
 
 TRADE_HTML = """<!DOCTYPE html>
@@ -221,6 +239,23 @@ TRADE_HTML = """<!DOCTYPE html>
       <label class="text-xs text-slate-400 block mb-1">Balance</label>
       <div id="bal-base" class="text-sm font-medium tabular-nums">-- SHARP</div>
       <div id="bal-quote" class="text-sm font-medium tabular-nums text-slate-400">-- USDT</div>
+    </div>
+  </div>
+
+  <!-- Orderbook -->
+  <div class="card p-4">
+    <label class="text-xs text-slate-400 block mb-2">Order Book</label>
+    <div class="grid grid-cols-2 gap-3 text-xs font-mono">
+      <!-- Asks (sells) — reversed so lowest ask is at bottom -->
+      <div>
+        <div class="flex justify-between text-slate-500 mb-1 px-1"><span>Price</span><span>Amount</span></div>
+        <div id="ob-asks" class="space-y-px"></div>
+      </div>
+      <!-- Bids (buys) -->
+      <div>
+        <div class="flex justify-between text-slate-500 mb-1 px-1"><span>Price</span><span>Amount</span></div>
+        <div id="ob-bids" class="space-y-px"></div>
+      </div>
     </div>
   </div>
 
@@ -318,8 +353,10 @@ function showTradeScreen() {
   $('trade-screen').classList.remove('hidden');
   refreshPrice();
   refreshBalance();
+  refreshOrderbook();
   priceInterval = setInterval(refreshPrice, 5000);
   balInterval = setInterval(refreshBalance, 15000);
+  setInterval(refreshOrderbook, 5000);
 }
 
 // ── API helpers ──
@@ -362,6 +399,38 @@ function refreshBalance() {
     .catch(() => {});
 }
 
+// ── Orderbook ──
+function refreshOrderbook() {
+  api('GET', '/spot/orderbook?exchange=' + getExchange() + '&symbol=' + encodeURIComponent(getPair()) + '&limit=10')
+    .then(d => {
+      const askEl = $('ob-asks');
+      const bidEl = $('ob-bids');
+      askEl.innerHTML = '';
+      bidEl.innerHTML = '';
+      // Asks: show lowest first (reversed), colored red
+      const asks = (d.asks || []).slice(0, 10).reverse();
+      const maxAsk = Math.max(...asks.map(a => a[1]), 1);
+      asks.forEach(([p, a]) => {
+        const pct = (a / maxAsk * 100).toFixed(0);
+        askEl.innerHTML += '<div class="flex justify-between px-1 py-0.5 rounded relative overflow-hidden">' +
+          '<div class="absolute inset-0 bg-red-500/10" style="width:' + pct + '%"></div>' +
+          '<span class="text-red-400 relative z-10">' + Number(p).toFixed(6) + '</span>' +
+          '<span class="text-slate-400 relative z-10">' + Number(a).toLocaleString(undefined,{maximumFractionDigits:0}) + '</span></div>';
+      });
+      // Bids: highest first, colored green
+      const bids = (d.bids || []).slice(0, 10);
+      const maxBid = Math.max(...bids.map(b => b[1]), 1);
+      bids.forEach(([p, a]) => {
+        const pct = (a / maxBid * 100).toFixed(0);
+        bidEl.innerHTML += '<div class="flex justify-between px-1 py-0.5 rounded relative overflow-hidden">' +
+          '<div class="absolute inset-0 bg-emerald-500/10" style="width:' + pct + '%"></div>' +
+          '<span class="text-emerald-400 relative z-10">' + Number(p).toFixed(6) + '</span>' +
+          '<span class="text-slate-400 relative z-10">' + Number(a).toLocaleString(undefined,{maximumFractionDigits:0}) + '</span></div>';
+      });
+    })
+    .catch(() => {});
+}
+
 // ── Side tabs ──
 function setSide(s) {
   currentSide = s;
@@ -380,6 +449,7 @@ function onTypeChange() {
 function onExchangeChange() {
   refreshPrice();
   refreshBalance();
+  refreshOrderbook();
 }
 
 function setPercent(pct) {

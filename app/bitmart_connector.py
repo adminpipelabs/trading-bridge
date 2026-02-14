@@ -104,6 +104,11 @@ class BitmartConnector:
         sym = symbol.replace("/", "_")
         return await self._request("GET", f"/spot/quotation/v3/ticker?symbol={sym}")
 
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict[str, Any]:
+        """Get orderbook depth. Public endpoint, no auth."""
+        sym = symbol.replace("/", "_")
+        return await self._request("GET", f"/spot/quotation/v3/books?symbol={sym}&limit={limit}")
+
     # ── Account endpoints ────────────────────────────────────────
 
     async def get_wallet(self) -> Dict[str, Any]:

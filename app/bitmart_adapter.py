@@ -51,6 +51,15 @@ class BitmartExchange:
             "timestamp": int(t.get("ts", time.time() * 1000)),
         }
 
+    async def fetch_order_book(self, symbol: str, limit: int = 20) -> Dict[str, Any]:
+        """Fetch orderbook — returns ccxt-style dict."""
+        data = await self.connector.get_orderbook(symbol, limit)
+        raw = data.get("data", {})
+        # BitMart v3 books: {"asks": [["price","amount",...]], "bids": [...]}
+        bids = [[float(b[0]), float(b[1])] for b in raw.get("bids", [])]
+        asks = [[float(a[0]), float(a[1])] for a in raw.get("asks", [])]
+        return {"bids": bids, "asks": asks, "symbol": symbol}
+
     async def fetch_balance(self, params: Optional[Dict] = None) -> Dict[str, Any]:
         data = await self.connector.get_spot_wallet()
         result: Dict[str, Any] = {"free": {}, "used": {}, "total": {}}

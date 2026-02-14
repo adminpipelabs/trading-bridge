@@ -256,6 +256,13 @@ class CoinstoreConnector:
         # Ticker is a PUBLIC endpoint - NO authentication headers!
         return await self._request('GET', endpoint, params, authenticated=False)
     
+    async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict[str, Any]:
+        """Get orderbook depth. Public endpoint, no auth."""
+        symbol_formatted = symbol.replace('/', '').upper()
+        endpoint = f"/v1/market/depth/{symbol_formatted}"
+        params = {"depth": limit}
+        return await self._request('GET', endpoint, params, authenticated=False)
+
     async def get_balances(self) -> Dict[str, Any]:
         """Get account balances."""
         endpoint = "/spot/accountList"

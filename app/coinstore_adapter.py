@@ -119,6 +119,23 @@ class CoinstoreExchange:
             logger.error(f"Error fetching ticker for {symbol}: {e}", exc_info=True)
             raise
     
+    async def fetch_order_book(self, symbol: str, limit: int = 20) -> Dict[str, Any]:
+        """Fetch orderbook depth — returns ccxt-style dict."""
+        try:
+            data = await self.connector.get_orderbook(symbol, limit)
+            code = data.get('code')
+            if code == 0 or code == "0":
+                raw = data.get('data', {})
+                # Coinstore depth: {"b": [["price","amount"], ...], "a": [...]}
+                bids = [[float(b[0]), float(b[1])] for b in raw.get('b', [])]
+                asks = [[float(a[0]), float(a[1])] for a in raw.get('a', [])]
+                return {"bids": bids, "asks": asks, "symbol": symbol}
+            else:
+                raise Exception(f"Orderbook API error: code={code}")
+        except Exception as e:
+            logger.error(f"Error fetching orderbook for {symbol}: {e}")
+            raise
+
     async def fetch_balance(self, params: Optional[Dict] = None) -> Dict[str, Any]:
         """Fetch account balance."""
         try:
