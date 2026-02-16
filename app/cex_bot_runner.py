@@ -92,11 +92,12 @@ class CEXBotRunner:
                         LEFT JOIN connectors c ON c.client_id = cl.id AND LOWER(c.name) = LOWER(COALESCE(b.connector, 'bitmart'))
                         WHERE b.status = 'running'
                           AND b.bot_type = 'volume'
-                          AND (b.connector IS NULL OR (b.connector IS NOT NULL AND b.connector != 'jupiter'))
+                          AND (b.connector IS NULL OR b.connector NOT IN ('jupiter', 'raydium', 'orca'))
                           AND (b.chain IS NULL OR b.chain != 'solana')
                     """)
                     # Filter for CEX bots (exclude Jupiter/Solana)
-                    bots = [b for b in bots if b.get("connector") != "jupiter" and b.get("chain") != "solana"]
+                    dex_connectors = {"jupiter", "raydium", "orca"}
+                    bots = [b for b in bots if b.get("connector") not in dex_connectors and b.get("chain") != "solana"]
                     logger.info(f"✅ Found {len(bots)} CEX bots from main query")
                     for bot in bots:
                         logger.info(f"   - Bot: {bot.get('id')} | Name: {bot.get('name')} | Exchange: {bot.get('bot_exchange')} | Status: {bot.get('status')}")

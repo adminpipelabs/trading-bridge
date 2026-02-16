@@ -123,14 +123,14 @@ class BotRunner:
             is_cex_bot = (
                 bot.bot_type == 'volume' and 
                 exchange and 
-                exchange.lower() not in ['jupiter', ''] and
+                exchange.lower() not in ['jupiter', 'raydium', 'orca', ''] and
                 exchange.lower() in cex_exchanges and
                 (not chain or chain.lower() != 'solana')  # Chain must NOT be solana
             )
             
             # Fallback: If exchange is set and chain is explicitly NOT solana
             if not is_cex_bot and exchange and chain and chain.lower() not in ['solana', '']:
-                if exchange.lower() not in ['jupiter', 'uniswap', 'pancakeswap']:
+                if exchange.lower() not in ['jupiter', 'raydium', 'orca', 'uniswap', 'pancakeswap']:
                     is_cex_bot = True
             
             if is_cex_bot:
@@ -741,12 +741,20 @@ class BotRunner:
                         side = "buy" if random.random() > 0.5 else "sell"
                         logger.info(f"  Side: {side}")
                         
-                        # Get token mints from config
+                        # Get token mints from config, with fallback to pair column
                         base_mint = config.get('base_mint')
                         quote_mint = config.get('quote_mint', 'So11111111111111111111111111111111111111112')  # SOL
                         
+                        # Fallback: pair column often stores the token mint address for Solana bots
+                        if not base_mint and bot.pair:
+                            pair_val = bot.pair.strip()
+                            # Solana mint addresses are base58 strings, typically 32-44 chars
+                            if len(pair_val) >= 32 and '/' not in pair_val and '_' not in pair_val:
+                                base_mint = pair_val
+                                logger.info(f"  Using pair column as base_mint: {base_mint}")
+                        
                         if not base_mint:
-                            logger.error(f"  ❌ base_mint not configured")
+                            logger.error(f"  ❌ base_mint not configured (checked config and pair column)")
                             await asyncio.sleep(60)
                             continue
                         

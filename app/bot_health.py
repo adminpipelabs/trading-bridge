@@ -143,7 +143,8 @@ class BotHealthMonitor:
 
                     # CEX bots (BitMart, etc.) go to regular health check
                     # Solana/Jupiter bots go to Solana-specific check
-                    if chain == 'solana' or connector == 'jupiter' or exchange == 'jupiter':
+                    dex_connectors = {'jupiter', 'raydium', 'orca'}
+                    if chain == 'solana' or connector in dex_connectors or exchange in dex_connectors:
                         await self._check_solana_bot_health(conn, bot)
                     elif exchange and exchange not in ['', 'jupiter']:
                         # CEX bot - check health via exchange API
