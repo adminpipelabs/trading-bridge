@@ -924,6 +924,8 @@ def dash():
 
 @flask_app.route("/api/status")
 def api_status():
+    err = _check_auth()
+    if err: return err
     all_pos = []
     for p in positions:
         d = dict(p)

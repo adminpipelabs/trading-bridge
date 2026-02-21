@@ -1341,7 +1341,8 @@ async function togglePause(){
 
 async function refresh(){
   try{
-    const r=await fetch('/api/status',{signal:AbortSignal.timeout(8000)});
+    const r=await fetch('/api/status',{headers:authHeaders(),signal:AbortSignal.timeout(8000)});
+    if(r.status===403){_token='';localStorage.removeItem('api_token');location.reload();return}
     if(!r.ok){document.getElementById('sub').textContent='Server error ('+r.status+')';return}
     const d=await r.json();
 
@@ -1501,6 +1502,8 @@ def api_auth_check():
 
 @flask_app.route("/api/status")
 def api_status():
+    err = _check_auth()
+    if err: return err
     positions_with_prices = []
     for p in bot_state["positions"]:
         pp = dict(p)
@@ -1795,6 +1798,8 @@ def api_resume():
 @flask_app.route("/api/reconcile", methods=["POST"])
 def api_reconcile():
     """Adopt on-chain positions not tracked by the bot."""
+    err = _check_auth()
+    if err: return err
     try:
         api_pos = data_api_positions()
         pv = data_api_value()
@@ -1843,6 +1848,8 @@ def api_reconcile():
 @flask_app.route("/api/scan")
 def api_scan():
     """Diagnostic: run a quick scan and show what the bot sees."""
+    err = _check_auth()
+    if err: return err
     if not clob_client:
         return jsonify({"error": "bot not ready"})
     try:
