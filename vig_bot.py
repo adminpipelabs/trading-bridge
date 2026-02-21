@@ -1794,13 +1794,49 @@ def api_resume():
 
 @flask_app.route("/api/reconcile", methods=["POST"])
 def api_reconcile():
-    """Trigger Data API portfolio reconciliation."""
+    """Adopt on-chain positions not tracked by the bot."""
     try:
         api_pos = data_api_positions()
         pv = data_api_value()
+        positions = bot_state.get("positions", [])
+        tracked_tokens = {p["token_id"] for p in positions}
+        adopted = []
+        for ap in api_pos:
+            token_id = ap.get("asset", "")
+            if not token_id or token_id in tracked_tokens:
+                continue
+            size = ap.get("size", 0)
+            if size <= 0:
+                continue
+            avg_price = float(ap.get("avgPrice", 0.20))
+            pos = {
+                "buy_order_id": "adopted",
+                "sell_order_id": None,
+                "market_id": ap.get("market", ""),
+                "question": ap.get("title", ""),
+                "token_id": token_id,
+                "condition_id": ap.get("conditionId", ""),
+                "buy_price": avg_price,
+                "sell_target": SELL_TARGET,
+                "size": int(size),
+                "cost": round(avg_price * size, 2),
+                "tick_size": 0.01,
+                "neg_risk": ap.get("negativeRisk", False),
+                "status": "held",
+                "placed_at": datetime.now(timezone.utc).isoformat(),
+                "source": "data_api_adopted",
+            }
+            positions.append(pos)
+            adopted.append(ap.get("title", token_id[:16]))
+            log.info("RECONCILE ADOPTED: %s — %.0f tokens @ $%.3f",
+                     ap.get("title", "?")[:50], size, avg_price)
+        if adopted:
+            bot_state["positions"] = positions
+            save_positions(positions)
         return jsonify({"success": True, "data_api_positions": len(api_pos),
-                        "portfolio_value": pv})
+                        "portfolio_value": pv, "adopted": adopted})
     except Exception as e:
+        log.error("Reconcile error: %s", e)
         return jsonify({"success": False, "error": str(e)})
 
 
