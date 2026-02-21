@@ -34,7 +34,7 @@ if _PROXY_URL:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("scalper")
 
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
+PRIVATE_KEY = os.getenv("SCALPER_PRIVATE_KEY") or os.getenv("PRIVATE_KEY")
 API_SECRET = os.getenv("API_SECRET", "")
 BID_PRICE = 0.40
 BID_AMOUNT = 5.0
@@ -313,6 +313,10 @@ def reconcile_positions():
                 continue
 
         if token_id and token_id not in tracked_tokens and size > 0:
+            is_scalper_market = slug and ("updown-" in slug or "up-or-down" in slug)
+            if not is_scalper_market:
+                log.debug("RECONCILE SKIP (not a scalper market): %s %s", title[:40], slug[:30] if slug else "?")
+                continue
             asset_name = slug.split("-")[0] if slug else "?"
             end_ts_str = ap.get("endDate", "")
             positions.append({
@@ -806,12 +810,117 @@ def fivemin_compute_pnl():
 
 # ── Dashboard & API ──
 
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scalper Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0a0a0f;color:#e0e0e0;padding:16px}
+h1{font-size:1.3rem;color:#7c8aff;margin-bottom:12px}
+.top{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.card{background:#14141f;border:1px solid #222;border-radius:8px;padding:14px 18px;min-width:140px}
+.card .label{font-size:.7rem;text-transform:uppercase;color:#888;margin-bottom:4px}
+.card .val{font-size:1.3rem;font-weight:700}
+.green{color:#22c55e}.red{color:#ef4444}.blue{color:#7c8aff}
+table{width:100%;border-collapse:collapse;margin-top:12px;font-size:.82rem}
+th{text-align:left;padding:8px 6px;border-bottom:1px solid #333;color:#888;font-size:.7rem;text-transform:uppercase}
+td{padding:7px 6px;border-bottom:1px solid #1a1a2a}
+tr:hover{background:#1a1a2a}
+.tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:.7rem;font-weight:600}
+.tag-15m{background:#3b3080;color:#a5a0ff}.tag-5m{background:#805030;color:#ffb080}
+.actions{display:flex;gap:6px;margin-top:14px}
+.btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:.8rem;font-weight:600;color:#fff}
+.btn-pause{background:#d97706}.btn-resume{background:#22c55e}.btn-recon{background:#3b82f6}
+.btn:hover{opacity:.85}
+.closed-section{margin-top:24px}
+.closed-section h2{font-size:1rem;color:#888;margin-bottom:8px}
+#auth-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.9);display:flex;align-items:center;justify-content:center;z-index:999}
+#auth-box{background:#14141f;padding:32px;border-radius:12px;text-align:center}
+#auth-box input{padding:10px;border-radius:6px;border:1px solid #333;background:#0a0a0f;color:#e0e0e0;margin:10px 0;width:220px}
+#auth-box button{padding:10px 24px;background:#7c8aff;border:none;border-radius:6px;color:#fff;cursor:pointer;font-weight:600}
+</style></head><body>
+<div id="auth-overlay" style="display:none"><div id="auth-box">
+<h2 style="color:#7c8aff;margin-bottom:12px">Enter Password</h2>
+<input id="auth-pw" type="password" placeholder="API password" onkeydown="if(event.key==='Enter')authLogin()">
+<br><button onclick="authLogin()">Unlock</button>
+</div></div>
+<h1>Scalper Dashboard</h1>
+<div class="top">
+ <div class="card"><div class="label">Balance</div><div class="val blue" id="bal">--</div></div>
+ <div class="card"><div class="label">Portfolio</div><div class="val" id="portfolio">--</div></div>
+ <div class="card"><div class="label">Positions</div><div class="val" id="npos">--</div></div>
+ <div class="card"><div class="label">P&L</div><div class="val" id="pnl">--</div></div>
+ <div class="card"><div class="label">W / L</div><div class="val" id="wl">--</div></div>
+ <div class="card"><div class="label">Status</div><div class="val" id="status">--</div></div>
+</div>
+<div class="actions">
+ <button class="btn btn-pause" onclick="doPost('/api/pause')">Pause</button>
+ <button class="btn btn-resume" onclick="doPost('/api/resume')">Resume</button>
+ <button class="btn btn-recon" onclick="doPost('/api/reconcile')">Reconcile</button>
+</div>
+<h2 style="margin-top:20px;font-size:.95rem;color:#ccc">Open Positions</h2>
+<table><thead><tr><th>Strategy</th><th>Market</th><th>Side</th><th>Size</th><th>Cost</th><th>Bid</th><th>Status</th></tr></thead><tbody id="pos-body"></tbody></table>
+<div class="closed-section"><h2>Recent Closed</h2>
+<table><thead><tr><th>Market</th><th>Side</th><th>Result</th><th>P&L</th><th>Closed</th></tr></thead><tbody id="closed-body"></tbody></table>
+</div>
+<script>
+let TOKEN=localStorage.getItem('scalp_token')||'';
+async function checkAuth(){
+ let r=await fetch('/api/auth-check');let d=await r.json();
+ if(d.auth_required&&!TOKEN){document.getElementById('auth-overlay').style.display='flex';}
+ else{load();}
+}
+function authLogin(){
+ TOKEN=document.getElementById('auth-pw').value;
+ localStorage.setItem('scalp_token',TOKEN);
+ document.getElementById('auth-overlay').style.display='none';load();
+}
+function hdr(){return TOKEN?{Authorization:'Bearer '+TOKEN}:{};}
+async function doPost(url){
+ let r=await fetch(url,{method:'POST',headers:hdr()});
+ if(r.status===403){localStorage.removeItem('scalp_token');location.reload();}
+ load();
+}
+function $(id){return document.getElementById(id);}
+function fmt(v){return v>=0?'<span class="green">$'+v.toFixed(2)+'</span>':'<span class="red">-$'+Math.abs(v).toFixed(2)+'</span>';}
+async function load(){
+ try{
+  let r=await fetch('/api/status',{headers:hdr()});
+  if(r.status===403){localStorage.removeItem('scalp_token');location.reload();return;}
+  let d=await r.json();
+  $('bal').textContent='$'+d.bal.toFixed(2);
+  $('portfolio').innerHTML=fmt(d.stats.portfolio_value||0);
+  $('npos').textContent=d.pos.length;
+  $('pnl').innerHTML=fmt(d.stats.trade_pnl||0);
+  $('wl').textContent=d.stats.wins+' / '+d.stats.losses;
+  $('status').innerHTML=d.paused?'<span class="red">PAUSED</span>':'<span class="green">RUNNING</span>';
+  let h='';
+  for(let p of d.pos){
+   let tag=p.strategy==='5m'?'<span class="tag tag-5m">5m</span>':'<span class="tag tag-15m">15m</span>';
+   let bid=p.bid!=null?'$'+Number(p.bid).toFixed(3):'--';
+   h+='<tr><td>'+tag+'</td><td>'+((p.title||p.question||'?').substring(0,55))+'</td><td>'+
+      (p.side||'?')+'</td><td>'+(p.size||0)+'</td><td>$'+(p.cost||0).toFixed(2)+'</td><td>'+
+      bid+'</td><td>'+(p.status||'?')+'</td></tr>';
+  }
+  $('pos-body').innerHTML=h||'<tr><td colspan="7" style="color:#666">No positions</td></tr>';
+  let ch='';
+  for(let c of (d.closed||[])){
+   let res=c.result==='win'?'<span class="green">WIN</span>':'<span class="red">LOSS</span>';
+   let pnl=c.result==='win'?'+$'+((c.payout||0)-(c.cost||0)).toFixed(2):'-$'+(c.cost||0).toFixed(2);
+   ch+='<tr><td>'+((c.title||c.question||'?').substring(0,55))+'</td><td>'+(c.side||'?')+'</td><td>'+
+       res+'</td><td>'+pnl+'</td><td>'+((c.closed_at||'').substring(0,16))+'</td></tr>';
+  }
+  $('closed-body').innerHTML=ch||'<tr><td colspan="5" style="color:#666">None yet</td></tr>';
+ }catch(e){console.error(e);}
+}
+checkAuth();setInterval(load,15000);
+</script></body></html>"""
+
 @flask_app.route("/")
 def dash():
-    with open("/app/dashboard.html") as f:
-        resp = Response(f.read(), content_type="text/html")
-        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-        return resp
+    resp = Response(DASHBOARD_HTML, content_type="text/html")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return resp
 
 @flask_app.route("/api/status")
 def api_status():
