@@ -41,7 +41,7 @@ BID_AMOUNT = 5.0
 POLL_SECONDS = 15
 MIN_TIME_LEFT = 120
 PORT = int(os.getenv("SCALP_PORT", "8081"))
-ASSETS = ["eth", "btc", "sol"]
+ASSETS = ["eth"]
 CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_API = "https://gamma-api.polymarket.com"
 DATA_API = "https://data-api.polymarket.com"
@@ -71,10 +71,9 @@ RECONCILE_INTERVAL = 120  # seconds between Data API reconciliation sweeps
 
 # ── 5-Minute Strategy ──
 FIVEMIN_ENABLED = os.getenv("FIVEMIN_ENABLED", "true").lower() in ("true", "1", "yes")
-FIVEMIN_ASSET = os.getenv("FIVEMIN_ASSET", "btc")
+FIVEMIN_ASSET = os.getenv("FIVEMIN_ASSET", "eth")
 FIVEMIN_BID_PRICE = float(os.getenv("FIVEMIN_BID_PRICE", "0.40"))
-FIVEMIN_BID_AMOUNT = float(os.getenv("FIVEMIN_BID_AMOUNT", "5"))
-FIVEMIN_SIDE = os.getenv("FIVEMIN_SIDE", "Up")
+FIVEMIN_BID_AMOUNT = float(os.getenv("FIVEMIN_BID_AMOUNT", "2"))
 FIVEMIN_MIN_TIME_LEFT = 60
 FIVEMIN_POSITIONS_FILE = os.path.join(DATA_DIR, "5m_positions.json")
 FIVEMIN_CLOSED_FILE = os.path.join(DATA_DIR, "5m_closed.json")
@@ -654,33 +653,32 @@ def compute_trade_pnl():
 # ── 5-Minute Strategy Logic ──
 
 def fivemin_place_bid(market):
-    side = FIVEMIN_SIDE
-    token_key = "up_token" if side == "Up" else "down_token"
-    token_id = market[token_key]
-    if any(p["token_id"] == token_id and p["status"] in ("pending", "held") for p in fivemin_positions):
-        return
-    bal = usdc_balance()
-    if bal < FIVEMIN_BID_AMOUNT:
-        log.warning("5M SKIP: balance $%.2f < $%.2f", bal, FIVEMIN_BID_AMOUNT)
-        return
-    size = int(FIVEMIN_BID_AMOUNT / FIVEMIN_BID_PRICE)
-    tick = market["tick_size"]
-    neg = market["neg_risk"]
-    oid = place_gtc_buy(token_id, FIVEMIN_BID_PRICE, size, tick, neg)
-    if oid:
-        fivemin_positions.append({
-            "token_id": token_id, "buy_order_id": oid, "buy_price": FIVEMIN_BID_PRICE,
-            "size": size, "cost": round(FIVEMIN_BID_PRICE * size, 2), "side": side,
-            "asset": FIVEMIN_ASSET, "title": market["title"], "slug": market["slug"],
-            "market_id": market["market_id"], "condition_id": market["condition_id"],
-            "tick_size": tick, "neg_risk": neg, "end_ts": market["end_ts"],
-            "sell_order_id": None, "sell_price": None, "status": "pending",
-            "placed_at": datetime.now(timezone.utc).isoformat(),
-            "strategy": "5m",
-        })
-        log.info("5M BID %s %s: %d @ $%.2f ($%.2f) [ends %d]",
-                 FIVEMIN_ASSET.upper(), side, size, FIVEMIN_BID_PRICE,
-                 FIVEMIN_BID_AMOUNT, market["end_ts"])
+    for side, token_key in [("Up", "up_token"), ("Down", "down_token")]:
+        token_id = market[token_key]
+        if any(p["token_id"] == token_id and p["status"] in ("pending", "held") for p in fivemin_positions):
+            continue
+        bal = usdc_balance()
+        if bal < FIVEMIN_BID_AMOUNT:
+            log.warning("5M SKIP %s: balance $%.2f < $%.2f", side, bal, FIVEMIN_BID_AMOUNT)
+            continue
+        size = int(FIVEMIN_BID_AMOUNT / FIVEMIN_BID_PRICE)
+        tick = market["tick_size"]
+        neg = market["neg_risk"]
+        oid = place_gtc_buy(token_id, FIVEMIN_BID_PRICE, size, tick, neg)
+        if oid:
+            fivemin_positions.append({
+                "token_id": token_id, "buy_order_id": oid, "buy_price": FIVEMIN_BID_PRICE,
+                "size": size, "cost": round(FIVEMIN_BID_PRICE * size, 2), "side": side,
+                "asset": FIVEMIN_ASSET, "title": market["title"], "slug": market["slug"],
+                "market_id": market["market_id"], "condition_id": market["condition_id"],
+                "tick_size": tick, "neg_risk": neg, "end_ts": market["end_ts"],
+                "sell_order_id": None, "sell_price": None, "status": "pending",
+                "placed_at": datetime.now(timezone.utc).isoformat(),
+                "strategy": "5m",
+            })
+            log.info("5M BID %s %s: %d @ $%.2f ($%.2f) [ends %d]",
+                     FIVEMIN_ASSET.upper(), side, size, FIVEMIN_BID_PRICE,
+                     FIVEMIN_BID_AMOUNT, market["end_ts"])
     save_json(FIVEMIN_POSITIONS_FILE, fivemin_positions)
 
 def fivemin_cancel_stale():
@@ -963,7 +961,7 @@ def api_status():
             "5m": {"wins": fivemin_stats["wins"], "losses": fivemin_stats["losses"],
                    "pnl": fivemin_stats["pnl"], "trade_pnl": fm_pnl,
                    "enabled": FIVEMIN_ENABLED, "paused": fivemin_paused,
-                   "asset": FIVEMIN_ASSET, "side": FIVEMIN_SIDE},
+                   "asset": FIVEMIN_ASSET, "side": "Up+Down"},
         },
         "timezone": "UTC",
     })
@@ -1163,7 +1161,7 @@ def run():
         log.info("5M: Restored %d pos, %d closed | %dW/%dL P&L $%+.2f | %s %s @ $%.2f",
                  len(fivemin_positions), len(fivemin_closed),
                  fivemin_stats["wins"], fivemin_stats["losses"], fivemin_stats["pnl"],
-                 FIVEMIN_ASSET.upper(), FIVEMIN_SIDE, FIVEMIN_BID_PRICE)
+                 FIVEMIN_ASSET.upper(), "Up+Down", FIVEMIN_BID_PRICE)
 
     reconcile_positions()
     log.info("Initial reconciliation done — portfolio value: $%.2f", data_api_value())
