@@ -1,169 +1,156 @@
-# Bot Health Monitor — Pipe Labs Trading Bridge
+# Trading Bridge — Production Reference
 
-## Problem
-Bot status in PostgreSQL only updates when explicitly set via API (`/bots/{id}/start` or `/bots/{id}/stop`). If a bot crashes, Hummingbot goes down, or the exchange disconnects, the dashboard still shows "running."
+**Last updated: Feb 22, 2026**
 
-## Solution
-A background health monitoring system that runs inside trading-bridge and verifies bot status by checking actual trade activity on the exchange.
+## Server
 
-## Architecture
+| | Details |
+|---|---|
+| **Provider** | Hetzner, Helsinki (Finland) |
+| **Hostname** | ubuntu-4gb-hel1-1 |
+| **IP** | 46.62.211.255 |
+| **SSH** | `ssh root@46.62.211.255` |
+| **Why Finland** | Polymarket CLOB allows trading from Finland. No proxy needed. |
+
+> **Do NOT use the Ashburn server (5.161.64.209).** It is in the US which is geoblocked on Polymarket. Bots there are stopped.
+
+## Dashboards
+
+| Bot | URL | Password |
+|-----|-----|----------|
+| Vig | http://46.62.211.255:8080 | API_SECRET from .env |
+| Scalper | http://46.62.211.255:8081 | API_SECRET from .env |
+
+## Bots — How They Run
+
+Both bots run as **Docker containers** on the Helsinki server.
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  BotHealthMonitor (background asyncio task)          │
-│                                                       │
-│  Every 5 min:                                         │
-│  1. Query all bots where status = 'running'           │
-│  2. For each bot, fetch recent trades via ccxt         │
-│  3. Evaluate trade recency:                           │
-│     • Trades < 30 min ago  → healthy ✅               │
-│     • Trades 30m-2h ago    → stale ⚠️                │
-│     • No trades > 2h       → stopped 🔴              │
-│  4. Update bots table + log to bot_health_logs        │
-└──────────────────────────────────────────────────────┘
-         │                              ▲
-         ▼                              │
-┌─────────────┐              ┌──────────────────┐
-│  PostgreSQL  │              │  BitMart (ccxt)  │
-│  bots table  │              │  fetch_my_trades │
-│  health_logs │              └──────────────────┘
-└─────────────┘
-         ▲
-         │
-┌──────────────────────────────────────────────────────┐
-│  Health API Routes                                    │
-│                                                       │
-│  GET  /bots/{id}/health        → single bot health   │
-│  POST /bots/{id}/health/check  → force recheck now   │
-│  GET  /bots/health/summary     → all bots overview   │
-│  POST /bots/heartbeat          → receive heartbeat   │
-│  GET  /bots/{id}/health/history → audit trail        │
-└──────────────────────────────────────────────────────┘
+docker ps                    # see running containers
+docker restart vig-bot       # restart Vig
+docker restart vig-scalper   # restart Scalper
+docker logs vig-bot --tail 50        # view Vig logs
+docker logs vig-scalper --tail 50    # view Scalper logs
 ```
 
-## Files
+### File Locations (on Helsinki server)
 
-| File | Purpose | Add To |
-|------|---------|--------|
-| `migrations/add_bot_health_tracking.sql` | DB schema changes | Run against Railway PostgreSQL |
-| `app/bot_health.py` | Core monitoring service | `trading-bridge/app/bot_health.py` |
-| `app/health_routes.py` | API endpoints | `trading-bridge/app/health_routes.py` |
-| `app/integration_example.py` | Wiring into main.py | Merge into existing `main.py` |
+| Path | What |
+|------|------|
+| `/root/vig/bot.py` | Vig bot code (mounted read-only into Docker) |
+| `/root/vig/scalper.py` | Scalper bot code (mounted into Docker) |
+| `/root/vig/.env` | Environment variables (keys, config) |
+| `/root/vig/data/` | Vig data: positions.json, closed.json, trades.json |
+| `/root/vig/scalper_data/` | Scalper data: scalp_positions.json, etc. |
 
-## Setup Steps
+### GitHub Repo
 
-### 1. Run the migration
+https://github.com/mikaelo/trading-bridge (branch: main)
+
+> **Note:** The Docker containers mount code from `/root/vig/`, NOT from the git repo at `/opt/trading-bridge/`. To update bot code, edit the files in `/root/vig/` and restart the Docker container.
+
+## Wallets
+
+| Bot | Address | Private Key |
+|-----|---------|-------------|
+| Vig | `0x989B7F2308924eA72109367467B8F8e4d5ea5A1D` | PRIVATE_KEY in `/root/vig/.env` |
+| Scalper | `0x4ae36dfA7CD02BB87334EDC35639f70981c02F54` | PRIVATE_KEY in scalper Docker env |
+
+Both wallets need **USDC on Polygon** to trade.
+
+## Vig Strategy
+
+Swing-trades on any Polymarket market that meets criteria.
+
+| Setting | Value |
+|---------|-------|
+| Buy range | $0.10 – $0.30 |
+| Sell target | $0.45 GTC |
+| Bet size | $5 |
+| Max spread | 5.0% |
+| Max expiry | 1 day (24 hours) |
+| Poll interval | 30 seconds |
+
+**Flow:** Scan markets → Buy at ask within range → Place GTC sell at $0.45 → Auto-redeem when market resolves → Reinvest USDC into new bets.
+
+## Scalper Strategy
+
+Trades crypto up/down markets at short intervals.
+
+| Setting | Value |
+|---------|-------|
+| 15-min | ETH + BTC, $0.40 GTC bid on Up AND Down |
+| 5-min | ETH, $0.40 GTC bid on Up AND Down, $2/side |
+| Poll interval | 15 seconds |
+
+**Flow:** Find next 15m/5m ETH market → Bid $0.40 on both Up and Down → Auto-redeem after market closes → Reinvest.
+
+## Auto-Redeem
+
+Both bots automatically:
+1. Detect when a market resolves
+2. Call `redeemPositions` on-chain to convert winning tokens → USDC
+3. Sweep orphaned tokens from old positions
+4. Use freed USDC to place new bets
+
+No manual intervention needed for redemption.
+
+## Security
+
+- All API endpoints require `API_SECRET` Bearer token
+- `/api/status`, `/api/sell`, `/api/withdraw`, `/api/reconcile` — all protected
+- Dashboard prompts for password on first visit
+- Ports 8080/8081 open to internet (consider firewall or HTTPS reverse proxy)
+
+## What Happened (Feb 21, 2026)
+
+1. Previous agent set up bots on Ashburn (US) server instead of Helsinki (Finland)
+2. API endpoints were left open without authentication
+3. Attacker found open endpoints, sold 14 positions, withdrew USDC
+4. Auth was added after the attack
+5. Bots migrated back to Helsinki server where they work without proxy
+
+## Quick Commands
+
 ```bash
-# Connect to your Railway PostgreSQL and run:
-psql $DATABASE_URL -f migrations/add_bot_health_tracking.sql
+# SSH into server
+ssh root@46.62.211.255
+
+# Check bot status
+docker ps
+
+# View Vig logs
+docker logs vig-bot --tail 100
+
+# View Scalper logs
+docker logs vig-scalper --tail 100
+
+# Restart after config change
+docker restart vig-bot
+docker restart vig-scalper
+
+# Check on-chain positions for Vig wallet
+curl -s "https://data-api.polymarket.com/positions?user=0x989b7f2308924ea72109367467b8f8e4d5ea5a1d" | python3 -m json.tool
+
+# Check on-chain positions for Scalper wallet
+curl -s "https://data-api.polymarket.com/positions?user=0x4ae36dfa7cd02bb87334edc35639f70981c02f54" | python3 -m json.tool
 ```
 
-### 2. Add files to trading-bridge
-Copy `bot_health.py` and `health_routes.py` into your `app/` directory.
+## Polymarket API Quick Reference
 
-### 3. Update main.py
-Follow `integration_example.py` to:
-- Import and register health routes
-- Start/stop the health monitor on app lifecycle
-- Update existing start/stop bot endpoints to set `reported_status`
+| API | Base URL | Auth |
+|-----|----------|------|
+| Gamma (market discovery) | https://gamma-api.polymarket.com | None |
+| Data (positions, portfolio) | https://data-api.polymarket.com | None |
+| CLOB (trading) | https://clob.polymarket.com | API key (derived from wallet) |
 
-### 4. Deploy to Railway
-```bash
-git add .
-git commit -m "feat: add bot health monitoring"
-git push
-```
+Key endpoints:
+- `GET /positions?user={wallet}` — on-chain positions
+- `GET /value?user={wallet}` — portfolio value
+- `GET /book?token_id={id}` — order book
+- `GET /midpoint?token_id={id}` — midpoint price
 
-### 5. Verify
-```bash
-# Check health summary
-curl https://trading-bridge-production.up.railway.app/bots/health/summary
-
-# Check specific bot
-curl https://trading-bridge-production.up.railway.app/bots/1/health
-
-# Force immediate check
-curl -X POST https://trading-bridge-production.up.railway.app/bots/1/health/check
-```
-
-## Thresholds (Configurable)
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `HEALTH_CHECK_INTERVAL_SECONDS` | 300 (5 min) | How often to run checks |
-| `STALE_THRESHOLD_MINUTES` | 30 | No trades → mark as stale |
-| `STOPPED_THRESHOLD_MINUTES` | 120 (2h) | No trades → mark as stopped |
-| `HEARTBEAT_TIMEOUT_MINUTES` | 15 | Heartbeat too old → check trades |
-
-Adjust in `bot_health.py` based on your trading pair's typical volume. For low-volume pairs like SHARP/USDT, you may want to increase the stale threshold.
-
-## Health Statuses
-
-| Status | Meaning | Dashboard Display |
-|--------|---------|-------------------|
-| `healthy` | Recent trades confirmed | 🟢 Running |
-| `stale` | No recent trades, might be normal | 🟡 Running (stale) |
-| `stopped` | No trades beyond threshold, likely dead | 🔴 Stopped |
-| `error` | Health check itself failed | ⚠️ Unknown |
-| `unknown` | Not yet checked or no credentials | ⚪ Unknown |
-
-## Frontend Integration
-
-Update the dashboard to use health_status for display:
-
-```javascript
-// In your bot status component, use health_status instead of just status
-const getStatusBadge = (bot) => {
-  const { status, health_status } = bot;
-  
-  if (health_status === 'healthy') return { color: 'green', label: 'Running' };
-  if (health_status === 'stale') return { color: 'yellow', label: 'Stale' };
-  if (health_status === 'stopped') return { color: 'red', label: 'Stopped' };
-  if (health_status === 'error') return { color: 'orange', label: 'Error' };
-  return { color: 'gray', label: 'Unknown' };
-};
-
-// Add a "Refresh" button that calls the force-check endpoint
-const refreshBotHealth = async (botId) => {
-  const res = await fetch(`/bots/${botId}/health/check`, { method: 'POST' });
-  return res.json();
-};
-```
-
-## Future: Hummingbot Heartbeat Push
-
-When ready, add a simple script alongside Hummingbot that pushes heartbeats:
-
-```python
-# hummingbot_heartbeat.py — run as a sidecar or cron
-import requests, time
-
-BOT_ID = 1
-BRIDGE_URL = "https://trading-bridge-production.up.railway.app"
-
-while True:
-    try:
-        requests.post(f"{BRIDGE_URL}/bots/heartbeat", json={
-            "bot_id": BOT_ID,
-            "status": "running",
-            "metadata": {"timestamp": time.time()}
-        })
-    except Exception:
-        pass
-    time.sleep(60)  # Every minute
-```
-
-## Also Fixes: Hardcoded "Active Bots: 34"
-
-The `/bots/health/summary` endpoint returns real counts. Replace the hardcoded stat on the dashboard:
-
-```javascript
-// Before (hardcoded)
-const activeBots = 34;
-
-// After (real data)
-const { data } = await fetch('/bots/health/summary?account=client_sharp');
-const activeBots = data.healthy + data.stale; // Actually running bots
-```
-
-This kills two birds with one stone — accurate bot status AND accurate bot counts.
+On-chain contracts (Polygon):
+- CTF: `0x4D97DCd97eC945f40cF65F87097ACe5EA0476045`
+- NegRiskAdapter: `0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296`
+- USDC: `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`
