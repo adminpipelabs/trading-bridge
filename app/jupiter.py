@@ -82,13 +82,9 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
     for url in endpoints:
         logger.info(f"Trying Jupiter API: {url} with params: {params}")
         
-        # Configure proxy if available (for QuotaGuard static IP)
-        # httpx 0.28+ uses `proxy` (single URL string) instead of `proxies` dict
-        import os
-        proxy_url = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+        # Jupiter public API does NOT need a proxy — QuotaGuard is only
+        # for CEX exchanges.  Routing through QG causes disconnects.
         proxy_kwargs = {}
-        if proxy_url:
-            proxy_kwargs["proxy"] = proxy_url
         
         async with httpx.AsyncClient(
             timeout=timeout, 

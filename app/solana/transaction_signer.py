@@ -32,7 +32,7 @@ class SolanaTransactionSigner:
     
     def __init__(self, rpc_url: str = "https://api.mainnet-beta.solana.com"):
         self.rpc_url = rpc_url
-        self.client = httpx.AsyncClient(timeout=60.0)
+        self.client = httpx.AsyncClient(timeout=60.0, trust_env=False)
     
     async def close(self):
         await self.client.aclose()

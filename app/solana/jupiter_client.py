@@ -20,8 +20,10 @@ from tenacity import (
     RetryError
 )
 
-# Get proxy from environment variables (for QuotaGuard static IP)
-PROXY_URL = os.getenv("QUOTAGUARD_PROXY_URL") or os.getenv("HTTP_PROXY") or os.getenv("HTTPS_PROXY")
+# Jupiter public API does NOT need a proxy — QuotaGuard is only for CEX
+# exchanges that require IP whitelisting.  Routing Jupiter through QG
+# causes "Server disconnected without sending a response" errors.
+PROXY_URL = None
 
 
 class OrderStatus(str, Enum):
