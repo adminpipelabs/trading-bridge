@@ -90,7 +90,7 @@ async def get_quote(input_token: str, output_token: str, amount: float, slippage
             timeout=timeout, 
             follow_redirects=True,
             limits=limits,
-            trust_env=True,  # Use system DNS settings
+            trust_env=False,  # Don't inherit HTTP_PROXY set for CEX exchanges
             **proxy_kwargs
         ) as client:
             try:
