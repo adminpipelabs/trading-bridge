@@ -143,6 +143,8 @@ class JupiterClient:
                 f"Jupiter price API error: {e.response.status_code}",
                 extra={"token_mint": token_mint, "vs_token": vs, "status_code": e.response.status_code}
             )
+            if e.response.status_code < 500:
+                raise ValueError(f"Jupiter price API {e.response.status_code} (non-retryable)")
             raise
         except httpx.RequestError as e:
             self.logger.warning(

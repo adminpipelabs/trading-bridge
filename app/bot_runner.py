@@ -1204,7 +1204,8 @@ class BotRunner:
             try:
                 result = await signer.sign_and_send_transaction(
                     transaction_base64=swap_tx.transaction,
-                    private_key=private_key
+                    private_key=private_key,
+                    skip_preflight=True
                 )
                 
                 if not result.success:
